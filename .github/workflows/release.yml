@@ -12,46 +12,52 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  build:
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        include:
-          - os: macos-13
-            artifact_name: TraderMoney_macOS.zip
-          - os: windows-latest
-            artifact_name: TraderMoney_Windows.zip
 
+  build-macos:
+    runs-on: macos-13
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-
       - name: Install dependencies
         run: |
           pip install pywebview flask flask-cors yfinance pandas requests alpaca-trade-api numpy cryptography ib_insync pyinstaller
           pip install python-binance pybit okx
-
       - name: Build app
         run: |
           pyinstaller --noconsole --windowed --name "TraderMoney" --collect-all pywebview app.py
-
-      - name: Zip artifact (macOS)
-        if: runner.os == 'macOS'
+      - name: Zip artifact
         run: |
-          cd dist && zip -r ../${{ matrix.artifact_name }} TraderMoney.app
-
-      - name: Zip artifact (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          Compress-Archive -Path dist\TraderMoney -DestinationPath ${{ matrix.artifact_name }}
-
-      - name: Upload artifact to release
+          cd dist && zip -r ../TraderMoney_macOS.zip TraderMoney.app
+      - name: Upload to release
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ github.ref_name }}
-          files: ${{ matrix.artifact_name }}
+          files: TraderMoney_macOS.zip
+          token: ${{ secrets.RELEASE_TOKEN }}
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: |
+          pip install pywebview flask flask-cors yfinance pandas requests alpaca-trade-api numpy cryptography ib_insync pyinstaller
+          pip install python-binance pybit okx
+      - name: Build app
+        run: |
+          pyinstaller --noconsole --windowed --name "TraderMoney" --collect-all pywebview app.py
+      - name: Zip artifact
+        shell: pwsh
+        run: |
+          Compress-Archive -Path dist\TraderMoney -DestinationPath TraderMoney_Windows.zip
+      - name: Upload to release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: TraderMoney_Windows.zip
           token: ${{ secrets.RELEASE_TOKEN }}
