@@ -3,89 +3,84 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>TraderMoney – Institutional Trading Terminal</title>
+  <title>Download TraderMoney</title>
   <style>
     body {
       margin: 0;
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
       background: #0A0C0F;
       color: #E0E0E0;
       display: flex;
-      flex-direction: column;
+      justify-content: center;
       align-items: center;
-      padding: 40px 20px;
+      min-height: 100vh;
     }
     .container {
-      max-width: 800px;
       text-align: center;
+      max-width: 600px;
+      padding: 40px 20px;
     }
     h1 { color: #00C9B1; font-size: 2.5rem; margin-bottom: 10px; }
-    p { line-height: 1.6; }
-    .download-buttons {
-      margin: 30px 0;
+    p { line-height: 1.6; margin-bottom: 20px; }
+    .buttons {
       display: flex;
-      justify-content: center;
       gap: 20px;
+      justify-content: center;
       flex-wrap: wrap;
+      margin: 30px 0;
     }
     .btn {
       padding: 15px 30px;
-      text-decoration: none;
       border-radius: 8px;
+      text-decoration: none;
       font-weight: bold;
       font-size: 1.1rem;
       transition: 0.2s;
+      border: 1px solid transparent;
     }
-    .btn-mac {
-      background: #333;
-      color: #fff;
-      border: 1px solid #555;
-    }
-    .btn-win {
-      background: #0078D7;
-      color: #fff;
-    }
+    .mac { background: #333; color: #fff; border-color: #555; }
+    .win { background: #0078D7; color: #fff; }
     .btn:hover { opacity: 0.9; transform: translateY(-2px); }
     .features {
       text-align: left;
-      margin: 40px 0;
+      margin: 30px 0;
+      background: #1A1F26;
+      padding: 15px 25px;
+      border-radius: 8px;
+      border: 1px solid #2A3440;
     }
+    .features h3 { margin-top: 0; color: #00C9B1; }
+    .features ul { padding-left: 20px; }
     .footer {
-      margin-top: 40px;
       font-size: 0.8rem;
       color: #6B7280;
+      margin-top: 40px;
     }
   </style>
 </head>
 <body>
   <div class="container">
     <h1>💸 TraderMoney</h1>
-    <p><strong>Institutional‑grade trading terminal for macOS & Windows.</strong></p>
-    <p>Live TradingView charts, multi‑broker support, advanced EMA crossover signals with RSI, MACD, VWAP, Bollinger, ADX, and volume confirmation. Bracket orders, Telegram alerts, encrypted credentials – all in a sleek, native desktop app.</p>
-    <div class="download-buttons">
-      <a href="#" class="btn btn-mac" id="mac-download">⬇️ Download for macOS</a>
-      <a href="#" class="btn btn-win" id="win-download">⬇️ Download for Windows</a>
+    <p><strong>Institutional‑grade trading terminal – free beta</strong></p>
+    <p>Live TradingView charts, multi‑broker support (Alpaca, IBKR, TradingView webhooks), advanced EMA crossover signals with RSI, MACD, VWAP, Bollinger Bands, ADX, and volume confirmation. Bracket orders, Telegram alerts, encrypted credentials, draggable panels.</p>
+    <div class="buttons">
+      <a href="https://drive.google.com/uc?export=download&id=12fQIUcZUKylEkgu4yujcfWhGB2bEFad3" class="btn mac">⬇️ Download for macOS</a>
+      <a href="https://drive.google.com/uc?export=download&id=1EZArvcWeupyes6cWkHmkR2DcQdAR-zxj" class="btn win">⬇️ Download for Windows</a>
     </div>
     <div class="features">
-      <h3>Key Features</h3>
+      <h3>Features</h3>
       <ul>
-        <li>Embedded TradingView charts with symbol search</li>
-        <li>Supports Alpaca, Interactive Brokers, and TradingView webhooks</li>
-        <li>Signal‑only or fully automatic trading modes</li>
-        <li>Stop‑Loss / Take‑Profit bracket orders</li>
-        <li>Kill switch for instant position closure</li>
-        <li>Telegram notifications</li>
+        <li>TradingView charts with live data & symbol search</li>
+        <li>Multi‑broker: Alpaca, Interactive Brokers, TradingView</li>
+        <li>6 confirmation indicators toggleable individually</li>
+        <li>Signal‑only or fully automated trading</li>
+        <li>Stop‑loss / take‑profit bracket orders</li>
+        <li>Kill switch & Telegram alerts</li>
         <li>Encrypted local credential storage</li>
-        <li>Draggable, customizable UI panels</li>
+        <li>Cross‑platform (macOS & Windows)</li>
       </ul>
     </div>
-    <p>Free while in beta. Commercial license coming soon.</p>
-    <div class="footer">© 2026 TraderMoney. All rights reserved.</div>
+    <div class="footer">© 2026 TraderMoney – share freely</div>
   </div>
-  <script>
-    // Replace with your actual download URLs after creating releases
-    document.getElementById('mac-download').href = 'https://github.com/yourusername/tradermoney-website/releases/latest/download/TraderMoney_macOS.zip';
-    document.getElementById('win-download').href = 'https://github.com/yourusername/tradermoney-website/releases/latest/download/TraderMoney_Windows.zip';
-  </script>
 </body>
 </html>
