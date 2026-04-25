@@ -22,7 +22,7 @@ jobs:
           python-version: '3.11'
       - name: Install dependencies
         run: |
-          pip install pywebview flask flask-cors yfinance pandas requests alpaca-trade-api numpy cryptography ib_insync pyinstaller
+          pip install pywebview flask flask-cors yfinance pandas requests alpaca-trade-api numpy cryptography ib_insync pyinstaller pillow
           pip install python-binance pybit okx
       - name: Build app
         run: |
@@ -46,7 +46,7 @@ jobs:
           python-version: '3.11'
       - name: Install dependencies
         run: |
-          pip install pywebview flask flask-cors yfinance pandas requests alpaca-trade-api numpy cryptography ib_insync pyinstaller
+          pip install pywebview flask flask-cors yfinance pandas requests alpaca-trade-api numpy cryptography ib_insync pyinstaller pillow
           pip install python-binance pybit okx
       - name: Build app
         run: |
