@@ -5,6 +5,12 @@ on:
     tags:
       - 'v*'
 
+permissions:
+  contents: write   # This allows the workflow to create/update releases
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true   # Opt into Node 24 now (removes warnings)
+
 jobs:
   build:
     runs-on: ${{ matrix.os }}
