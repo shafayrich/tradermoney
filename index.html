@@ -68,21 +68,6 @@
             margin: 0 auto;
         }
 
-        .version-badge {
-            display: inline-block;
-            background: var(--card-bg);
-            border: 1px solid rgba(255,255,255,0.08);
-            border-radius: 8px;
-            padding: 0.4rem 1.2rem;
-            font-size: 0.9rem;
-            margin-top: 1.5rem;
-            color: var(--text-muted);
-        }
-        .version-badge span {
-            color: var(--accent);
-            font-weight: 600;
-        }
-
         .projects-container {
             padding: 2rem 5% 8rem;
             max-width: 1100px;
@@ -153,10 +138,6 @@
             color: var(--text-muted);
             font-size: 0.85rem;
         }
-        footer a {
-            color: var(--accent);
-            text-decoration: none;
-        }
 
         .fade-in {
             animation: fadeIn 1s ease-out forwards;
@@ -191,9 +172,6 @@
     <header class="hero">
         <h1 class="fade-in delay-1">Institutional‑grade trading terminal.</h1>
         <p class="fade-in delay-2">Live TradingView charts, 6 built‑in brokers, advanced signals, auto‑updates – free beta.</p>
-        <div class="version-badge fade-in delay-2">
-            Latest version: <span id="version-number">...</span>
-        </div>
     </header>
 
     <main class="projects-container fade-in delay-3">
@@ -212,37 +190,11 @@
             <span class="link-text">Download for Windows</span>
         </a>
 
-        <!-- GitHub Repository Card -->
-        <a href="https://github.com/shafayrich/tradermoney" target="_blank" class="project-card">
-            <h2>📁 Source & Documentation</h2>
-            <p>View the full source code, report issues, and track upcoming features on GitHub.</p>
-            <span class="link-text">View on GitHub</span>
-        </a>
-
     </main>
 
     <footer>
-        <p>&copy; 2026 TraderMoney – Built by Shafay Rich. <a href="https://github.com/shafayrich/tradermoney">GitHub</a></p>
+        <p>&copy; 2026 TraderMoney – Built by Shafay Rich.</p>
     </footer>
 
-    <script>
-        // Fetch latest version from GitHub's raw version.json
-        fetch('https://raw.githubusercontent.com/shafayrich/tradermoney/main/version.json')
-          .then(function(response) {
-              if (!response.ok) throw new Error('Network response was not ok');
-              return response.json();
-          })
-          .then(function(data) {
-              if (data && data.latest_version) {
-                  document.getElementById('version-number').textContent = 'v' + data.latest_version;
-              } else {
-                  document.getElementById('version-number').textContent = '—';
-              }
-          })
-          .catch(function(error) {
-              console.log('Version fetch failed:', error);
-              document.getElementById('version-number').textContent = '—';
-          });
-    </script>
 </body>
 </html>
