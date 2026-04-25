@@ -11,7 +11,7 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 
 # ---------- App Version (bump this on each release) ----------
-APP_VERSION = "1.0.6"
+APP_VERSION = "1.0.7"
 
 # ---------- Flask App ----------
 app = Flask(__name__)
