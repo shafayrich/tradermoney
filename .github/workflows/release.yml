@@ -1,0 +1,79 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'   # Triggers on tags like v1.0.0, v1.0.1
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [macos-latest, windows-latest]
+        include:
+          - os: macos-latest
+            artifact_name: TraderMoney_macOS.zip
+          - os: windows-latest
+            artifact_name: TraderMoney_Windows.zip
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install pywebview flask flask-cors yfinance pandas requests alpaca-trade-api numpy cryptography ib_insync pyinstaller
+          pip install python-binance pybit okx
+
+      - name: Build with PyInstaller
+        shell: bash
+        run: |
+          pyinstaller --noconsole --windowed --name "TraderMoney" --collect-all pywebview app.py
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
+            cd dist && zip -r ../${{ matrix.artifact_name }} TraderMoney.app
+          else
+            cd dist && Compress-Archive -Path TraderMoney -DestinationPath ../${{ matrix.artifact_name }}
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_name }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+
+      - name: Update version.json
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          DOWNLOAD_URL="https://github.com/${{ github.repository }}/releases/download/v${VERSION}/TraderMoney_macOS.zip"
+          echo "{\"latest_version\":\"${VERSION}\",\"download_url\":\"${DOWNLOAD_URL}\"}" > version.json
+
+      - name: Commit updated version.json
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add version.json
+          git commit -m "chore: bump version to v${VERSION}" || echo "No changes to commit"
+          git push
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: artifacts/**/*.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
