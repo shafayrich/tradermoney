@@ -3,7 +3,7 @@ name: Build and Release
 on:
   push:
     tags:
-      - 'v*'   # Triggers on tags like v1.0.0, v1.0.1
+      - 'v*'
 
 jobs:
   build:
@@ -29,51 +29,25 @@ jobs:
           pip install pywebview flask flask-cors yfinance pandas requests alpaca-trade-api numpy cryptography ib_insync pyinstaller
           pip install python-binance pybit okx
 
-      - name: Build with PyInstaller
-        shell: bash
+      - name: Build app
         run: |
           pyinstaller --noconsole --windowed --name "TraderMoney" --collect-all pywebview app.py
-          if [[ "$RUNNER_OS" == "macOS" ]]; then
-            cd dist && zip -r ../${{ matrix.artifact_name }} TraderMoney.app
-          else
-            cd dist && Compress-Archive -Path TraderMoney -DestinationPath ../${{ matrix.artifact_name }}
-          fi
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.artifact_name }}
-          path: ${{ matrix.artifact_name }}
-
-  release:
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts/
-
-      - name: Update version.json
+      - name: Zip artifact (macOS)
+        if: runner.os == 'macOS'
         run: |
-          VERSION="${GITHUB_REF#refs/tags/v}"
-          DOWNLOAD_URL="https://github.com/${{ github.repository }}/releases/download/v${VERSION}/TraderMoney_macOS.zip"
-          echo "{\"latest_version\":\"${VERSION}\",\"download_url\":\"${DOWNLOAD_URL}\"}" > version.json
+          cd dist && zip -r ../${{ matrix.artifact_name }} TraderMoney.app
 
-      - name: Commit updated version.json
+      - name: Zip artifact (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
         run: |
-          git config user.name "github-actions"
-          git config user.email "actions@github.com"
-          git add version.json
-          git commit -m "chore: bump version to v${VERSION}" || echo "No changes to commit"
-          git push
+          Compress-Archive -Path dist\TraderMoney -DestinationPath ${{ matrix.artifact_name }}
 
-      - name: Create GitHub Release
+      - name: Upload artifact to release
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ github.ref_name }}
-          files: artifacts/**/*.zip
+          files: ${{ matrix.artifact_name }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
