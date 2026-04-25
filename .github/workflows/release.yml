@@ -14,7 +14,7 @@ env:
 jobs:
 
   build-macos:
-    runs-on: macos-12          # ✅ Intel Mac (x86_64), works on all Macs
+    runs-on: macos-12
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -26,7 +26,7 @@ jobs:
           pip install python-binance pybit okx
       - name: Build app
         run: |
-          pyinstaller --noconsole --windowed --name "TraderMoney" --collect-all pywebview app.py
+          pyinstaller --noconsole --windowed --name "TraderMoney" --collect-all pywebview --icon=icon.icns app.py
       - name: Zip artifact
         run: |
           cd dist && zip -r ../TraderMoney_macOS.zip TraderMoney.app
@@ -39,7 +39,6 @@ jobs:
 
   build-windows:
     runs-on: windows-latest
-    # ... (unchanged, keep your existing working Windows job)
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -51,7 +50,7 @@ jobs:
           pip install python-binance pybit okx
       - name: Build app
         run: |
-          pyinstaller --noconsole --windowed --name "TraderMoney" --collect-all pywebview app.py
+          pyinstaller --noconsole --windowed --name "TraderMoney" --collect-all pywebview --icon=icon.ico app.py
       - name: Zip artifact
         shell: pwsh
         run: |
