@@ -5,42 +5,130 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>TraderMoney – Institutional Trading Terminal</title>
   <style>
-    body { margin:0; font-family:-apple-system, sans-serif; background:#0A0C0F; color:#E0E0E0; display:flex; flex-direction:column; align-items:center; padding:40px 20px; }
-    .container { max-width:700px; text-align:center; }
-    h1 { color:#00C9B1; font-size:2.5rem; margin-bottom:10px; }
-    p { line-height:1.6; }
-    .buttons { display:flex; justify-content:center; gap:20px; flex-wrap:wrap; margin:30px 0; }
-    .btn { padding:15px 30px; border-radius:8px; text-decoration:none; font-weight:bold; font-size:1.1rem; transition:0.2s; }
-    .mac { background:#333; color:#fff; border:1px solid #555; }
-    .win { background:#0078D7; color:#fff; }
-    .btn:hover { opacity:0.9; transform:translateY(-2px); }
-    .features { text-align:left; margin:30px 0; }
-    .footer { margin-top:40px; font-size:0.8rem; color:#6B7280; }
+    * { margin:0; padding:0; box-sizing:border-box; }
+    body {
+      background: #0A0C0F;
+      color: #E0E0E0;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 60px 20px;
+    }
+    .container { max-width: 800px; text-align: center; }
+    .logo { width: 80px; margin-bottom: 20px; }
+    h1 { font-size: 2.8rem; color: #00C9B1; margin-bottom: 8px; }
+    .tagline { font-size: 1.3rem; color: #aaa; margin-bottom: 20px; }
+    .version-badge {
+      display: inline-block;
+      background: #1A1F26;
+      border: 1px solid #2A3440;
+      border-radius: 12px;
+      padding: 5px 15px;
+      font-size: 0.9rem;
+      margin-bottom: 30px;
+    }
+    .version-badge span { color: #00C9B1; font-weight: bold; }
+
+    .download-buttons {
+      display: flex;
+      justify-content: center;
+      gap: 20px;
+      flex-wrap: wrap;
+      margin: 30px 0 50px;
+    }
+    .btn {
+      padding: 14px 28px;
+      border-radius: 8px;
+      text-decoration: none;
+      font-weight: 600;
+      font-size: 1rem;
+      transition: 0.2s;
+    }
+    .btn-mac { background: #333; color: white; border: 1px solid #555; }
+    .btn-win { background: #0078D7; color: white; }
+    .btn:hover { opacity: 0.9; transform: translateY(-2px); }
+
+    .features {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+      gap: 20px;
+      text-align: left;
+      margin: 40px 0;
+    }
+    .feature-box {
+      background: #11151A;
+      border: 1px solid #2A3440;
+      border-radius: 12px;
+      padding: 20px;
+    }
+    .feature-box h3 { font-size: 1.1rem; color: #00C9B1; margin-bottom: 8px; }
+    .feature-box p { font-size: 0.9rem; color: #aaa; line-height: 1.5; }
+
+    .footer {
+      margin-top: 60px;
+      font-size: 0.8rem;
+      color: #6B7280;
+    }
+    .footer a { color: #00C9B1; text-decoration: none; }
   </style>
 </head>
 <body>
   <div class="container">
+    <!-- Optional logo (if you have one, upload as logo.png and use: <img class="logo" src="logo.png" alt="TraderMoney">) -->
     <h1>💸 TraderMoney</h1>
-    <p><strong>Institutional‑grade trading terminal</strong></p>
-    <p>Live TradingView charts, multi‑broker support, advanced signals with RSI, MACD, VWAP, Bollinger, ADX and volume confirmation. Bracket orders, Telegram alerts, encrypted credentials – free beta.</p>
-    <div class="buttons">
-      <a href="https://github.com/shafayrich/tradermoney/releases/latest/download/TraderMoney_macOS.zip" class="btn mac">⬇️ Download for macOS</a>
-      <a href="https://github.com/shafayrich/tradermoney/releases/latest/download/TraderMoney_Windows.zip" class="btn win">⬇️ Download for Windows</a>
+    <p class="tagline">Institutional‑grade trading terminal for macOS & Windows</p>
+
+    <!-- Live version badge -->
+    <div class="version-badge">Latest version: <span id="version-number">...</span></div>
+
+    <div class="download-buttons">
+      <a href="https://github.com/shafayrich/tradermoney/releases/latest/download/TraderMoney_macOS.zip" class="btn btn-mac">⬇️ Download for macOS</a>
+      <a href="https://github.com/shafayrich/tradermoney/releases/latest/download/TraderMoney_Windows.zip" class="btn btn-win">⬇️ Download for Windows</a>
     </div>
+
     <div class="features">
-      <h3>Features</h3>
-      <ul>
-        <li>Embedded TradingView charts</li>
-        <li>Alpaca, IBKR, Tradier, Binance, Bybit, OKX support</li>
-        <li>6 confirmation indicators toggleable individually</li>
-        <li>Signal‑only or automated trading modes</li>
-        <li>Bracket orders (Stop‑Loss / Take‑Profit)</li>
-        <li>Kill switch & Telegram alerts</li>
-        <li>Encrypted local config</li>
-        <li>Auto‑updates directly from GitHub</li>
-      </ul>
+      <div class="feature-box">
+        <h3>📊 TradingView Charts</h3>
+        <p>Live interactive charts with symbol search and multiple timeframes.</p>
+      </div>
+      <div class="feature-box">
+        <h3>🏦 6 Built‑in Brokers</h3>
+        <p>Alpaca, IBKR, Tradier, Binance, Bybit, OKX – with paper & live trading.</p>
+      </div>
+      <div class="feature-box">
+        <h3>🧠 Smart Signals</h3>
+        <p>EMA crossover with RSI, MACD, VWAP, Bollinger, ADX & volume confirmation.</p>
+      </div>
+      <div class="feature-box">
+        <h3>🛡️ Risk Management</h3>
+        <p>Bracket orders (stop‑loss / take‑profit), kill switch, and Telegram alerts.</p>
+      </div>
+      <div class="feature-box">
+        <h3>🔒 Secure</h3>
+        <p>Credentials encrypted locally. No cloud storage of your keys.</p>
+      </div>
+      <div class="feature-box">
+        <h3>🔄 Auto‑Updates</h3>
+        <p>Get notified inside the app when a new version is available.</p>
+      </div>
     </div>
-    <div class="footer">© 2026 TraderMoney – share freely</div>
+
+    <div class="footer">
+      © 2026 TraderMoney – <a href="https://github.com/shafayrich/tradermoney">View on GitHub</a>
+    </div>
   </div>
+
+  <script>
+    // Auto‑fetch latest version from version.json and display it
+    fetch('https://raw.githubusercontent.com/shafayrich/tradermoney/main/version.json')
+      .then(r => r.json())
+      .then(data => {
+        document.getElementById('version-number').textContent = 'v' + data.latest_version;
+      })
+      .catch(() => {
+        document.getElementById('version-number').textContent = '—';
+      });
+  </script>
 </body>
 </html>
