@@ -6,10 +6,10 @@ on:
       - 'v*'
 
 permissions:
-  contents: write   # This allows the workflow to create/update releases
+  contents: write
 
 env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true   # Opt into Node 24 now (removes warnings)
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   build:
@@ -55,5 +55,4 @@ jobs:
         with:
           tag_name: ${{ github.ref_name }}
           files: ${{ matrix.artifact_name }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.RELEASE_TOKEN }}
