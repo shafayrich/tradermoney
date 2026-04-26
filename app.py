@@ -10,14 +10,11 @@ import webview
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 
-# ---------- App Version (bump this on each release) ----------
-APP_VERSION = "1.0.10"
+APP_VERSION = "1.0.11"
 
-# ---------- Flask App ----------
 app = Flask(__name__)
 CORS(app)
 
-# ---------- PORT-BASED SINGLE INSTANCE LOCK (cross‑platform) ----------
 def is_port_in_use(port: int) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         try:
@@ -34,7 +31,6 @@ atexit.register(lambda: None)
 signal.signal(signal.SIGINT, lambda *_: sys.exit(0))
 signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
 
-# ---------- CONSTANTS ----------
 CONFIG_FILE = os.path.expanduser("~/.tradermoney_config.enc")
 KEY_FILE = os.path.expanduser("~/.tradermoney.key")
 DEFAULT_EMAS = (9, 50)
@@ -44,7 +40,6 @@ DEFAULT_TIMEFRAME = "1m"
 ADX_TREND_THRESHOLD = 20
 VOLUME_RATIO_THRESHOLD = 1.5
 
-# ---------- ENCRYPTED CONFIG ----------
 def _generate_key():
     from cryptography.fernet import Fernet
     if not os.path.exists(KEY_FILE):
@@ -72,7 +67,6 @@ class EncryptedConfigManager:
         plain = json.dumps(config, indent=2).encode()
         with open(CONFIG_FILE, "wb") as f: f.write(cipher.encrypt(plain))
 
-# ---------- GLOBAL STATE ----------
 class AppState:
     def __init__(self):
         self.config = EncryptedConfigManager.load() or {
@@ -94,13 +88,11 @@ class AppState:
 
 state = AppState()
 
-# ---------- BROKER REGISTRY ----------
 BROKER_REGISTRY = {}
 
 def register_broker(name, cls):
     BROKER_REGISTRY[name] = cls
 
-# ---------- BASE BROKER ----------
 class BaseBroker:
     def __init__(self, config, ui_queue): self.config, self.ui_queue, self.name = config, ui_queue, "Base"
     def connect(self) -> bool: raise NotImplementedError
@@ -112,7 +104,6 @@ class BaseBroker:
     def stream_prices(self, symbols, callback): raise NotImplementedError
     def stop_stream(self): raise NotImplementedError
 
-# ---------- ALPACA BROKER ----------
 class AlpacaBroker(BaseBroker):
     def __init__(self, config, ui_queue): super().__init__(config, ui_queue); self.name = "Alpaca"; self.api = None; self._stop_stream = False
     def connect(self):
@@ -184,7 +175,6 @@ class AlpacaBroker(BaseBroker):
     def stop_stream(self): self._stop_stream = True
 register_broker("Alpaca", AlpacaBroker)
 
-# ---------- INTERACTIVE BROKERS ----------
 class IBKRBroker(BaseBroker):
     def __init__(self, config, ui_queue): super().__init__(config, ui_queue); self.name = "Interactive Brokers"; self.ib = None
     def connect(self):
@@ -231,7 +221,6 @@ class IBKRBroker(BaseBroker):
     def stop_stream(self): self._stop_stream = True
 register_broker("Interactive Brokers", IBKRBroker)
 
-# ---------- TRADIER BROKER ----------
 class TradierBroker(BaseBroker):
     def __init__(self, config, ui_queue): super().__init__(config, ui_queue); self.name = "Tradier"; self.session = None; self.token = None; self.account_id = None
     def connect(self):
@@ -273,7 +262,6 @@ class TradierBroker(BaseBroker):
     def stop_stream(self): pass
 register_broker("Tradier", TradierBroker)
 
-# ---------- BINANCE BROKER ----------
 class BinanceBroker(BaseBroker):
     def __init__(self, config, ui_queue): super().__init__(config, ui_queue); self.name = "Binance"; self.client = None
     def connect(self):
@@ -309,7 +297,6 @@ class BinanceBroker(BaseBroker):
     def stop_stream(self): pass
 register_broker("Binance", BinanceBroker)
 
-# ---------- BYBIT BROKER ----------
 class BybitBroker(BaseBroker):
     def __init__(self, config, ui_queue): super().__init__(config, ui_queue); self.name = "Bybit"; self.session = None
     def connect(self):
@@ -343,7 +330,6 @@ class BybitBroker(BaseBroker):
     def stop_stream(self): pass
 register_broker("Bybit", BybitBroker)
 
-# ---------- OKX BROKER ----------
 class OKXBroker(BaseBroker):
     def __init__(self, config, ui_queue): super().__init__(config, ui_queue); self.name = "OKX"; self.api = None
     def connect(self):
@@ -380,7 +366,6 @@ class OKXBroker(BaseBroker):
     def stop_stream(self): pass
 register_broker("OKX", OKXBroker)
 
-# ---------- INDICATOR CALCULATOR (unchanged) ----------
 class IndicatorCalculator:
     @staticmethod
     def compute_all(df, ema_fast=9, ema_slow=50):
@@ -424,7 +409,6 @@ class IndicatorCalculator:
         df['Vol_ratio'] = np.divide(volume, vol_avg20, out=np.ones_like(volume), where=vol_avg20!=0)
         return df
 
-# ---------- SIGNAL ANALYZER (unchanged) ----------
 class SignalAnalyzer:
     @staticmethod
     def _safe_float(series, default=0.0):
@@ -471,7 +455,6 @@ class SignalAnalyzer:
         if config.get('use_vol_confirm',True) and vol_ratio<VOLUME_RATIO_THRESHOLD: return False
         return True
 
-# ---------- TRADING ENGINE (unchanged) ----------
 class TradingEngine(threading.Thread):
     def __init__(self, ui_queue, config, broker):
         super().__init__(daemon=True); self.ui_queue, self.config, self.broker = ui_queue, config, broker
@@ -551,7 +534,6 @@ class TradingEngine(threading.Thread):
     def stop(self): self.running = False
     def on_price_update(self, sym, price): self.ui_queue.put(("price_update", (sym, price)))
 
-# ---------- FLASK ROUTES ----------
 @app.route('/')
 def index():
     return FRONTEND_HTML
@@ -628,9 +610,7 @@ def get_status():
 
 @app.route('/api/update', methods=['GET'])
 def check_update():
-    """Return latest version info from GitHub repository."""
     try:
-        # Replace with your actual repo URL
         url = "https://raw.githubusercontent.com/shafayrich/tradermoney/main/version.json"
         with urllib.request.urlopen(url, timeout=5) as resp:
             data = json.loads(resp.read().decode())
@@ -652,7 +632,6 @@ def check_update():
             "error": str(e)
         })
 
-# ---------- FRONTEND HTML (unchanged except for update toast/button) ----------
 FRONTEND_HTML = r"""
 <!DOCTYPE html>
 <html>
@@ -805,7 +784,6 @@ FRONTEND_HTML = r"""
 <script>
 let currentTicker = '', tickers = [], chartWidget = null, config = {};
 
-// Auto‑update checker
 async function checkForUpdates() {
   try {
     const r = await fetch('/api/update');
@@ -820,7 +798,6 @@ async function checkForUpdates() {
   } catch(e) { console.log('Update check failed', e); }
 }
 
-// Check on load
 setTimeout(checkForUpdates, 3000);
 
 const tabHeader = document.getElementById('tab-header');
@@ -881,7 +858,6 @@ function updateCredFields() {
   } else if (broker === 'OKX') {
     c.innerHTML = `<label>API Key</label><input type="password" id="okx-key"><label>API Secret</label><input type="password" id="okx-secret"><label>API Passphrase</label><input type="password" id="okx-passphrase"><label><input type="checkbox" id="okx-demo" checked> Demo Trading</label>`;
   }
-  // pre‑fill from saved config
   if (config.alpaca) {
     const ak = document.getElementById('alpaca-key'); if (ak) ak.value = config.alpaca.api_key || '';
     const sk = document.getElementById('alpaca-secret'); if (sk) sk.value = config.alpaca.secret_key || '';
@@ -1064,7 +1040,6 @@ loadConfig();
 </html>
 """
 
-# ---------- MAIN ----------
 def run_flask():
     app.run(host='127.0.0.1', port=5050, debug=False, use_reloader=False)
 
