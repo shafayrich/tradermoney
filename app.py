@@ -10,7 +10,7 @@ import webview
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 
-APP_VERSION = "1.0.11"
+APP_VERSION = "1.0.13"
 
 app = Flask(__name__)
 CORS(app)
