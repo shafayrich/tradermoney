@@ -49,6 +49,10 @@ jobs:
       - name: Build app
         run: |
           pyinstaller --noconsole --windowed --name "TraderMoney" --collect-all pywebview --target-architecture arm64 --codesign-identity - --osx-bundle-identifier com.tradermoney.app app.py
+      - name: Strip all signatures
+        run: |
+          find dist/TraderMoney.app -type f \( -name "Python" -o -name "*.dylib" -o -name "*.so" \) -exec codesign --remove-signature {} \; 2>/dev/null || true
+          codesign --remove-signature dist/TraderMoney.app/Contents/MacOS/TraderMoney 2>/dev/null || true
       - name: Package as tar.gz
         run: |
           cd dist && tar -czf ../TraderMoney_macOS_AppleSilicon.tar.gz TraderMoney.app
@@ -73,6 +77,10 @@ jobs:
       - name: Build app
         run: |
           pyinstaller --noconsole --windowed --name "TraderMoney" --collect-all pywebview --target-architecture x86_64 --codesign-identity - --osx-bundle-identifier com.tradermoney.app app.py
+      - name: Strip all signatures (fixes Team ID conflict)
+        run: |
+          find dist/TraderMoney.app -type f \( -name "Python" -o -name "*.dylib" -o -name "*.so" \) -exec codesign --remove-signature {} \; 2>/dev/null || true
+          codesign --remove-signature dist/TraderMoney.app/Contents/MacOS/TraderMoney 2>/dev/null || true
       - name: Package as tar.gz
         run: |
           cd dist && tar -czf ../TraderMoney_macOS_Intel.tar.gz TraderMoney.app
