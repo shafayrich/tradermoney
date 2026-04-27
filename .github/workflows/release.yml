@@ -35,7 +35,7 @@ jobs:
           files: TraderMoney_Windows.zip
           token: ${{ secrets.RELEASE_TOKEN }}
 
-  build-macos:
+  build-macos-apple-silicon:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -48,15 +48,37 @@ jobs:
           pip install python-binance pybit okx
       - name: Build app
         run: |
-          pyinstaller --noconsole --windowed --name "TraderMoney" --collect-all pywebview --codesign-identity - --osx-bundle-identifier com.tradermoney.app app.py
-      - name: Package as tar.gz (preserves .app structure)
+          pyinstaller --noconsole --windowed --name "TraderMoney" --collect-all pywebview --target-architecture arm64 --codesign-identity - --osx-bundle-identifier com.tradermoney.app app.py
+      - name: Package as tar.gz
         run: |
-          cd dist
-          tar -czf ../TraderMoney_macOS.tar.gz TraderMoney.app
-          cd ..
+          cd dist && tar -czf ../TraderMoney_macOS_AppleSilicon.tar.gz TraderMoney.app
       - name: Upload to release
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ github.ref_name }}
-          files: TraderMoney_macOS.tar.gz
+          files: TraderMoney_macOS_AppleSilicon.tar.gz
+          token: ${{ secrets.RELEASE_TOKEN }}
+
+  build-macos-intel:
+    runs-on: macos-15-intel
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: |
+          pip install pywebview flask flask-cors yfinance pandas requests alpaca-trade-api numpy cryptography ib_insync pyinstaller pillow
+          pip install python-binance pybit okx
+      - name: Build app
+        run: |
+          pyinstaller --noconsole --windowed --name "TraderMoney" --collect-all pywebview --target-architecture x86_64 --codesign-identity - --osx-bundle-identifier com.tradermoney.app app.py
+      - name: Package as tar.gz
+        run: |
+          cd dist && tar -czf ../TraderMoney_macOS_Intel.tar.gz TraderMoney.app
+      - name: Upload to release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: TraderMoney_macOS_Intel.tar.gz
           token: ${{ secrets.RELEASE_TOKEN }}
