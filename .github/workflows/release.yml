@@ -21,9 +21,9 @@ jobs:
         run: |
           pip install pywebview flask flask-cors yfinance pandas requests alpaca-trade-api numpy cryptography ib_insync pyinstaller pillow
           pip install python-binance pybit okx
-      - name: Build app
+      - name: Build app (with hidden imports for crypto brokers)
         run: |
-          pyinstaller --noconsole --windowed --name "TraderMoney" --collect-all pywebview --icon=icon.ico app.py
+          pyinstaller --noconsole --windowed --name "TraderMoney" --collect-all pywebview --icon=icon.ico --hidden-import=binance.client --hidden-import=pybit.unified --hidden-import=okx.Account --hidden-import=okx.Trade --hidden-import=ib_insync app.py
       - name: Zip artifact
         shell: pwsh
         run: |
@@ -77,7 +77,7 @@ jobs:
       - name: Build app
         run: |
           pyinstaller --noconsole --windowed --name "TraderMoney" --collect-all pywebview --target-architecture x86_64 --codesign-identity - --osx-bundle-identifier com.tradermoney.app app.py
-      - name: Strip all signatures (fixes Team ID conflict)
+      - name: Strip all signatures
         run: |
           find dist/TraderMoney.app -type f \( -name "Python" -o -name "*.dylib" -o -name "*.so" \) -exec codesign --remove-signature {} \; 2>/dev/null || true
           codesign --remove-signature dist/TraderMoney.app/Contents/MacOS/TraderMoney 2>/dev/null || true
