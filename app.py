@@ -1,5 +1,5 @@
 """
-TraderMoney v16.0 – 6-broker support, auto‑update checker.
+TraderMoney v16.1 – Expanded Help & Broker Guides, GitHub Actions macOS+Windows build.
 """
 
 import json, os, queue, signal, sys, socket, threading, time, traceback, atexit, urllib.request
@@ -10,11 +10,12 @@ import webview
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 
-APP_VERSION = "1.0.13"
+APP_VERSION = "1.0.15"   # bump before releasing
 
 app = Flask(__name__)
 CORS(app)
 
+# ---------- PORT-BASED SINGLE INSTANCE LOCK (cross‑platform) ----------
 def is_port_in_use(port: int) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         try:
@@ -93,6 +94,7 @@ BROKER_REGISTRY = {}
 def register_broker(name, cls):
     BROKER_REGISTRY[name] = cls
 
+# ---------- BASE BROKER ----------
 class BaseBroker:
     def __init__(self, config, ui_queue): self.config, self.ui_queue, self.name = config, ui_queue, "Base"
     def connect(self) -> bool: raise NotImplementedError
@@ -104,6 +106,7 @@ class BaseBroker:
     def stream_prices(self, symbols, callback): raise NotImplementedError
     def stop_stream(self): raise NotImplementedError
 
+# ---------- ALPACA BROKER ----------
 class AlpacaBroker(BaseBroker):
     def __init__(self, config, ui_queue): super().__init__(config, ui_queue); self.name = "Alpaca"; self.api = None; self._stop_stream = False
     def connect(self):
@@ -175,6 +178,7 @@ class AlpacaBroker(BaseBroker):
     def stop_stream(self): self._stop_stream = True
 register_broker("Alpaca", AlpacaBroker)
 
+# ---------- INTERACTIVE BROKERS ----------
 class IBKRBroker(BaseBroker):
     def __init__(self, config, ui_queue): super().__init__(config, ui_queue); self.name = "Interactive Brokers"; self.ib = None
     def connect(self):
@@ -221,6 +225,7 @@ class IBKRBroker(BaseBroker):
     def stop_stream(self): self._stop_stream = True
 register_broker("Interactive Brokers", IBKRBroker)
 
+# ---------- TRADIER BROKER ----------
 class TradierBroker(BaseBroker):
     def __init__(self, config, ui_queue): super().__init__(config, ui_queue); self.name = "Tradier"; self.session = None; self.token = None; self.account_id = None
     def connect(self):
@@ -262,6 +267,7 @@ class TradierBroker(BaseBroker):
     def stop_stream(self): pass
 register_broker("Tradier", TradierBroker)
 
+# ---------- BINANCE BROKER ----------
 class BinanceBroker(BaseBroker):
     def __init__(self, config, ui_queue): super().__init__(config, ui_queue); self.name = "Binance"; self.client = None
     def connect(self):
@@ -297,6 +303,7 @@ class BinanceBroker(BaseBroker):
     def stop_stream(self): pass
 register_broker("Binance", BinanceBroker)
 
+# ---------- BYBIT BROKER ----------
 class BybitBroker(BaseBroker):
     def __init__(self, config, ui_queue): super().__init__(config, ui_queue); self.name = "Bybit"; self.session = None
     def connect(self):
@@ -330,6 +337,7 @@ class BybitBroker(BaseBroker):
     def stop_stream(self): pass
 register_broker("Bybit", BybitBroker)
 
+# ---------- OKX BROKER ----------
 class OKXBroker(BaseBroker):
     def __init__(self, config, ui_queue): super().__init__(config, ui_queue); self.name = "OKX"; self.api = None
     def connect(self):
@@ -366,6 +374,7 @@ class OKXBroker(BaseBroker):
     def stop_stream(self): pass
 register_broker("OKX", OKXBroker)
 
+# ---------- INDICATOR CALCULATOR (unchanged) ----------
 class IndicatorCalculator:
     @staticmethod
     def compute_all(df, ema_fast=9, ema_slow=50):
@@ -409,6 +418,7 @@ class IndicatorCalculator:
         df['Vol_ratio'] = np.divide(volume, vol_avg20, out=np.ones_like(volume), where=vol_avg20!=0)
         return df
 
+# ---------- SIGNAL ANALYZER (unchanged) ----------
 class SignalAnalyzer:
     @staticmethod
     def _safe_float(series, default=0.0):
@@ -455,6 +465,7 @@ class SignalAnalyzer:
         if config.get('use_vol_confirm',True) and vol_ratio<VOLUME_RATIO_THRESHOLD: return False
         return True
 
+# ---------- TRADING ENGINE (unchanged) ----------
 class TradingEngine(threading.Thread):
     def __init__(self, ui_queue, config, broker):
         super().__init__(daemon=True); self.ui_queue, self.config, self.broker = ui_queue, config, broker
@@ -534,6 +545,7 @@ class TradingEngine(threading.Thread):
     def stop(self): self.running = False
     def on_price_update(self, sym, price): self.ui_queue.put(("price_update", (sym, price)))
 
+# ---------- FLASK ROUTES (unchanged) ----------
 @app.route('/')
 def index():
     return FRONTEND_HTML
@@ -632,6 +644,7 @@ def check_update():
             "error": str(e)
         })
 
+# ---------- FRONTEND HTML (EXPANDED HELP SECTION) ----------
 FRONTEND_HTML = r"""
 <!DOCTYPE html>
 <html>
@@ -679,8 +692,10 @@ FRONTEND_HTML = r"""
   .help-content { padding:20px; overflow-y:auto; height:100%; box-sizing:border-box; }
   .help-content h2 { color:var(--accent); margin-top:0; }
   .help-content h3 { color:var(--text); margin:20px 0 10px; border-bottom:1px solid var(--border); padding-bottom:5px; }
-  .help-content p, .help-content ul { font-size:0.9rem; line-height:1.6; }
+  .help-content h4 { color:var(--accent); margin:15px 0 5px; }
+  .help-content p, .help-content ul, .help-content ol { font-size:0.9rem; line-height:1.6; }
   .help-content ul { padding-left:20px; }
+  .help-content ol { padding-left:20px; }
   .help-content li { margin-bottom:6px; }
   .help-content code { background:var(--card); padding:2px 6px; border-radius:4px; font-size:0.85rem; }
   #update-toast { display:none; position:fixed; bottom:20px; right:20px; z-index:9999; background:var(--accent); color:black; padding:15px 20px; border-radius:8px; font-weight:bold; }
@@ -747,35 +762,134 @@ FRONTEND_HTML = r"""
   <div id="tab-ema" class="tab-content"><div class="ema-monitor" id="ema-monitor">Loading...</div></div>
   <div id="tab-help" class="tab-content">
     <div class="help-content">
-      <h2>📘 TraderMoney Help & Documentation</h2>
-      <p>Welcome to TraderMoney, your institutional‑grade trading terminal with 6 integrated broker connections.</p>
-      <h3>🚀 Quick Start</h3>
-      <ol>
-        <li><strong>Choose a Broker</strong> from the dropdown (Alpaca is the simplest for paper trading).</li>
-        <li>Enter your <strong>credentials</strong> (they will be encrypted and saved locally).</li>
-        <li>Add <strong>Tickers</strong> (comma separated, e.g. <code>AAPL, MSFT, TSLA</code>).</li>
-        <li>Set a <strong>Timeframe</strong> (lower = more frequent signals).</li>
-        <li>Select <strong>Signal Only</strong> (alerts + Telegram notifications) or <strong>Auto Trade</strong> (executes real orders).</li>
-        <li>Click <strong>💾 Save</strong>, then <strong>▶️ Start</strong>.</li>
-      </ol>
+      <h2>📘 TraderMoney Help & Broker Connection Guides</h2>
+      <p>Welcome to TraderMoney. This section covers trading logic and detailed step-by-step instructions for connecting each supported broker.</p>
+      
       <h3>📊 Trading Logic & Signal Pipeline</h3>
-      <p>The bot looks for <strong>EMA crossover</strong> events (fast EMA crosses above/below slow EMA). Every potential signal then passes through multiple confirmation filters:</p>
+      <p>The bot uses an EMA crossover as its core trigger, confirmed by multiple indicators (all togglable): RSI, MACD, VWAP, Bollinger, ADX, Volume. See the Quick Start section for configuration details.</p>
+      
+      <h3>🏦 Broker Connection Guides</h3>
+      <p>Select your broker from the sidebar and follow the corresponding guide below to obtain and enter the required credentials.</p>
+
+      <h4>Alpaca</h4>
+      <ol>
+        <li>Sign up at <a href="https://alpaca.markets/" target="_blank" style="color:var(--accent);">alpaca.markets</a> and log in.</li>
+        <li>Go to <strong>Paper Trading</strong> (recommended for testing) or <strong>Live Trading</strong>.</li>
+        <li>Navigate to <strong>API</strong> and generate a new API key. Note the <strong>API Key ID</strong> and <strong>Secret Key</strong>.</li>
+        <li>In TraderMoney, select <strong>Alpaca</strong> as broker. Fill in:
+          <ul>
+            <li><strong>API Key</strong> = your API Key ID</li>
+            <li><strong>Secret Key</strong> = your Secret Key</li>
+            <li>Check <strong>Paper Trading</strong> if you are using a paper account; uncheck for live.</li>
+          </ul>
+        </li>
+        <li>Click <strong>Save</strong>, then <strong>Start</strong>.</li>
+      </ol>
+
+      <h4>Interactive Brokers</h4>
+      <ol>
+        <li>Download and install <strong>Trader Workstation (TWS)</strong> or <strong>IB Gateway</strong> from <a href="https://www.interactivebrokers.com/" target="_blank" style="color:var(--accent);">interactivebrokers.com</a>.</li>
+        <li>Log in with your paper or live account.</li>
+        <li>In TWS/Gateway, go to <strong>File → Global Configuration → API → Settings</strong>.
+          <ul>
+            <li>Check ✅ <strong>Enable ActiveX and Socket Clients</strong>.</li>
+            <li>Note the <strong>Socket port</strong>: <strong>7497</strong> for paper, <strong>7496</strong> for live.</li>
+            <li>Add <strong>127.0.0.1</strong> to the list of Trusted IP Addresses.</li>
+            <li>Uncheck <strong>Read-Only API</strong> if you want the app to place trades.</li>
+          </ul>
+        </li>
+        <li>In TraderMoney, select <strong>Interactive Brokers</strong>. Fill in:
+          <ul>
+            <li><strong>Host</strong> → 127.0.0.1</li>
+            <li><strong>Port</strong> → 7497 (paper) or 7496 (live)</li>
+            <li><strong>Client ID</strong> → any number (e.g., 1)</li>
+          </ul>
+        </li>
+        <li>Click <strong>Save</strong>, then <strong>Start</strong>. TWS/Gateway must remain open.</li>
+      </ol>
+
+      <h4>Tradier</h4>
+      <ol>
+        <li>Open an account at <a href="https://tradier.com/" target="_blank" style="color:var(--accent);">tradier.com</a>.</li>
+        <li>Go to <strong>API</strong> and create a new application. You will receive an <strong>Access Token</strong>.</li>
+        <li>Find your <strong>Account Number</strong> (visible in your dashboard).</li>
+        <li>In TraderMoney, select <strong>Tradier</strong>. Fill in:
+          <ul>
+            <li><strong>Access Token</strong> → your access token</li>
+            <li><strong>Account ID</strong> → your account number</li>
+          </ul>
+        </li>
+        <li>Click <strong>Save</strong>, then <strong>Start</strong>.</li>
+      </ol>
+
+      <h4>Binance</h4>
+      <ol>
+        <li>Create a Binance account at <a href="https://www.binance.com/" target="_blank" style="color:var(--accent);">binance.com</a>.</li>
+        <li>Go to <strong>API Management</strong> (under your profile). Create a new API key.
+          <ul>
+            <li>Enable <strong>Enable Spot & Margin Trading</strong> (for spot trading).</li>
+            <li>Note the <strong>API Key</strong> and <strong>Secret Key</strong>.</li>
+          </ul>
+        </li>
+        <li>In TraderMoney, select <strong>Binance</strong>. Fill in:
+          <ul>
+            <li><strong>API Key</strong> → your key</li>
+            <li><strong>API Secret</strong> → your secret</li>
+            <li>Check <strong>Testnet (Paper Trading)</strong> if you want to use the Binance Spot Testnet. Uncheck for live trading.</li>
+          </ul>
+        </li>
+        <li>Click <strong>Save</strong>, then <strong>Start</strong>.</li>
+      </ol>
+      <p><em>Note: For Testnet, you must set up a separate testnet account at <a href="https://testnet.binance.vision/" target="_blank" style="color:var(--accent);">testnet.binance.vision</a> and use the testnet API keys.</em></p>
+
+      <h4>Bybit</h4>
+      <ol>
+        <li>Register at <a href="https://www.bybit.com/" target="_blank" style="color:var(--accent);">bybit.com</a>.</li>
+        <li>Go to <strong>API</strong> and create a new API key.
+          <ul>
+            <li>Enable <strong>Spot</strong> (or other required permissions).</li>
+            <li>Copy the <strong>API Key</strong> and <strong>Secret</strong>.</li>
+          </ul>
+        </li>
+        <li>In TraderMoney, select <strong>Bybit</strong>. Fill in:
+          <ul>
+            <li><strong>API Key</strong> → your key</li>
+            <li><strong>API Secret</strong> → your secret</li>
+            <li>Check <strong>Testnet (Paper Trading)</strong> if you want to use the Bybit Testnet. Uncheck for live.</li>
+          </ul>
+        </li>
+        <li>Click <strong>Save</strong>, then <strong>Start</strong>.</li>
+      </ol>
+      <p><em>To get Testnet keys, sign up at <a href="https://testnet.bybit.com/" target="_blank" style="color:var(--accent);">testnet.bybit.com</a>.</em></p>
+
+      <h4>OKX</h4>
+      <ol>
+        <li>Create an account at <a href="https://www.okx.com/" target="_blank" style="color:var(--accent);">okx.com</a>.</li>
+        <li>Go to <strong>API</strong> and generate a new API key.
+          <ul>
+            <li>Set a <strong>Passphrase</strong> (you choose it).</li>
+            <li>Enable <strong>Trade</strong> permissions (and <strong>Spot</strong> for spot trading).</li>
+            <li>Copy the <strong>API Key</strong>, <strong>Secret Key</strong>, and remember your <strong>Passphrase</strong>.</li>
+          </ul>
+        </li>
+        <li>In TraderMoney, select <strong>OKX</strong>. Fill in:
+          <ul>
+            <li><strong>API Key</strong> → your key</li>
+            <li><strong>API Secret</strong> → your secret</li>
+            <li><strong>API Passphrase</strong> → your passphrase</li>
+            <li>Check <strong>Demo Trading</strong> if you want to use OKX Demo environment; uncheck for live.</li>
+          </ul>
+        </li>
+        <li>Click <strong>Save</strong>, then <strong>Start</strong>.</li>
+      </ol>
+      <p><em>For demo trading, sign up on <a href="https://www.okx.com/vi/demo" target="_blank" style="color:var(--accent);">OKX Demo</a> and use the demo API keys.</em></p>
+
+      <h3>🛠️ Troubleshooting</h3>
       <ul>
-        <li><strong>EMA Crossover</strong> – the core entry trigger (default 9 & 50).</li>
-        <li><strong>RSI</strong> – bullish only if RSI ≥ 30; bearish only if RSI ≤ 70.</li>
-        <li><strong>MACD</strong> – must agree with crossover direction.</li>
-        <li><strong>VWAP</strong> – price must be above VWAP for buys, below for sells.</li>
-        <li><strong>Bollinger Bands</strong> – price relative to upper/lower bands.</li>
-        <li><strong>ADX (Trend Strength)</strong> – ADX must be ≥ 20 for a clear trend.</li>
-        <li><strong>Volume Confirmation</strong> – current volume must exceed 1.5× the 20‑period average.</li>
+        <li><strong>No signals?</strong> Check market hours, ensure timeframe/indicators aren’t too restrictive.</li>
+        <li><strong>Auth error?</strong> Verify API keys and paper/live switch.</li>
+        <li><strong>Charts not loading?</strong> Wait a few seconds or switch tickers.</li>
       </ul>
-      <p><em>All filters can be toggled individually in the sidebar.</em></p>
-      <h3>🔔 Telegram Alerts</h3>
-      <p>Enter your bot token and chat ID in the sidebar. You will receive start/stop notifications and every signal in real time.</p>
-      <h3>💾 Data & Security</h3>
-      <p>All credentials are encrypted with <code>Fernet</code> and stored in <code>~/.tradermoney_config.enc</code>.</p>
-      <h3>🔄 Auto‑Updates</h3>
-      <p>TraderMoney checks for new versions on startup. If a new version is available, a toast notification appears with a direct download link. Click it to open your browser and grab the latest version.</p>
     </div>
   </div>
   <div id="log"></div>
