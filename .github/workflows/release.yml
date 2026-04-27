@@ -14,7 +14,7 @@ env:
 jobs:
 
   build-macos:
-    runs-on: macos-12
+    runs-on: macos-12          # Intel Mac (works on Apple Silicon via Rosetta)
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
