@@ -30,7 +30,7 @@
     <script>
         async function refresh() {
             try {
-                const r = await fetch('http://127.0.0.1:5050/api/status');
+                const r = await fetch('/api/status');
                 if (!r.ok) throw new Error('Bot offline');
                 const data = await r.json();
                 const statusEl = document.getElementById('bot-status');
