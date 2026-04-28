@@ -11,7 +11,7 @@ import webview
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 
-APP_VERSION = "1.0.20"
+APP_VERSION = "1.0.21"
 
 # ── Gumroad ──────────────────────────────────────────────
 GUMMROAD_PRODUCT_ID = "73otoT7rzJukCy-Lt4hhkQ=="          # ← replace with your real ID
