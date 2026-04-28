@@ -325,7 +325,7 @@ FRONTEND_HTML = r"""
   <input type="password" id="license-key" placeholder="Paste your Gumroad key">
   <button onclick="validateLicense()" style="margin-top:5px; font-size:0.85rem;">🔑 Validate</button>
   <p style="font-size:0.7rem; color:var(--text-muted); margin-top:2px;">
-    <a href="https://YOUR_GUMROAD_URL" target="_blank" style="color:var(--accent);">Buy a license</a> – unlocks Auto Trade, unlimited tickers, all indicators
+    <a href="https://shafay4.gumroad.com/l/ykaoov" target="_blank" style="color:var(--accent);">Buy a license</a> – unlocks Auto Trade, unlimited tickers, all indicators
   </p>
   <hr style="border-color:var(--border); margin:15px 0;">
   <label>Broker</label>
