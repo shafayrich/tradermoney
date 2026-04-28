@@ -1,5 +1,5 @@
 """
-TraderMoney v1.0.26 – Resizable & retractable sidebar, polished UI, all features.
+TraderMoney v1.0.27 – Resizable & retractable sidebar, polished UI, all features.
 """
 
 import json, os, queue, signal, sys, socket, threading, time, traceback, atexit, urllib.request
