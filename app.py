@@ -1,5 +1,5 @@
 """
-TraderMoney v20 – Full engine with Gumroad license verification.
+TraderMoney v20 – Full engine with Gumroad license verification + mobile dashboard route.
 """
 
 import json, os, queue, signal, sys, socket, threading, time, traceback, atexit, urllib.request
@@ -8,13 +8,13 @@ from typing import Dict, List, Optional, Any, Tuple
 import numpy as np
 import requests as http_requests
 import webview
-from flask import Flask, request, jsonify, send_from_directory
+from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 
-APP_VERSION = "1.0.23"
+APP_VERSION = "1.0.24"
 
 # ── Gumroad ──────────────────────────────────────────────
-GUMMROAD_PRODUCT_ID = "73otoT7rzJukCy-Lt4hhkQ=="          # ← replace with your real ID
+GUMMROAD_PRODUCT_ID = "73otoT7rzJukCy-Lt4hhkQ=="          # ← your real product ID
 
 def verify_gumroad_license(license_key: str) -> Tuple[bool, str]:
     """Check a Gumroad license key. Returns (is_valid, message)."""
@@ -34,7 +34,7 @@ def verify_gumroad_license(license_key: str) -> Tuple[bool, str]:
     except Exception:
         return False, "Cannot reach license server – try again later"
 
-# ── Flask app and cross‑platform lock (unchanged) ───────
+# ── Flask app and cross‑platform lock ────────────────────
 app = Flask(__name__)
 CORS(app)
 
@@ -411,7 +411,7 @@ class OKXBroker(BaseBroker):
     def stop_stream(self): pass
 register_broker("OKX", OKXBroker)
 
-# ---------- INDICATOR CALCULATOR (Full v19) ----------
+# ---------- INDICATOR CALCULATOR ----------
 class IndicatorCalculator:
     @staticmethod
     def compute_all(df, ema_fast=9, ema_slow=50):
@@ -489,7 +489,7 @@ class IndicatorCalculator:
 
         return df
 
-# ---------- SIGNAL ANALYZER (v19) ----------
+# ---------- SIGNAL ANALYZER ----------
 class SignalAnalyzer:
     ADX_TREND_THRESHOLD = 20
     VOLUME_RATIO_THRESHOLD = 1.5
@@ -644,6 +644,10 @@ class TradingEngine(threading.Thread):
 @app.route('/')
 def index():
     return FRONTEND_HTML
+
+@app.route('/mobile')
+def mobile_dashboard():
+    return send_file('mobile.html')
 
 @app.route('/api/config', methods=['GET'])
 def get_config():
