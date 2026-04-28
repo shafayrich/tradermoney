@@ -1,5 +1,5 @@
 """
-TraderMoney v20 – Full engine with Gumroad license verification + mobile dashboard route.
+TraderMoney v1.0.24 – Paywall enforcement, filled order notifications, per‑ticker quantities.
 """
 
 import json, os, queue, signal, sys, socket, threading, time, traceback, atexit, urllib.request
@@ -11,7 +11,7 @@ import webview
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 
-APP_VERSION = "1.0.24"
+APP_VERSION = "1.0.25"
 
 # ── Gumroad ──────────────────────────────────────────────
 GUMMROAD_PRODUCT_ID = "73otoT7rzJukCy-Lt4hhkQ=="          # ← your real product ID
@@ -411,7 +411,7 @@ class OKXBroker(BaseBroker):
     def stop_stream(self): pass
 register_broker("OKX", OKXBroker)
 
-# ---------- INDICATOR CALCULATOR ----------
+# ---------- INDICATOR CALCULATOR (unchanged) ----------
 class IndicatorCalculator:
     @staticmethod
     def compute_all(df, ema_fast=9, ema_slow=50):
@@ -489,7 +489,7 @@ class IndicatorCalculator:
 
         return df
 
-# ---------- SIGNAL ANALYZER ----------
+# ---------- SIGNAL ANALYZER (unchanged) ----------
 class SignalAnalyzer:
     ADX_TREND_THRESHOLD = 20
     VOLUME_RATIO_THRESHOLD = 1.5
@@ -551,11 +551,13 @@ class SignalAnalyzer:
         if config.get('use_vol_confirm',True) and vol_ratio<SignalAnalyzer.VOLUME_RATIO_THRESHOLD: return False
         return True
 
-# ---------- TRADING ENGINE ----------
+# ---------- TRADING ENGINE (with paywall & per‑ticker quantities) ----------
 class TradingEngine(threading.Thread):
     def __init__(self, ui_queue, config, broker):
         super().__init__(daemon=True); self.ui_queue, self.config, self.broker = ui_queue, config, broker
         self.running = False; self.symbols = []; self.positions = {}; self.prev_ema = {}; self.trade_history = []
+        self.per_ticker_qty = {}
+        self.is_licensed = config.get("license_valid", False)
     def send_telegram(self, message):
         tg = self.config.get("telegram", {})
         token, chat = tg.get("token"), tg.get("chat_id")
@@ -565,17 +567,71 @@ class TradingEngine(threading.Thread):
             except: pass
     def run(self):
         tickers_str = self.config.get("tickers", DEFAULT_TICKERS)
-        self.symbols = [s.strip().upper() for s in tickers_str.split(",") if s.strip()] or ["AAPL"]
-        for sym in self.symbols: self.positions[sym]=0; self.prev_ema[sym]=(None,None)
-        mode = self.config.get("mode","signal"); qty = self.config.get("quantity",DEFAULT_QUANTITY)
+        raw_list = [s.strip() for s in tickers_str.split(",") if s.strip()]
+        self.symbols = []
+        self.per_ticker_qty = {}
+        default_qty = self.config.get("quantity", DEFAULT_QUANTITY)
+
+        # Parse per‑ticker quantities
+        for entry in raw_list:
+            if ":" in entry:
+                sym, qty_str = entry.split(":", 1)
+                sym = sym.strip().upper()
+                try:
+                    qty = float(qty_str)
+                    if qty == int(qty):
+                        qty = int(qty)
+                except ValueError:
+                    qty = default_qty
+                self.symbols.append(sym)
+                self.per_ticker_qty[sym] = qty
+            else:
+                sym = entry.strip().upper()
+                self.symbols.append(sym)
+                self.per_ticker_qty[sym] = default_qty
+
+        # Paywall: if unlicensed, keep only the first ticker
+        if not self.is_licensed and len(self.symbols) > 1:
+            first = self.symbols[0]
+            self.symbols = [first]
+            self.per_ticker_qty = {first: self.per_ticker_qty.get(first, default_qty)}
+            self.ui_queue.put(("error", "Free license is limited to 1 ticker. Only tracking " + first))
+            self.config["tickers"] = first  # update config temporarily
+
+        for sym in self.symbols:
+            self.positions[sym] = 0
+            self.prev_ema[sym] = (None, None)
+
+        mode = self.config.get("mode","signal")
+        if not self.is_licensed:
+            mode = "signal"   # force signal‑only for free users
+            self.ui_queue.put(("log", "⚠️ Free license – Auto Trade disabled, only core indicators active."))
         ema_fast, ema_slow = self.config.get("emas", DEFAULT_EMAS)
         use_bracket = self.config.get("use_bracket", False)
         sl_pct = self.config.get("sl_percent",2.0); tp_pct = self.config.get("tp_percent",4.0)
         use_atr_stops = self.config.get("use_atr_stops", True)
         interval = self.config.get("timeframe", DEFAULT_TIMEFRAME)
+
+        # Disable advanced indicators for free users
+        if not self.is_licensed:
+            # force core only
+            self.config["use_supertrend"] = False
+            self.config["use_stochastic"] = False
+            self.config["use_adx"] = False
+            self.config["use_vol_confirm"] = False
+            self.config["use_atr_stops"] = False
+            self.config["use_bracket"] = False
+            # also restrict broker to Alpaca if not already
+            if self.config.get("broker") != "Alpaca":
+                self.ui_queue.put(("log", "⚠️ Free license – only Alpaca broker is available."))
+                # We can't switch broker on the fly easily, but we can notify.
+
         self.broker.stream_prices(self.symbols, self.on_price_update)
         self.ui_queue.put(("status", f"✅ Running {len(self.symbols)} symbols"))
-        self.send_telegram(f"🤖 Bot started for {', '.join(self.symbols)} ({mode} mode)")
+        if self.is_licensed:
+            self.send_telegram(f"🤖 Pro Bot started for {', '.join(self.symbols)} ({mode} mode)")
+        else:
+            self.send_telegram(f"🤖 Free Bot started for {', '.join(self.symbols)} (Signal‑Only)")
         last_hist = 0
         while self.running:
             try:
@@ -607,7 +663,8 @@ class TradingEngine(threading.Thread):
                             if signal_type:
                                 self.ui_queue.put(("signal", (sym, signal_type, price, rationale)))
                                 self.send_telegram(f"<b>{signal_type} Signal</b> – {sym} @ ${price:.2f}")
-                                if mode == "auto" and is_open:
+                                if mode == "auto" and self.is_licensed and is_open:
+                                    qty = self.per_ticker_qty.get(sym, default_qty)
                                     if signal_type == "BUY" and self.positions.get(sym,0)==0:
                                         try:
                                             if use_bracket and use_atr_stops:
@@ -620,7 +677,7 @@ class TradingEngine(threading.Thread):
                                             else:
                                                 success = self.broker.submit_order(sym, qty, "buy", "market")
                                             if success:
-                                                self.positions[sym]=qty
+                                                self.positions[sym] = qty
                                                 self.ui_queue.put(("order", (sym,"BUY",qty,price)))
                                                 self.send_telegram(f"✅ Bought {qty} {sym} @ ${price:.2f}")
                                         except Exception as e: self.ui_queue.put(("error", f"Buy {sym} failed: {e}"))
@@ -640,7 +697,7 @@ class TradingEngine(threading.Thread):
     def stop(self): self.running = False
     def on_price_update(self, sym, price): self.ui_queue.put(("price_update", (sym, price)))
 
-# ---------- FLASK ROUTES ----------
+# ---------- FLASK ROUTES (including mobile & license) ----------
 @app.route('/')
 def index():
     return FRONTEND_HTML
@@ -758,7 +815,7 @@ def validate_license_endpoint():
         state.config["license_valid"] = False
     return jsonify({"valid": is_valid, "message": message})
 
-# ---------- FRONTEND HTML ----------
+# ---------- FRONTEND HTML (with per‑ticker quantity example & notification permission) ----------
 FRONTEND_HTML = r"""
 <!DOCTYPE html>
 <html>
@@ -839,12 +896,12 @@ FRONTEND_HTML = r"""
   <input type="password" id="tg-token">
   <label>Telegram Chat ID</label>
   <input id="tg-chat">
-  <label>Tickers (comma sep)</label>
-  <input id="tickers" value="AAPL">
+  <label>Tickers (comma sep) – use <code>AAPL:5, BTC/USD:0.001</code> for per‑ticker qty</label>
+  <input id="tickers" value="AAPL" placeholder="e.g. AAPL:5, BTC/USD:0.001">
   <label>Timeframe</label>
   <select id="timeframe"><option>1m</option><option>5m</option><option>15m</option><option>30m</option><option>1h</option><option>1d</option></select>
   <div style="display:flex;gap:5px;margin-top:10px;"><input id="ema-fast" value="9"><input id="ema-slow" value="50"></div>
-  <label>Quantity</label>
+  <label>Quantity (fallback if no : in tickers)</label>
   <input id="quantity" value="1" type="number">
   <label>Mode</label>
   <select id="mode"><option value="signal">Signal Only</option><option value="auto">Auto Trade</option></select>
@@ -918,6 +975,20 @@ FRONTEND_HTML = r"""
 <script>
 let currentTicker = '', tickers = [], chartWidget = null, config = {};
 let licenseValid = false;
+
+// Request notification permission on load
+if ('Notification' in window && Notification.permission === 'default') {
+    Notification.requestPermission();
+}
+
+function notifyOrder(order) {
+    if ('Notification' in window && Notification.permission === 'granted') {
+        new Notification(`TraderMoney – ${order.symbol}`, {
+            body: `${order.action} ${order.qty} @ $${order.price}`,
+            icon: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="100" height="100" rx="20" fill="%23151515"/><text x="50%25" y="55%25" dominant-baseline="middle" text-anchor="middle" fill="%2300C9B1" font-family="system-ui" font-weight="800" font-size="36">TM$</text></svg>'
+        });
+    }
+}
 
 async function validateLicense() {
   const key = document.getElementById('license-key').value.trim();
@@ -1066,7 +1137,16 @@ async function pollStatus() {
     const sl = document.getElementById('signals-list');
     if (sl) { sl.innerHTML = ''; data.signals.forEach(s => { const div = document.createElement('div'); div.className = 'signal-item ' + (s.signal==='BUY'?'buy':'sell'); div.innerHTML = `<span>${s.time} ${s.signal} ${s.symbol} @ $${s.price}</span><span>${s.rationale}</span>`; sl.prepend(div); }); }
     const ol = document.getElementById('history-list');
-    if (ol) { ol.innerHTML = ''; data.orders.forEach(o => { const div = document.createElement('div'); div.className = 'signal-item ' + (o.action==='BUY'?'buy':'sell'); div.innerHTML = `<span>${o.time} ${o.action} ${o.qty} ${o.symbol} @ $${o.price}</span>`; ol.prepend(div); playTradeSound(); }); }
+    if (ol) {
+      ol.innerHTML = '';
+      data.orders.forEach(o => {
+        const div = document.createElement('div'); div.className = 'signal-item ' + (o.action==='BUY'?'buy':'sell');
+        div.innerHTML = `<span>${o.time} ${o.action} ${o.qty} ${o.symbol} @ $${o.price}</span>`;
+        ol.prepend(div);
+        playTradeSound();
+        notifyOrder(o);  // <-- send desktop notification
+      });
+    }
     const ema = document.getElementById('ema-monitor');
     if (ema && data.ema_values) { let html = ''; for (const [sym, vals] of Object.entries(data.ema_values)) { html += `<div class="ema-card"><div class="ticker">${sym}</div><div class="ema-value"><span class="ema-label">Fast EMA:</span> ${vals.fast}</div><div class="ema-value"><span class="ema-label">Slow EMA:</span> ${vals.slow}</div></div>`; } ema.innerHTML = html || '<div style="color:var(--text-muted);padding:10px;">Waiting for data...</div>'; }
     document.getElementById('log').innerHTML = data.log.join('<br>');
