@@ -1,5 +1,5 @@
 """
-TraderMoney v1.0.25 – Polished UI, retractable sidebar, settings/help tabs, detailed indicator stats.
+TraderMoney v1.0.26 – Resizable & retractable sidebar, polished UI, all features.
 """
 
 import json, os, queue, signal, sys, socket, threading, time, traceback, atexit, urllib.request
@@ -11,7 +11,7 @@ import webview
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 
-APP_VERSION = "1.0.26"
+APP_VERSION = "1.0.27"
 
 # ── Gumroad ──────────────────────────────────────────────
 GUMMROAD_PRODUCT_ID = "73otoT7rzJukCy-Lt4hhkQ=="          # ← your real product ID
@@ -551,7 +551,7 @@ class SignalAnalyzer:
         if config.get('use_vol_confirm',True) and vol_ratio<SignalAnalyzer.VOLUME_RATIO_THRESHOLD: return False
         return True
 
-# ---------- TRADING ENGINE (with paywall & per‑ticker quantities) ----------
+# ---------- TRADING ENGINE (unchanged) ----------
 class TradingEngine(threading.Thread):
     def __init__(self, ui_queue, config, broker):
         super().__init__(daemon=True); self.ui_queue, self.config, self.broker = ui_queue, config, broker
@@ -572,7 +572,6 @@ class TradingEngine(threading.Thread):
         self.per_ticker_qty = {}
         default_qty = self.config.get("quantity", DEFAULT_QUANTITY)
 
-        # Parse per‑ticker quantities
         for entry in raw_list:
             if ":" in entry:
                 sym, qty_str = entry.split(":", 1)
@@ -590,13 +589,12 @@ class TradingEngine(threading.Thread):
                 self.symbols.append(sym)
                 self.per_ticker_qty[sym] = default_qty
 
-        # Paywall: if unlicensed, keep only the first ticker
         if not self.is_licensed and len(self.symbols) > 1:
             first = self.symbols[0]
             self.symbols = [first]
             self.per_ticker_qty = {first: self.per_ticker_qty.get(first, default_qty)}
             self.ui_queue.put(("error", "Free license is limited to 1 ticker. Only tracking " + first))
-            self.config["tickers"] = first  # update config temporarily
+            self.config["tickers"] = first
 
         for sym in self.symbols:
             self.positions[sym] = 0
@@ -604,7 +602,7 @@ class TradingEngine(threading.Thread):
 
         mode = self.config.get("mode","signal")
         if not self.is_licensed:
-            mode = "signal"   # force signal‑only for free users
+            mode = "signal"
             self.ui_queue.put(("log", "⚠️ Free license – Auto Trade disabled, only core indicators active."))
         ema_fast, ema_slow = self.config.get("emas", DEFAULT_EMAS)
         use_bracket = self.config.get("use_bracket", False)
@@ -612,7 +610,6 @@ class TradingEngine(threading.Thread):
         use_atr_stops = self.config.get("use_atr_stops", True)
         interval = self.config.get("timeframe", DEFAULT_TIMEFRAME)
 
-        # Disable advanced indicators for free users
         if not self.is_licensed:
             self.config["use_supertrend"] = False
             self.config["use_stochastic"] = False
@@ -810,7 +807,7 @@ def validate_license_endpoint():
         state.config["license_valid"] = False
     return jsonify({"valid": is_valid, "message": message})
 
-# ---------- FRONTEND HTML (POLISHED UI, RETRACTABLE SIDEBAR, SETTINGS/HELP TABS) ----------
+# ---------- FRONTEND HTML (RESIZABLE SIDEBAR + POLISH) ----------
 FRONTEND_HTML = r"""
 <!DOCTYPE html>
 <html>
@@ -828,6 +825,7 @@ FRONTEND_HTML = r"""
     --text-muted: #7a7d86;
     --sidebar-width: 280px;
     --sidebar-collapsed-width: 50px;
+    --resize-handle-width: 6px;
   }
   * { box-sizing: border-box; }
   body {
@@ -847,15 +845,17 @@ FRONTEND_HTML = r"""
     border-right: 1px solid var(--border);
     display: flex;
     flex-direction: column;
-    transition: width 0.3s ease;
+    transition: width 0.3s ease, min-width 0.3s ease;
     overflow-y: auto;
     overflow-x: hidden;
     position: relative;
+    min-width: var(--sidebar-collapsed-width);
+    max-width: 600px;
   }
   #sidebar.collapsed {
-    width: var(--sidebar-collapsed-width);
+    width: var(--sidebar-collapsed-width) !important;
   }
-  #sidebar.collapsed > *:not(#sidebar-toggle) {
+  #sidebar.collapsed > *:not(#sidebar-toggle):not(.sidebar-header) {
     display: none;
   }
   #sidebar-toggle {
@@ -916,6 +916,21 @@ FRONTEND_HTML = r"""
   }
   .sidebar-content.active {
     display: block;
+  }
+
+  /* ── RESIZE HANDLE ── */
+  #resize-handle {
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: var(--resize-handle-width);
+    height: 100%;
+    cursor: col-resize;
+    z-index: 20;
+    background: transparent;
+  }
+  #resize-handle:hover {
+    background: rgba(255,255,255,0.05);
   }
 
   /* ── FORM ELEMENTS ── */
@@ -1095,7 +1110,7 @@ FRONTEND_HTML = r"""
   }
   #update-toast a { color:white; text-decoration:underline; cursor:pointer; }
 
-  /* Help content styling */
+  /* Help content */
   .help-content { padding: 20px; overflow-y: auto; height: 100%; box-sizing: border-box; }
   .help-content h3 { color: var(--accent); margin-top: 0; }
   .help-content h4 { color: var(--text); margin: 15px 0 5px; }
@@ -1200,6 +1215,9 @@ FRONTEND_HTML = r"""
     </div>
   </div>
 
+  <!-- RESIZE HANDLE -->
+  <div id="resize-handle"></div>
+
   <!-- SIDEBAR TOGGLE BUTTON (placed inside sidebar) -->
   <button id="sidebar-toggle" onclick="toggleSidebar()">☰</button>
 </div>
@@ -1252,7 +1270,45 @@ document.querySelectorAll('.sidebar-tab').forEach(tab => {
   });
 });
 
-// ── REST OF THE SCRIPTS (unchanged from previous versions) ──
+// ── RESIZABLE SIDEBAR ──
+(function() {
+  const sidebar = document.getElementById('sidebar');
+  const handle = document.getElementById('resize-handle');
+  let isResizing = false;
+  let lastX = 0;
+
+  handle.addEventListener('mousedown', function(e) {
+    isResizing = true;
+    lastX = e.clientX;
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    e.preventDefault();
+  });
+
+  document.addEventListener('mousemove', function(e) {
+    if (!isResizing || sidebar.classList.contains('collapsed')) return;
+    const delta = e.clientX - lastX;
+    let newWidth = sidebar.offsetWidth + delta;
+    // Enforce min/max
+    newWidth = Math.max(200, Math.min(600, newWidth));
+    sidebar.style.width = newWidth + 'px';
+    // Update CSS variable for any dependent elements
+    document.documentElement.style.setProperty('--sidebar-width', newWidth + 'px');
+    lastX = e.clientX;
+  });
+
+  document.addEventListener('mouseup', function() {
+    if (isResizing) {
+      isResizing = false;
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      // Save the custom width
+      localStorage.setItem('sidebarWidth', sidebar.style.width);
+    }
+  });
+})();
+
+// ── REST OF SCRIPTS (unchanged) ──
 async function validateLicense() {
   const key = document.getElementById('license-key').value.trim();
   if (!key) { showToast('Please enter a license key', 'error'); return; }
@@ -1367,6 +1423,13 @@ async function initUI(cfg) {
   updateCredFields();
   const t = document.getElementById('tickers').value.split(',').map(s=>s.trim()).filter(s=>s);
   if (t.length) { setTickers(t); if (!currentTicker) currentTicker = t[0]; loadChart(currentTicker); }
+
+  // Restore saved sidebar width
+  const savedWidth = localStorage.getItem('sidebarWidth');
+  if (savedWidth) {
+    document.getElementById('sidebar').style.width = savedWidth;
+    document.documentElement.style.setProperty('--sidebar-width', savedWidth);
+  }
 }
 
 function setTickers(list) {
