@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TraderMoney Mobile</title>
+    <style>
+        body { background:#0A0C0F; color:#E0E0E0; font-family:sans-serif; padding:20px; margin:0; }
+        .card { background:#1A1F26; border-radius:12px; padding:20px; margin-bottom:20px; }
+        .status { font-size:1.5rem; font-weight:bold; }
+        .running { color:#00C9B1; } .stopped { color:#FF4B4B; }
+        .ticker-grid { display:grid; grid-template-columns:repeat(2,1fr); gap:10px; }
+        .ticker-item { background:#11151A; padding:12px; border-radius:8px; }
+        .refresh-btn { background:#00C9B1; color:#000; border:none; padding:12px 24px; border-radius:8px; font-weight:bold; cursor:pointer; width:100%; margin-top:10px; }
+    </style>
+</head>
+<body>
+    <h2 style="color:#00C9B1;">📱 TraderMoney</h2>
+    <div class="card">
+        Bot Status: <span id="bot-status" class="status">Checking...</span>
+        <div style="margin-top:10px;">
+            <span id="timestamp"></span>
+        </div>
+    </div>
+    <div class="card">
+        <h3>📊 Tracked Tickers</h3>
+        <div class="ticker-grid" id="ticker-grid">Loading...</div>
+    </div>
+    <button class="refresh-btn" onclick="refresh()">🔄 Refresh</button>
+    <script>
+        async function refresh() {
+            try {
+                const r = await fetch('http://127.0.0.1:5050/api/status');
+                if (!r.ok) throw new Error('Bot offline');
+                const data = await r.json();
+                const statusEl = document.getElementById('bot-status');
+                if (data.running) {
+                    statusEl.textContent = '🟢 Running';
+                    statusEl.className = 'status running';
+                } else {
+                    statusEl.textContent = '🔴 Stopped';
+                    statusEl.className = 'status stopped';
+                }
+                document.getElementById('timestamp').textContent = 'Last update: ' + new Date().toLocaleTimeString();
+                if (data.ema_values) {
+                    let html = '';
+                    for (const [sym, vals] of Object.entries(data.ema_values)) {
+                        html += `<div class="ticker-item"><strong style="color:#00C9B1;">${sym}</strong><br>Fast: ${vals.fast}<br>Slow: ${vals.slow}</div>`;
+                    }
+                    document.getElementById('ticker-grid').innerHTML = html;
+                }
+            } catch(e) {
+                document.getElementById('bot-status').textContent = '🔴 Offline';
+                document.getElementById('bot-status').className = 'status stopped';
+                document.getElementById('ticker-grid').innerHTML = 'Could not reach bot – is your Mac awake and the bot running?';
+            }
+        }
+        refresh();
+        setInterval(refresh, 5000);
+    </script>
+</body>
+</html>
