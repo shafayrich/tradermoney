@@ -1,5 +1,5 @@
 """
-TraderMoney v1.0.33 – Fixed UI, working buttons, light theme, chart load, paper sim, backtest, watchlists.
+TraderMoney v1.0.34 – Fixed UI, working buttons, light theme, chart load, paper sim, backtest, watchlists.
 """
 
 import json, os, queue, signal, sys, socket, threading, time, traceback, atexit, urllib.request
@@ -11,7 +11,7 @@ import webview
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 
-APP_VERSION = "1.0.33"
+APP_VERSION = "1.0.34"
 
 GUMMROAD_PRODUCT_ID = "73otoT7rzJukCy-Lt4hhkQ=="
 
