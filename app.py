@@ -1,7 +1,6 @@
 """
-TraderMoney v1.0.31 – Polished UI, retractable/resizable sidebar, settings/help tabs,
-paywall enforcement, per‑ticker quantities, notifications, reset defaults.
-All buttons working again.
+TraderMoney v32 – Solar Eclipse custom UI, Ticker:Quantity parsing fix,
+Help in main view, optimized polling, daemon threading architecture.
 """
 
 import json, os, queue, signal, sys, socket, threading, time, traceback, atexit, urllib.request
@@ -13,7 +12,7 @@ import webview
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 
-APP_VERSION = "1.0.31"
+APP_VERSION = "1.0.32"
 
 # ── Gumroad ──────────────────────────────────────────────
 GUMMROAD_PRODUCT_ID = "YOUR_REAL_PRODUCT_ID"          # ← replace with your product ID
@@ -216,11 +215,7 @@ class AlpacaBroker(BaseBroker):
     def stop_stream(self): self._stop_stream = True
 register_broker("Alpaca", AlpacaBroker)
 
-# ---------- OTHER BROKERS UNCHANGED (IBKR, Tradier, Binance, Bybit, OKX) ----------
-# [code omitted for brevity – identical to previous versions]
-# In your file, ensure all six broker classes are present.
-# I'll include the IBKR class as an example; the rest you already have in your working copy.
-
+# ---------- INTERACTIVE BROKERS ----------
 class IBKRBroker(BaseBroker):
     def __init__(self, config, ui_queue): super().__init__(config, ui_queue); self.name = "Interactive Brokers"; self.ib = None
     def connect(self):
@@ -267,7 +262,154 @@ class IBKRBroker(BaseBroker):
     def stop_stream(self): self._stop_stream = True
 register_broker("Interactive Brokers", IBKRBroker)
 
-# [Include TradierBroker, BinanceBroker, BybitBroker, OKXBroker – identical to previous versions]
+# ---------- TRADIER BROKER ----------
+class TradierBroker(BaseBroker):
+    def __init__(self, config, ui_queue): super().__init__(config, ui_queue); self.name = "Tradier"; self.session = None; self.token = None; self.account_id = None
+    def connect(self):
+        creds = self.config.get("tradier", {})
+        self.token = creds.get("access_token", "").strip(); self.account_id = creds.get("account_id", "").strip()
+        if not self.token or not self.account_id: self.ui_queue.put(("error", "Tradier requires access token and account ID")); return False
+        import requests as req
+        self.session = req.Session(); self.session.headers["Authorization"] = f"Bearer {self.token}"; self.session.headers["Accept"] = "application/json"
+        try:
+            r = self.session.get(f"https://api.tradier.com/v1/accounts/{self.account_id}/balances")
+            if r.status_code != 200: self.ui_queue.put(("error", f"Tradier auth failed: {r.status_code}")); return False
+            return True
+        except Exception as e: self.ui_queue.put(("error", f"Tradier connection: {e}")); return False
+    def get_account(self):
+        if not self.session: return None
+        try:
+            r = self.session.get(f"https://api.tradier.com/v1/accounts/{self.account_id}/balances")
+            data = r.json(); bal = data.get("balances", {}).get("balance", {})
+            return {"equity": float(bal.get("total_equity",0)), "pl": 0.0, "buying_power": float(bal.get("option_buying_power",0)), "cash": 0.0, "open_positions":0}
+        except: return None
+    def submit_order(self, symbol, qty, side, order_type="market", sl_pct=None, tp_pct=None, sl_price=None, tp_price=None):
+        if not self.session: return False
+        try:
+            data = {"class":"equity","symbol":symbol,"side":side,"quantity":str(qty),"type":"market","duration":"day","account_id":self.account_id}
+            r = self.session.post(f"https://api.tradier.com/v1/accounts/{self.account_id}/orders", data=data)
+            return r.status_code == 200
+        except: return False
+    def close_all_positions(self): pass
+    def get_positions(self):
+        if not self.session: return {}
+        try:
+            r = self.session.get(f"https://api.tradier.com/v1/accounts/{self.account_id}/positions")
+            data = r.json(); positions = data.get("positions",{}).get("position",[])
+            if isinstance(positions, dict): positions = [positions]
+            return {p["symbol"]:int(float(p["quantity"])) for p in positions if p}
+        except: return {}
+    def get_market_status(self): return True
+    def stream_prices(self, symbols, callback): pass
+    def stop_stream(self): pass
+register_broker("Tradier", TradierBroker)
+
+# ---------- BINANCE BROKER ----------
+class BinanceBroker(BaseBroker):
+    def __init__(self, config, ui_queue): super().__init__(config, ui_queue); self.name = "Binance"; self.client = None
+    def connect(self):
+        creds = self.config.get("binance", {})
+        api_key = creds.get("api_key","").strip(); api_secret = creds.get("api_secret","").strip()
+        testnet = creds.get("testnet", True)
+        if not api_key or not api_secret: self.ui_queue.put(("error","Binance API key/secret required")); return False
+        try:
+            from binance.client import Client
+            self.client = Client(api_key, api_secret, testnet=testnet)
+            self.client.get_account()
+            return True
+        except Exception as e: self.ui_queue.put(("error",f"Binance connection: {e}")); return False
+    def get_account(self):
+        if not self.client: return None
+        try:
+            acc = self.client.get_account()
+            balances = {b["asset"]:float(b["free"])+float(b["locked"]) for b in acc["balances"]}
+            return {"equity":sum(balances.values()),"pl":0.0,"buying_power":0.0,"cash":0.0,"open_positions":0}
+        except: return None
+    def submit_order(self, symbol, qty, side, order_type="market", sl_pct=None, tp_pct=None, sl_price=None, tp_price=None):
+        if not self.client: return False
+        try:
+            sym = symbol.replace("-","").replace("/","")
+            if side=="buy": self.client.order_market_buy(symbol=sym+"USDT", quantity=qty)
+            else: self.client.order_market_sell(symbol=sym+"USDT", quantity=qty)
+            return True
+        except: return False
+    def close_all_positions(self): pass
+    def get_positions(self): return {}
+    def get_market_status(self): return True
+    def stream_prices(self, symbols, callback): pass
+    def stop_stream(self): pass
+register_broker("Binance", BinanceBroker)
+
+# ---------- BYBIT BROKER ----------
+class BybitBroker(BaseBroker):
+    def __init__(self, config, ui_queue): super().__init__(config, ui_queue); self.name = "Bybit"; self.session = None
+    def connect(self):
+        creds = self.config.get("bybit", {})
+        api_key = creds.get("api_key","").strip(); api_secret = creds.get("api_secret","").strip()
+        testnet = creds.get("testnet", True)
+        if not api_key or not api_secret: self.ui_queue.put(("error","Bybit API key/secret required")); return False
+        try:
+            from pybit.unified import HTTP
+            self.session = HTTP(api_key=api_key, api_secret=api_secret, testnet=testnet)
+            self.session.get_wallet_balance(accountType="UNIFIED")
+            return True
+        except Exception as e: self.ui_queue.put(("error",f"Bybit connection: {e}")); return False
+    def get_account(self):
+        if not self.session: return None
+        try:
+            bal = self.session.get_wallet_balance(accountType="UNIFIED")
+            total = float(bal["result"]["list"][0]["totalEquity"])
+            return {"equity":total,"pl":0.0,"buying_power":0.0,"cash":0.0,"open_positions":0}
+        except: return None
+    def submit_order(self, symbol, qty, side, order_type="market", sl_pct=None, tp_pct=None, sl_price=None, tp_price=None):
+        if not self.session: return False
+        try:
+            self.session.place_order(symbol=symbol+"USDT", side=side.capitalize(), orderType="Market", qty=str(qty), category="spot")
+            return True
+        except: return False
+    def close_all_positions(self): pass
+    def get_positions(self): return {}
+    def get_market_status(self): return True
+    def stream_prices(self, symbols, callback): pass
+    def stop_stream(self): pass
+register_broker("Bybit", BybitBroker)
+
+# ---------- OKX BROKER ----------
+class OKXBroker(BaseBroker):
+    def __init__(self, config, ui_queue): super().__init__(config, ui_queue); self.name = "OKX"; self.api = None
+    def connect(self):
+        creds = self.config.get("okx", {})
+        api_key = creds.get("api_key","").strip(); api_secret = creds.get("api_secret","").strip(); passphrase = creds.get("api_passphrase","").strip()
+        demo = creds.get("demo", True)
+        if not api_key or not api_secret or not passphrase: self.ui_queue.put(("error","OKX requires key, secret, passphrase")); return False
+        try:
+            import okx.Account as Account
+            flag = "1" if demo else "0"
+            self.api = Account.AccountAPI(api_key, api_secret, passphrase, False, flag)
+            self.api.get_account_balance()
+            return True
+        except Exception as e: self.ui_queue.put(("error",f"OKX connection: {e}")); return False
+    def get_account(self):
+        if not self.api: return None
+        try:
+            bal = self.api.get_account_balance(); details = bal.get("data",[{}])[0].get("details",[])
+            total = sum(float(d.get("eq",0)) for d in details)
+            return {"equity":total,"pl":0.0,"buying_power":0.0,"cash":0.0,"open_positions":0}
+        except: return None
+    def submit_order(self, symbol, qty, side, order_type="market", sl_pct=None, tp_pct=None, sl_price=None, tp_price=None):
+        if not self.api: return False
+        try:
+            import okx.Trade as Trade
+            trade = Trade.TradeAPI(self.api.api_key, self.api.api_secret_key, self.api.passphrase, False, self.api.flag)
+            trade.place_order(instId=symbol+"-USDT", tdMode="cash", side=side, ordType="market", sz=str(int(qty)))
+            return True
+        except: return False
+    def close_all_positions(self): pass
+    def get_positions(self): return {}
+    def get_market_status(self): return True
+    def stream_prices(self, symbols, callback): pass
+    def stop_stream(self): pass
+register_broker("OKX", OKXBroker)
 
 # ---------- INDICATOR CALCULATOR (unchanged) ----------
 class IndicatorCalculator:
@@ -440,7 +582,7 @@ class TradingEngine(threading.Thread):
                         qty = int(qty)
                 except ValueError:
                     qty = default_qty
-                self.symbols.append(sym)
+                self.symbols.append(sym)      # clean symbol for broker/streaming
                 self.per_ticker_qty[sym] = qty
             else:
                 sym = entry.strip().upper()
@@ -665,7 +807,7 @@ def validate_license_endpoint():
         state.config["license_valid"] = False
     return jsonify({"valid": is_valid, "message": message})
 
-# ---------- FRONTEND HTML (CLEAN, ALL BUTTONS WORKING) ----------
+# ---------- FRONTEND HTML (SOLAR ECLIPSE THEME) ----------
 FRONTEND_HTML = r"""
 <!DOCTYPE html>
 <html>
@@ -673,17 +815,26 @@ FRONTEND_HTML = r"""
 <meta charset="UTF-8">
 <style>
   :root {
-    --bg: #0b0b0f;
-    --card: #13141a;
+    --bg: #050505;
+    --card: #1A1A1A;
     --text: #e2e2e2;
-    --accent: #00c9b1;
-    --danger: #ff4b4b;
-    --border: #2a2e38;
-    --btn: #00a896;
+    --accent: #D4AF37;      /* Burnished Gold */
+    --accent2: #6A0DAD;     /* Royal Purple */
+    --danger: #B22222;      /* Firebrick Red */
+    --border: #2A2E38;
+    --btn: #D4AF37;
     --text-muted: #7a7d86;
-    --sidebar-width: 280px;
-    --sidebar-collapsed-width: 50px;
-    --resize-handle-width: 6px;
+    --sidebar-width: 260px;
+  }
+  /* Custom invisible scrollbar */
+  ::-webkit-scrollbar {
+    width: 4px;
+  }
+  ::-webkit-scrollbar-track {
+    background: #080808;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #080808;
   }
   * { box-sizing: border-box; }
   body {
@@ -699,125 +850,19 @@ FRONTEND_HTML = r"""
   /* ── SIDEBAR ── */
   #sidebar {
     width: var(--sidebar-width);
-    background: #0e1015;
+    background: #0b0b0b;
     border-right: 1px solid var(--border);
     display: flex;
     flex-direction: column;
-    transition: width 0.3s ease, min-width 0.3s ease;
     overflow-y: auto;
     overflow-x: hidden;
-    position: relative;
-    min-width: var(--sidebar-collapsed-width);
-    max-width: 600px;
-  }
-  #sidebar.collapsed {
-    width: var(--sidebar-collapsed-width) !important;
-  }
-  #sidebar.collapsed > *:not(#sidebar-toggle):not(.sidebar-header) {
-    display: none;
-  }
-  #sidebar-toggle {
-    position: absolute;
-    top: 15px;
-    right: -15px;
-    width: 30px;
-    height: 30px;
-    background: var(--accent);
-    border: none;
-    border-radius: 50%;
-    color: #000;
-    font-weight: bold;
-    cursor: pointer;
-    z-index: 10;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: transform 0.3s;
-  }
-  .sidebar-header {
     padding: 20px 15px;
-    border-bottom: 1px solid var(--border);
-    display: flex;
-    align-items: center;
-    gap: 10px;
   }
-  .sidebar-header h2 {
-    margin: 0;
+  #sidebar h2 {
+    color: var(--accent);
+    margin: 0 0 15px;
     font-size: 1.3rem;
-    color: var(--accent);
-    white-space: nowrap;
   }
-  .sidebar-tabs {
-    display: flex;
-    border-bottom: 1px solid var(--border);
-  }
-  .sidebar-tab {
-    flex: 1;
-    text-align: center;
-    padding: 10px 0;
-    cursor: pointer;
-    font-weight: 500;
-    font-size: 0.9rem;
-    color: var(--text-muted);
-    transition: 0.2s;
-    border-bottom: 2px solid transparent;
-  }
-  .sidebar-tab.active {
-    color: var(--accent);
-    border-bottom-color: var(--accent);
-  }
-  .sidebar-content {
-    flex: 1;
-    overflow-y: auto;
-    padding: 15px;
-    display: none;
-  }
-  .sidebar-content.active {
-    display: block;
-  }
-
-  /* ── RESIZE HANDLE ── */
-  #resize-handle {
-    position: absolute;
-    top: 0;
-    right: 0;
-    width: var(--resize-handle-width);
-    height: 100%;
-    cursor: col-resize;
-    z-index: 20;
-    background: transparent;
-  }
-  #resize-handle:hover {
-    background: rgba(255,255,255,0.05);
-  }
-
-  /* ── FORM ELEMENTS ── */
-  label {
-    display: block;
-    font-size: 0.8rem;
-    margin: 12px 0 5px;
-    color: var(--text-muted);
-  }
-  input, select, button {
-    background: var(--card);
-    color: var(--text);
-    border: 1px solid var(--border);
-    padding: 8px 10px;
-    border-radius: 6px;
-    width: 100%;
-    box-sizing: border-box;
-    margin-top: 4px;
-    font-size: 0.9rem;
-  }
-  button {
-    cursor: pointer;
-    background: var(--btn);
-    border: none;
-    font-weight: 600;
-    margin-top: 12px;
-  }
-  button:hover { opacity: 0.9; }
-  .danger { background: var(--danger); }
   .license-badge {
     display: inline-block;
     padding: 2px 10px;
@@ -828,6 +873,39 @@ FRONTEND_HTML = r"""
   }
   .license-valid { background: var(--accent); color: #000; }
   .license-invalid { background: var(--danger); color: #fff; }
+  label {
+    display: block;
+    font-size: 0.8rem;
+    margin: 12px 0 5px;
+    color: var(--text-muted);
+  }
+  input, select, button {
+    background: #1A1A1A;
+    color: var(--text);
+    border: 1px solid #222;
+    padding: 8px 10px;
+    border-radius: 8px;
+    width: 100%;
+    box-sizing: border-box;
+    margin-top: 4px;
+    font-size: 0.9rem;
+    transition: border 0.2s;
+  }
+  input:focus, select:focus {
+    border-color: var(--accent);
+    outline: none;
+  }
+  button {
+    cursor: pointer;
+    background: var(--btn);
+    color: #050505;
+    border: none;
+    font-weight: 600;
+    margin-top: 12px;
+  }
+  button:hover { opacity: 0.9; }
+  button.danger { background: var(--danger); color: #fff; }
+  hr { border-color: var(--border); margin: 15px 0; }
 
   /* ── MAIN ── */
   #main {
@@ -856,7 +934,7 @@ FRONTEND_HTML = r"""
   .tab-btn:active { cursor: grabbing; }
   .tab-btn:hover { background: rgba(255,255,255,0.03); }
   .tab-btn.active {
-    border-bottom-color: var(--accent);
+    border-bottom-color: var(--accent2);   /* Royal Purple */
     color: var(--accent);
     font-weight: 600;
   }
@@ -893,7 +971,7 @@ FRONTEND_HTML = r"""
     transition: 0.2s;
   }
   .ticker-btn.active {
-    border-bottom-color: var(--accent);
+    border-bottom-color: var(--accent2);
     color: var(--accent);
     font-weight:600;
   }
@@ -931,9 +1009,9 @@ FRONTEND_HTML = r"""
     animation: slideIn 0.3s ease;
     max-width:300px;
   }
-  .toast.success { background: var(--accent); }
+  .toast.success { background: var(--accent); color:#000; }
   .toast.error { background: var(--danger); }
-  .toast.info { background: #3b82f6; }
+  .toast.info { background: var(--accent2); }
   @keyframes slideIn {
     from { transform: translateX(100%); opacity:0; }
     to { transform: translateX(0); opacity:1; }
@@ -968,14 +1046,14 @@ FRONTEND_HTML = r"""
   }
   #update-toast a { color:white; text-decoration:underline; cursor:pointer; }
 
-  /* Help content */
+  /* Help content in main tab */
   .help-content { padding: 20px; overflow-y: auto; height: 100%; box-sizing: border-box; }
-  .help-content h3 { color: var(--accent); margin-top: 0; }
+  .help-content h3 { color: var(--accent2); margin-top: 0; }
   .help-content h4 { color: var(--text); margin: 15px 0 5px; }
   .help-content p, .help-content ul { font-size: 0.9rem; line-height: 1.6; }
   .help-content ul { padding-left: 20px; }
   .help-content li { margin-bottom: 6px; }
-  .help-content code { background: var(--card); padding: 2px 6px; border-radius: 4px; font-size: 0.85rem; }
+  .help-content a { color: var(--accent); }
   .indicator-stats { background: var(--card); border-radius: 8px; padding: 15px; margin: 10px 0; }
 </style>
 <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
@@ -986,68 +1064,79 @@ FRONTEND_HTML = r"""
 
 <!-- SIDEBAR -->
 <div id="sidebar">
-  <div class="sidebar-header">
-    <h2>💸 TraderMoney</h2>
-    <span id="license-badge" class="license-badge license-invalid">FREE</span>
+  <h2>💸 TraderMoney <span id="license-badge" class="license-badge license-invalid">FREE</span></h2>
+  <label>License Key</label>
+  <input type="password" id="license-key" placeholder="Paste your Gumroad key">
+  <button onclick="validateLicense()" style="margin-top:5px; font-size:0.85rem;">🔑 Validate</button>
+  <p style="font-size:0.7rem; color:var(--text-muted); margin-top:2px;">
+    <a href="https://YOUR_GUMROAD_URL" target="_blank" style="color:var(--accent);">Buy a license</a>
+  </p>
+  <hr>
+  <label>Broker</label>
+  <select id="broker-select"><option>Alpaca</option><option>Interactive Brokers</option><option>Tradier</option><option>Binance</option><option>Bybit</option><option>OKX</option></select>
+  <div id="cred-entries"></div>
+  <label>Telegram Token (opt)</label>
+  <input type="password" id="tg-token">
+  <label>Telegram Chat ID</label>
+  <input id="tg-chat">
+  <label>Tickers (comma sep) – e.g., AAPL:5, BTC/USD:0.001</label>
+  <input id="tickers" value="AAPL" placeholder="AAPL:5, BTC/USD:0.001">
+  <label>Timeframe</label>
+  <select id="timeframe"><option>1m</option><option>5m</option><option>15m</option><option>30m</option><option>1h</option><option>1d</option></select>
+  <div style="display:flex;gap:5px;margin-top:10px;">
+    <input id="ema-fast" value="9" placeholder="Fast EMA">
+    <input id="ema-slow" value="50" placeholder="Slow EMA">
   </div>
-  <div class="sidebar-tabs">
-    <div class="sidebar-tab active" data-panel="settings-panel">Settings</div>
-    <div class="sidebar-tab" data-panel="help-panel">Help</div>
+  <label>Quantity (fallback)</label>
+  <input id="quantity" value="1" type="number">
+  <label>Mode</label>
+  <select id="mode"><option value="signal">Signal Only</option><option value="auto">Auto Trade</option></select>
+  <label><input type="checkbox" id="use-bracket"> Enable SL/TP</label>
+  <div style="display:flex;gap:5px;">
+    <input id="sl-percent" value="2" placeholder="SL %">
+    <input id="tp-percent" value="4" placeholder="TP %">
   </div>
+  <label><input type="checkbox" id="use-atr-stops" checked> ATR-Based Dynamic Stops</label>
+  <label style="margin-top:15px; font-weight:bold; color:var(--accent);">Indicators</label>
+  <label><input type="checkbox" id="use-rsi" checked> RSI (14)</label>
+  <label><input type="checkbox" id="use-macd" checked> MACD (12,26,9)</label>
+  <label><input type="checkbox" id="use-vwap" checked> VWAP</label>
+  <label><input type="checkbox" id="use-bollinger" checked> Bollinger (20,2)</label>
+  <label><input type="checkbox" id="use-adx" checked> ADX (14) – Trend Strength</label>
+  <label><input type="checkbox" id="use-vol-confirm" checked> Volume Confirmation (1.5x)</label>
+  <label><input type="checkbox" id="use-supertrend" checked> SuperTrend (10,3)</label>
+  <label><input type="checkbox" id="use-stochastic" checked> Stochastic (14,3,3)</label>
+  <button onclick="saveConfig()">💾 Save</button>
+  <button onclick="startBot()" style="background:var(--accent); color:#050505;">▶️ Start</button>
+  <button onclick="stopBot()" style="background:#555;">⏹️ Stop</button>
+  <button onclick="killSwitch()" class="danger">⚠️ Kill Switch</button>
+  <button onclick="resetDefaults()" style="background:var(--card); border:1px solid var(--border); margin-top:8px;">↺ Reset to Defaults</button>
+  <button onclick="checkForUpdates()" style="margin-top:20px; background:var(--card); border:1px solid var(--border);">🔄 Check for Updates</button>
+</div>
 
-  <!-- SETTINGS PANEL -->
-  <div id="settings-panel" class="sidebar-content active">
-    <label>License Key</label>
-    <input type="password" id="license-key" placeholder="Paste your Gumroad key">
-    <button onclick="validateLicense()" style="margin-top:5px; font-size:0.85rem;">🔑 Validate</button>
-    <p style="font-size:0.7rem; color:var(--text-muted); margin-top:2px;">
-      <a href="https://YOUR_GUMROAD_URL" target="_blank" style="color:var(--accent);">Buy a license</a>
-    </p>
-    <hr style="border-color:var(--border); margin:15px 0;">
-    <label>Broker</label>
-    <select id="broker-select"><option>Alpaca</option><option>Interactive Brokers</option><option>Tradier</option><option>Binance</option><option>Bybit</option><option>OKX</option></select>
-    <div id="cred-entries"></div>
-    <label>Telegram Token (opt)</label>
-    <input type="password" id="tg-token">
-    <label>Telegram Chat ID</label>
-    <input id="tg-chat">
-    <label>Tickers (comma sep) – e.g., AAPL:5, BTC/USD:0.001</label>
-    <input id="tickers" value="AAPL" placeholder="AAPL:5, BTC/USD:0.001">
-    <label>Timeframe</label>
-    <select id="timeframe"><option>1m</option><option>5m</option><option>15m</option><option>30m</option><option>1h</option><option>1d</option></select>
-    <div style="display:flex;gap:5px;margin-top:10px;">
-      <input id="ema-fast" value="9" placeholder="Fast EMA">
-      <input id="ema-slow" value="50" placeholder="Slow EMA">
-    </div>
-    <label>Quantity (fallback)</label>
-    <input id="quantity" value="1" type="number">
-    <label>Mode</label>
-    <select id="mode"><option value="signal">Signal Only</option><option value="auto">Auto Trade</option></select>
-    <label><input type="checkbox" id="use-bracket"> Enable SL/TP</label>
-    <div style="display:flex;gap:5px;">
-      <input id="sl-percent" value="2" placeholder="SL %">
-      <input id="tp-percent" value="4" placeholder="TP %">
-    </div>
-    <label><input type="checkbox" id="use-atr-stops" checked> ATR-Based Dynamic Stops</label>
-    <label style="margin-top:15px; font-weight:bold; color:var(--accent);">Indicators</label>
-    <label><input type="checkbox" id="use-rsi" checked> RSI (14)</label>
-    <label><input type="checkbox" id="use-macd" checked> MACD (12,26,9)</label>
-    <label><input type="checkbox" id="use-vwap" checked> VWAP</label>
-    <label><input type="checkbox" id="use-bollinger" checked> Bollinger (20,2)</label>
-    <label><input type="checkbox" id="use-adx" checked> ADX (14) – Trend Strength</label>
-    <label><input type="checkbox" id="use-vol-confirm" checked> Volume Confirmation (1.5x)</label>
-    <label><input type="checkbox" id="use-supertrend" checked> SuperTrend (10,3)</label>
-    <label><input type="checkbox" id="use-stochastic" checked> Stochastic (14,3,3)</label>
-    <button onclick="saveConfig()">💾 Save</button>
-    <button onclick="startBot()">▶️ Start</button>
-    <button onclick="stopBot()" style="background:#555;">⏹️ Stop</button>
-    <button onclick="killSwitch()" class="danger">⚠️ Kill Switch</button>
-    <button onclick="resetDefaults()" style="background:var(--card); border:1px solid var(--border); margin-top:8px;">↺ Reset to Defaults</button>
-    <button onclick="checkForUpdates()" style="margin-top:20px; background:var(--card); border:1px solid var(--border);">🔄 Check for Updates</button>
+<!-- MAIN CONTENT -->
+<div id="main">
+  <div class="tab-header" id="tab-header">
+    <button class="tab-btn active" data-tab="charts">Charts</button>
+    <button class="tab-btn" data-tab="signals">Signals</button>
+    <button class="tab-btn" data-tab="history">History</button>
+    <button class="tab-btn" data-tab="ema">EMA Monitor</button>
+    <button class="tab-btn" data-tab="help">Help & Ops</button>
   </div>
-
-  <!-- HELP PANEL -->
-  <div id="help-panel" class="sidebar-content">
+  <div id="tab-charts" class="tab-content active">
+    <div id="ticker-tabs"></div>
+    <div id="metrics">
+      <div class="metric"><div class="value" id="equity">—</div><div>Net Liq.</div></div>
+      <div class="metric"><div class="value" id="bp">—</div><div>Buying Power</div></div>
+      <div class="metric"><div class="value" id="pl">—</div><div>Daily P&L</div></div>
+      <div class="metric"><div class="value" id="positions">—</div><div>Positions</div></div>
+    </div>
+    <div id="chart-container"><p style="color:var(--text);text-align:center;padding-top:50px;">Loading chart...</p></div>
+  </div>
+  <div id="tab-signals" class="tab-content"><div id="signals-list" style="overflow-y:auto;flex:1;"></div></div>
+  <div id="tab-history" class="tab-content"><div id="history-list" style="overflow-y:auto;flex:1;"></div></div>
+  <div id="tab-ema" class="tab-content"><div class="ema-monitor" id="ema-monitor">Loading...</div></div>
+  <div id="tab-help" class="tab-content">
     <div class="help-content">
       <h3>📊 Indicator Win Rate Impact</h3>
       <div class="indicator-stats">
@@ -1063,7 +1152,7 @@ FRONTEND_HTML = r"""
         <p><strong>+ ATR Dynamic Stops:</strong> profit factor improves by ~0.4 (not win rate directly).</p>
       </div>
       <h4>🔑 License</h4>
-      <p>Purchase a license from our <a href="https://YOUR_GUMROAD_URL" target="_blank" style="color:var(--accent);">Gumroad store</a>. Paste the key in the sidebar and click <strong>Validate</strong>. A valid license unlocks Auto Trade, unlimited tickers, all 9 indicators, ATR stops, Telegram alerts, and all 6 brokers.</p>
+      <p>Purchase a license from our <a href="https://YOUR_GUMROAD_URL" target="_blank">Gumroad store</a>. Paste the key in the sidebar and click <strong>Validate</strong>. A valid license unlocks Auto Trade, unlimited tickers, all 9 indicators, ATR stops, Telegram alerts, and all 6 brokers.</p>
       <h4>🏦 Broker Guides</h4>
       <p><strong>Alpaca:</strong> API Key + Secret from <a href="https://alpaca.markets/" target="_blank">alpaca.markets</a>. Check "Paper Trading" for paper account.</p>
       <p><strong>Interactive Brokers:</strong> TWS/Gateway required. Host 127.0.0.1, port 7497 (paper) / 7496 (live), Client ID 1. Enable API connections in TWS settings.</p>
@@ -1073,35 +1162,6 @@ FRONTEND_HTML = r"""
       <p><strong>OKX:</strong> API Key + Secret + Passphrase from <a href="https://www.okx.com/" target="_blank">okx.com</a>. Check "Demo Trading".</p>
     </div>
   </div>
-
-  <!-- RESIZE HANDLE -->
-  <div id="resize-handle"></div>
-
-  <!-- SIDEBAR TOGGLE BUTTON (placed inside sidebar) -->
-  <button id="sidebar-toggle" onclick="toggleSidebar()">☰</button>
-</div>
-
-<!-- MAIN CONTENT -->
-<div id="main">
-  <div class="tab-header" id="tab-header">
-    <button class="tab-btn active" data-tab="charts">Charts</button>
-    <button class="tab-btn" data-tab="signals">Signals</button>
-    <button class="tab-btn" data-tab="history">History</button>
-    <button class="tab-btn" data-tab="ema">EMA Monitor</button>
-  </div>
-  <div id="tab-charts" class="tab-content active">
-    <div id="ticker-tabs"></div>
-    <div id="metrics">
-      <div class="metric"><div class="value" id="equity">—</div><div>Net Liq.</div></div>
-      <div class="metric"><div class="value" id="bp">—</div><div>Buying Power</div></div>
-      <div class="metric"><div class="value" id="pl">—</div><div>Daily P&L</div></div>
-      <div class="metric"><div class="value" id="positions">—</div><div>Positions</div></div>
-    </div>
-    <div id="chart-container"><p style="color:var(--text);text-align:center;padding-top:50px;">Loading chart...</p></div>
-  </div>
-  <div id="tab-signals" class="tab-content"><div id="signals-list" style="overflow-y:auto;flex:1;"></div></div>
-  <div id="tab-history" class="tab-content"><div id="history-list" style="overflow-y:auto;flex:1;"></div></div>
-  <div id="tab-ema" class="tab-content"><div class="ema-monitor" id="ema-monitor">Loading...</div></div>
   <div id="log"></div>
 </div>
 
@@ -1109,136 +1169,16 @@ FRONTEND_HTML = r"""
 <script>
 let currentTicker = '', tickers = [], chartWidget = null, config = {};
 let licenseValid = false;
-let sidebarCollapsed = false;
+let lastLoadedSymbol = '';  // to avoid unnecessary chart reloads
 
-// ── SIDEBAR TOGGLE ──
-function toggleSidebar() {
-  const sidebar = document.getElementById('sidebar');
-  sidebar.classList.toggle('collapsed');
-  sidebarCollapsed = !sidebarCollapsed;
+// ── SYMBOL SCRUBBER ──
+function cleanSymbol(raw) {
+  return raw.split(':')[0].trim().toUpperCase();
 }
 
-// ── SIDEBAR TAB SWITCHING ──
-document.querySelectorAll('.sidebar-tab').forEach(tab => {
-  tab.addEventListener('click', function() {
-    document.querySelectorAll('.sidebar-tab').forEach(t => t.classList.remove('active'));
-    this.classList.add('active');
-    const panelId = this.dataset.panel;
-    document.querySelectorAll('.sidebar-content').forEach(p => p.classList.remove('active'));
-    document.getElementById(panelId).classList.add('active');
-  });
-});
+// ── SIDEBAR (fixed, no collapse) ──
 
-// ── RESIZABLE SIDEBAR ──
-(function() {
-  const sidebar = document.getElementById('sidebar');
-  const handle = document.getElementById('resize-handle');
-  let isResizing = false;
-  let lastX = 0;
-
-  handle.addEventListener('mousedown', function(e) {
-    isResizing = true;
-    lastX = e.clientX;
-    document.body.style.cursor = 'col-resize';
-    document.body.style.userSelect = 'none';
-    e.preventDefault();
-  });
-
-  document.addEventListener('mousemove', function(e) {
-    if (!isResizing || sidebar.classList.contains('collapsed')) return;
-    const delta = e.clientX - lastX;
-    let newWidth = sidebar.offsetWidth + delta;
-    newWidth = Math.max(200, Math.min(600, newWidth));
-    sidebar.style.width = newWidth + 'px';
-    document.documentElement.style.setProperty('--sidebar-width', newWidth + 'px');
-    lastX = e.clientX;
-  });
-
-  document.addEventListener('mouseup', function() {
-    if (isResizing) {
-      isResizing = false;
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-      localStorage.setItem('sidebarWidth', sidebar.style.width);
-    }
-  });
-})();
-
-// ── DEFAULT CONFIG BLUEPRINT ──
-const defaultConfig = {
-  broker: "Alpaca",
-  tickers: "AAPL",
-  mode: "signal",
-  quantity: 1,
-  emas: [9, 50],
-  use_bracket: false,
-  sl_percent: 2.0,
-  tp_percent: 4.0,
-  timeframe: "1m",
-  telegram: {},
-  use_rsi: true,
-  use_macd: true,
-  use_vwap: true,
-  use_bollinger: true,
-  use_adx: true,
-  use_vol_confirm: true,
-  use_supertrend: true,
-  use_stochastic: true,
-  use_atr_stops: true,
-  license_key: "",
-  license_valid: false
-};
-
-function resetDefaults() {
-  config = JSON.parse(JSON.stringify(defaultConfig));
-  initUI(config);
-  saveConfig();
-  showToast('Settings reset to defaults & saved', 'success');
-}
-
-// ── VALIDATE LICENSE ──
-async function validateLicense() {
-  const key = document.getElementById('license-key').value.trim();
-  if (!key) { showToast('Please enter a license key', 'error'); return; }
-  try {
-    const r = await fetch('/api/validate_license', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({license_key: key})
-    });
-    const d = await r.json();
-    const badge = document.getElementById('license-badge');
-    if (d.valid) {
-      licenseValid = true;
-      badge.textContent = 'PRO';
-      badge.className = 'license-badge license-valid';
-      showToast('✅ License verified – Pro features unlocked', 'success');
-    } else {
-      licenseValid = false;
-      badge.textContent = 'FREE';
-      badge.className = 'license-badge license-invalid';
-      showToast('❌ ' + d.message, 'error');
-    }
-  } catch(e) {
-    showToast('Unable to reach license server', 'error');
-  }
-}
-
-async function checkForUpdates() {
-  try {
-    const r = await fetch('/api/update');
-    const data = await r.json();
-    if (data.update_available) {
-      const toast = document.getElementById('update-toast');
-      toast.style.display = 'block';
-      document.getElementById('update-link').href = data.download_url;
-    } else {
-      showToast('✅ You are up-to-date!', 'success');
-    }
-  } catch(e) { console.log('Update check failed', e); }
-}
-
-setTimeout(checkForUpdates, 3000);
-
+// ── MAIN TAB LOGIC ──
 const tabHeader = document.getElementById('tab-header');
 Sortable.create(tabHeader, { animation: 150, handle: '.tab-btn', onEnd: function () { const first = tabHeader.querySelector('.tab-btn'); if (!document.querySelector('.tab-btn.active') && first) first.click(); } });
 
@@ -1314,30 +1254,56 @@ function initUI(cfg) {
     document.getElementById('license-badge').className = 'license-badge license-valid';
   }
   updateCredFields();
-  const t = document.getElementById('tickers').value.split(',').map(s=>s.trim()).filter(s=>s);
-  if (t.length) { setTickers(t); if (!currentTicker) currentTicker = t[0]; loadChart(currentTicker); }
-
-  const savedWidth = localStorage.getItem('sidebarWidth');
-  if (savedWidth) {
-    document.getElementById('sidebar').style.width = savedWidth;
-    document.documentElement.style.setProperty('--sidebar-width', savedWidth);
+  const rawTickers = document.getElementById('tickers').value.split(',').map(s=>s.trim()).filter(s=>s);
+  if (rawTickers.length) {
+    setTickers(rawTickers);
+    if (!currentTicker) currentTicker = cleanSymbol(rawTickers[0]);
+    loadChart(currentTicker);
   }
 }
 
 function setTickers(list) {
-  tickers = list; if (!currentTicker) currentTicker = list[0];
+  tickers = list; // store the original entries for config
+  if (!currentTicker) currentTicker = cleanSymbol(list[0]);
   const bar = document.getElementById('ticker-tabs'); bar.innerHTML = '';
-  tickers.forEach(sym => { const btn = document.createElement('button'); btn.className = 'ticker-btn' + (sym === currentTicker ? ' active' : ''); btn.textContent = sym; btn.onclick = () => { currentTicker = sym; updateTickerTabs(); loadChart(sym); }; bar.appendChild(btn); });
+  list.forEach(raw => {
+    const cleanSym = cleanSymbol(raw);
+    const btn = document.createElement('button');
+    btn.className = 'ticker-btn' + (cleanSym === currentTicker ? ' active' : '');
+    btn.textContent = raw;  // show original text like "TSLA:1"
+    btn.onclick = () => { 
+      currentTicker = cleanSym;
+      updateTickerTabs();
+      if (lastLoadedSymbol !== cleanSym) {
+        loadChart(cleanSym);
+      }
+    };
+    bar.appendChild(btn);
+  });
 }
 
-function updateTickerTabs() { Array.from(document.getElementById('ticker-tabs').children).forEach(b => b.classList.toggle('active', b.textContent === currentTicker)); }
+function updateTickerTabs() {
+  Array.from(document.getElementById('ticker-tabs').children).forEach(b => {
+    const btnSym = cleanSymbol(b.textContent);
+    b.classList.toggle('active', btnSym === currentTicker);
+  });
+}
 
 function loadChart(sym) {
+  const cleanSym = cleanSymbol(sym);
+  if (cleanSym === lastLoadedSymbol) return;
+  lastLoadedSymbol = cleanSym;
   const container = document.getElementById('chart-container'); container.innerHTML = '';
-  if (typeof TradingView === 'undefined') { setTimeout(() => loadChart(sym), 100); return; }
-  chartWidget = new TradingView.widget({ "autosize": true, "symbol": sym, "interval": "1", "timezone": "Etc/UTC", "theme": "Dark", "style": "1", "locale": "en", "toolbar_bg": "#0A0C0F", "enable_publishing": false, "hide_side_toolbar": false, "allow_symbol_change": true, "container_id": "chart-container" });
+  if (typeof TradingView === 'undefined') { setTimeout(() => loadChart(cleanSym), 100); return; }
+  chartWidget = new TradingView.widget({
+    "autosize": true, "symbol": cleanSym, "interval": "1", "timezone": "Etc/UTC",
+    "theme": "Dark", "style": "1", "locale": "en", "toolbar_bg": "#0A0C0F",
+    "enable_publishing": false, "hide_side_toolbar": false,
+    "allow_symbol_change": true, "container_id": "chart-container"
+  });
 }
 
+// ── POLLING (1.5 sec) ──
 async function pollStatus() {
   try {
     const r = await fetch('/api/status'); const data = await r.json();
@@ -1359,7 +1325,7 @@ async function pollStatus() {
         if ('Notification' in window && Notification.permission === 'granted') {
           new Notification(`TraderMoney – ${o.symbol}`, {
             body: `${o.action} ${o.qty} @ $${o.price}`,
-            icon: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="100" height="100" rx="20" fill="%23151515"/><text x="50%25" y="55%25" dominant-baseline="middle" text-anchor="middle" fill="%2300C9B1" font-family="system-ui" font-weight="800" font-size="36">TM$</text></svg>'
+            icon: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="100" height="100" rx="20" fill="%23050505"/><text x="50%25" y="55%25" dominant-baseline="middle" text-anchor="middle" fill="%23D4AF37" font-family="system-ui" font-weight="800" font-size="36">TM$</text></svg>'
           });
         }
       });
@@ -1369,12 +1335,72 @@ async function pollStatus() {
     document.getElementById('log').innerHTML = data.log.join('<br>');
   } catch(e) {}
 }
-setInterval(pollStatus, 1000);
+setInterval(pollStatus, 1500);
 
 document.getElementById('broker-select').addEventListener('change', updateCredFields);
 if ('Notification' in window && Notification.permission === 'default') {
     Notification.requestPermission();
 }
+
+// ── DEFAULT CONFIG ──
+const defaultConfig = {
+  broker: "Alpaca", tickers: "AAPL", mode: "signal", quantity: 1,
+  emas: [9, 50], use_bracket: false, sl_percent: 2.0, tp_percent: 4.0,
+  timeframe: "1m", telegram: {},
+  use_rsi: true, use_macd: true, use_vwap: true, use_bollinger: true,
+  use_adx: true, use_vol_confirm: true, use_supertrend: true,
+  use_stochastic: true, use_atr_stops: true,
+  license_key: "", license_valid: false
+};
+
+function resetDefaults() {
+  config = JSON.parse(JSON.stringify(defaultConfig));
+  initUI(config);
+  saveConfig();
+  showToast('Settings reset to defaults & saved', 'success');
+}
+
+// ── BUTTON HANDLERS ──
+async function validateLicense() {
+  const key = document.getElementById('license-key').value.trim();
+  if (!key) { showToast('Please enter a license key', 'error'); return; }
+  try {
+    const r = await fetch('/api/validate_license', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({license_key: key})
+    });
+    const d = await r.json();
+    const badge = document.getElementById('license-badge');
+    if (d.valid) {
+      licenseValid = true;
+      badge.textContent = 'PRO';
+      badge.className = 'license-badge license-valid';
+      showToast('✅ License verified – Pro features unlocked', 'success');
+    } else {
+      licenseValid = false;
+      badge.textContent = 'FREE';
+      badge.className = 'license-badge license-invalid';
+      showToast('❌ ' + d.message, 'error');
+    }
+  } catch(e) {
+    showToast('Unable to reach license server', 'error');
+  }
+}
+
+async function checkForUpdates() {
+  try {
+    const r = await fetch('/api/update');
+    const data = await r.json();
+    if (data.update_available) {
+      const toast = document.getElementById('update-toast');
+      toast.style.display = 'block';
+      document.getElementById('update-link').href = data.download_url;
+    } else {
+      showToast('✅ You are up-to-date!', 'success');
+    }
+  } catch(e) { console.log('Update check failed', e); }
+}
+setTimeout(checkForUpdates, 3000);
 
 function buildConfig() {
   const broker = document.getElementById('broker-select').value;
@@ -1419,5 +1445,5 @@ if __name__ == "__main__":
     flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()
     time.sleep(1)
-    window = webview.create_window('TraderMoney', 'http://127.0.0.1:5050', width=1300, height=800, min_size=(900,600))
+    window = webview.create_window('TraderMoney – Solar Eclipse', 'http://127.0.0.1:5050', width=1300, height=800, min_size=(900,600))
     webview.start()
