@@ -1,5 +1,5 @@
 """
-TraderMoney v33 – Solar Eclipse UI, Ticker:Quantity parsing, startup license check,
+TraderMoney v35 – Solar Eclipse UI, Ticker:Quantity parsing, startup license check,
 encrypted credential saving, performance optimizations.
 """
 
@@ -12,7 +12,7 @@ import webview
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 
-APP_VERSION = "1.0.33"
+APP_VERSION = "1.0.35"
 
 # ── Gumroad ──────────────────────────────────────────────
 GUMMROAD_PRODUCT_ID = "73otoT7rzJukCy-Lt4hhkQ=="          # your real product ID
