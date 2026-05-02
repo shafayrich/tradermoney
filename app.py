@@ -1,6 +1,5 @@
 """
-TraderMoney v1.0.40 – Final Broker Fixes, Broker Status Indicator,
-Market Session Fix, Ticker Refresh, All Previous Features Intact.
+TraderMoney v1.0.41 – Brokers fixed, Backtest runs on all tickers, Paper trader removed.
 """
 
 import json, os, queue, signal, sys, socket, threading, time, traceback, atexit, urllib.request
@@ -12,7 +11,7 @@ import webview
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 
-APP_VERSION = "1.0.40"
+APP_VERSION = "1.0.41"
 
 # ── Gumroad ──────────────────────────────────────────────
 GUMMROAD_PRODUCT_ID = "73otoT7rzJukCy-Lt4hhkQ=="
@@ -69,7 +68,6 @@ STOCHASTIC_D_PERIOD = 3
 ATR_STOP_PERIOD = 14
 ATR_STOP_MULTIPLIER = 2.0
 ATR_TP_MULTIPLIER = 3.0
-DEFAULT_PAPER_BALANCE = 100000.0
 
 def _generate_key():
     from cryptography.fernet import Fernet
@@ -108,7 +106,6 @@ class AppState:
             "use_adx":True, "use_vol_confirm":True,
             "use_supertrend":True, "use_stochastic":True, "use_atr_stops":True,
             "license_key":"", "license_valid":False,
-            "paper_sim":False, "paper_balance":DEFAULT_PAPER_BALANCE,
             "last_broker_message":""
         }
         self.ui_queue = queue.Queue()
@@ -138,28 +135,6 @@ class BaseBroker:
     def get_market_status(self) -> bool: raise NotImplementedError
     def stream_prices(self, symbols, callback): raise NotImplementedError
     def stop_stream(self): raise NotImplementedError
-
-# ---------- PAPER BROKER (built‑in) ----------
-class PaperBroker(BaseBroker):
-    def __init__(self, config, ui_queue):
-        super().__init__(config, ui_queue)
-        self.name = "Paper (Built‑in)"
-    def connect(self): return True
-    def get_account(self):
-        return {
-            "equity": config.get("paper_balance", DEFAULT_PAPER_BALANCE),
-            "pl": 0,
-            "buying_power": config.get("paper_balance", DEFAULT_PAPER_BALANCE),
-            "open_positions": 0
-        }
-    def submit_order(self, symbol, qty, side, order_type="market", sl_pct=None, tp_pct=None, sl_price=None, tp_price=None):
-        return True
-    def close_all_positions(self): pass
-    def get_positions(self): return {}
-    def get_market_status(self): return True
-    def stream_prices(self, symbols, callback): pass
-    def stop_stream(self): pass
-register_broker("Paper (Built‑in)", PaperBroker)
 
 # ---------- ALPACA BROKER ----------
 class AlpacaBroker(BaseBroker):
@@ -584,16 +559,13 @@ class SignalAnalyzer:
         if config.get('use_vol_confirm',True) and vol_ratio<SignalAnalyzer.VOLUME_RATIO_THRESHOLD: return False
         return True
 
-# ---------- TRADING ENGINE (unchanged) ----------
+# ---------- TRADING ENGINE (unchanged, no paper) ----------
 class TradingEngine(threading.Thread):
     def __init__(self, ui_queue, config, broker):
         super().__init__(daemon=True); self.ui_queue, self.config, self.broker = ui_queue, config, broker
         self.running = False; self.symbols = []; self.positions = {}; self.prev_ema = {}; self.trade_history = []
         self.per_ticker_qty = {}
         self.is_licensed = config.get("license_valid", False)
-        self.paper_sim = config.get("paper_sim", False)
-        self.paper_balance = config.get("paper_balance", DEFAULT_PAPER_BALANCE)
-        self.paper_pl = 0.0
     def send_telegram(self, message):
         tg = self.config.get("telegram", {})
         token, chat = tg.get("token"), tg.get("chat_id")
@@ -663,16 +635,9 @@ class TradingEngine(threading.Thread):
         last_hist = 0
         while self.running:
             try:
-                if self.paper_sim:
-                    account_info = {"equity": self.paper_balance + self.paper_pl, "pl": self.paper_pl,
-                                    "buying_power": self.paper_balance + self.paper_pl, "open_positions": len(self.positions)}
-                    self.ui_queue.put(("account", (account_info["equity"], account_info["pl"],
-                                                   account_info["buying_power"], account_info["open_positions"])))
-                    is_open = True
-                else:
-                    acc = self.broker.get_account()
-                    if acc: self.ui_queue.put(("account", (acc["equity"],acc["pl"],acc["buying_power"],acc.get("open_positions",0))))
-                    is_open = self.broker.get_market_status()
+                acc = self.broker.get_account()
+                if acc: self.ui_queue.put(("account", (acc["equity"],acc["pl"],acc["buying_power"],acc.get("open_positions",0))))
+                is_open = self.broker.get_market_status()
                 self.ui_queue.put(("market", "🟢 Open" if is_open else "🔴 Closed"))
                 now = time.time()
                 if now - last_hist > 60:
@@ -702,42 +667,28 @@ class TradingEngine(threading.Thread):
                                     qty = self.per_ticker_qty.get(sym, default_qty)
                                     if signal_type == "BUY" and self.positions.get(sym,0)==0:
                                         try:
-                                            if self.paper_sim:
-                                                cost = price * qty
-                                                self.paper_pl -= cost
+                                            if use_bracket and use_atr_stops:
+                                                atr_val = SignalAnalyzer._safe_float(latest.get('ATR', price*0.02), price*0.02)
+                                                sl_price = price - ATR_STOP_MULTIPLIER * atr_val
+                                                tp_price = price + ATR_TP_MULTIPLIER * atr_val
+                                                success = self.broker.submit_order(sym, qty, "buy", "market", sl_price=sl_price, tp_price=tp_price)
+                                            elif use_bracket:
+                                                success = self.broker.submit_order(sym, qty, "buy", "market", sl_pct=sl_pct, tp_pct=tp_pct)
+                                            else:
+                                                success = self.broker.submit_order(sym, qty, "buy", "market")
+                                            if success:
                                                 self.positions[sym] = qty
                                                 self.ui_queue.put(("order", (sym,"BUY",qty,price)))
-                                                self.send_telegram(f"✅ Paper Buy {qty} {sym} @ ${price:.2f}")
-                                            else:
-                                                if use_bracket and use_atr_stops:
-                                                    atr_val = SignalAnalyzer._safe_float(latest.get('ATR', price*0.02), price*0.02)
-                                                    sl_price = price - ATR_STOP_MULTIPLIER * atr_val
-                                                    tp_price = price + ATR_TP_MULTIPLIER * atr_val
-                                                    success = self.broker.submit_order(sym, qty, "buy", "market", sl_price=sl_price, tp_price=tp_price)
-                                                elif use_bracket:
-                                                    success = self.broker.submit_order(sym, qty, "buy", "market", sl_pct=sl_pct, tp_pct=tp_pct)
-                                                else:
-                                                    success = self.broker.submit_order(sym, qty, "buy", "market")
-                                                if success:
-                                                    self.positions[sym] = qty
-                                                    self.ui_queue.put(("order", (sym,"BUY",qty,price)))
-                                                    self.send_telegram(f"✅ Bought {qty} {sym} @ ${price:.2f}")
+                                                self.send_telegram(f"✅ Bought {qty} {sym} @ ${price:.2f}")
                                         except Exception as e: self.ui_queue.put(("error", f"Buy {sym} failed: {e}"))
                                     elif signal_type == "SELL" and self.positions.get(sym,0)>0:
                                         pos_qty = self.positions[sym]
                                         try:
-                                            if self.paper_sim:
-                                                revenue = price * pos_qty
-                                                self.paper_pl += revenue
-                                                self.positions[sym] = 0
+                                            success = self.broker.submit_order(sym, pos_qty, "sell")
+                                            if success:
+                                                self.positions[sym]=0
                                                 self.ui_queue.put(("order", (sym,"SELL",pos_qty,price)))
-                                                self.send_telegram(f"✅ Paper Sell {pos_qty} {sym} @ ${price:.2f}")
-                                            else:
-                                                success = self.broker.submit_order(sym, pos_qty, "sell")
-                                                if success:
-                                                    self.positions[sym]=0
-                                                    self.ui_queue.put(("order", (sym,"SELL",pos_qty,price)))
-                                                    self.send_telegram(f"✅ Sold {pos_qty} {sym} @ ${price:.2f}")
+                                                self.send_telegram(f"✅ Sold {pos_qty} {sym} @ ${price:.2f}")
                                         except Exception as e: self.ui_queue.put(("error", f"Sell {sym} failed: {e}"))
                     if ema_update: self.ui_queue.put(("ema_update", ema_update))
                 time.sleep(1)
@@ -779,16 +730,13 @@ def start_bot():
     EncryptedConfigManager.save(state.config)
     if state.engine and state.engine.running:
         return jsonify({"status":"error","message":"Bot already running"})
-    if data.get("paper_sim"):
-        broker_choice = "Paper (Built‑in)"
-    else:
-        broker_choice = data.get("broker", state.config.get("broker", "Alpaca"))
+    broker_choice = data.get("broker", state.config.get("broker", "Alpaca"))
     broker_cls = BROKER_REGISTRY.get(broker_choice)
     if not broker_cls:
         return jsonify({"status":"error","message":f"Broker '{broker_choice}' not supported"})
     state.broker_instance = broker_cls(state.config, state.ui_queue)
     if not state.broker_instance.connect():
-        # Gather last error from queue for the response
+        # gather the latest error message from the queue
         last_msg = ""
         while not state.ui_queue.empty():
             msg = state.ui_queue.get_nowait()
@@ -881,56 +829,69 @@ def validate_license_endpoint():
         state.config["license_valid"] = False
     return jsonify({"valid": is_valid, "message": message})
 
-# ---------- BACKTEST ROUTE ----------
+# ---------- BACKTEST ROUTE (all tickers) ----------
 @app.route('/api/backtest', methods=['POST'])
 def backtest():
     data = request.json
-    symbol = data.get("symbol", "AAPL").strip().upper()
+    config = data.get("config", state.config)
     interval = data.get("interval", "1m")
     days = int(data.get("days", 5))
-    config = data.get("config", state.config)
     try:
         import yfinance as yf, pandas as pd
-        df = yf.download(symbol, period=f"{days}d", interval=interval, progress=False, auto_adjust=True)
-        if df.empty: return jsonify({"error": "No data"})
-        if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
-        ema_fast = config.get("emas", [9,50])[0]
-        ema_slow = config.get("emas", [9,50])[1]
-        df = IndicatorCalculator.compute_all(df, ema_fast, ema_slow)
-        signals = []
-        prev_ema_f, prev_ema_s = None, None
-        for i in range(1, len(df)):
-            prev = df.iloc[i-1]
-            curr = df.iloc[i]
-            prev_f = SignalAnalyzer._safe_float(prev['EMA_fast'])
-            prev_s = SignalAnalyzer._safe_float(prev['EMA_slow'])
-            sig, rationale = SignalAnalyzer.generate_signal(df.iloc[:i+1], prev_f, prev_s, config)
-            if sig:
-                indi = {
-                    "RSI": round(SignalAnalyzer._safe_float(curr.get('RSI',50)), 1),
-                    "MACD": round(SignalAnalyzer._safe_float(curr.get('MACD',0)), 4),
-                    "MACD_signal": round(SignalAnalyzer._safe_float(curr.get('MACD_signal',0)), 4),
-                    "VWAP": round(SignalAnalyzer._safe_float(curr.get('VWAP',0)), 2),
-                    "BB_upper": round(SignalAnalyzer._safe_float(curr.get('BB_upper',0)), 2),
-                    "BB_lower": round(SignalAnalyzer._safe_float(curr.get('BB_lower',0)), 2),
-                    "ADX": round(SignalAnalyzer._safe_float(curr.get('ADX',0)), 1),
-                    "Vol_ratio": round(SignalAnalyzer._safe_float(curr.get('Vol_ratio',1)), 2),
-                    "Supertrend_trend": int(SignalAnalyzer._safe_float(curr.get('Supertrend_trend',0))),
-                    "Stoch_K": round(SignalAnalyzer._safe_float(curr.get('Stoch_K',50)), 1),
-                    "Stoch_D": round(SignalAnalyzer._safe_float(curr.get('Stoch_D',50)), 1),
-                }
-                signals.append({
-                    "time": str(df.index[i]),
-                    "signal": sig,
-                    "price": round(SignalAnalyzer._safe_float(curr['Close']), 2),
-                    "rationale": rationale,
-                    "indicators": indi
-                })
-        return jsonify({"signals": signals})
+        # extract all tickers, clean them
+        tickers_str = config.get("tickers", "AAPL")
+        raw_list = [s.strip() for s in tickers_str.split(",") if s.strip()]
+        symbols = []
+        for entry in raw_list:
+            sym = entry.split(":")[0].strip().upper() if ":" in entry else entry.strip().upper()
+            if sym and sym not in symbols:
+                symbols.append(sym)
+        all_results = {}
+        for symbol in symbols:
+            df = yf.download(symbol, period=f"{days}d", interval=interval, progress=False, auto_adjust=True)
+            if df is None or df.empty:
+                all_results[symbol] = {"error": "No data"}
+                continue
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = df.columns.get_level_values(0)
+            ema_fast = config.get("emas", [9,50])[0]
+            ema_slow = config.get("emas", [9,50])[1]
+            df = IndicatorCalculator.compute_all(df, ema_fast, ema_slow)
+            signals = []
+            prev_ema_f, prev_ema_s = None, None
+            for i in range(1, len(df)):
+                prev = df.iloc[i-1]
+                curr = df.iloc[i]
+                prev_f = SignalAnalyzer._safe_float(prev['EMA_fast'])
+                prev_s = SignalAnalyzer._safe_float(prev['EMA_slow'])
+                sig, rationale = SignalAnalyzer.generate_signal(df.iloc[:i+1], prev_f, prev_s, config)
+                if sig:
+                    indi = {
+                        "RSI": round(SignalAnalyzer._safe_float(curr.get('RSI',50)), 1),
+                        "MACD": round(SignalAnalyzer._safe_float(curr.get('MACD',0)), 4),
+                        "MACD_signal": round(SignalAnalyzer._safe_float(curr.get('MACD_signal',0)), 4),
+                        "VWAP": round(SignalAnalyzer._safe_float(curr.get('VWAP',0)), 2),
+                        "BB_upper": round(SignalAnalyzer._safe_float(curr.get('BB_upper',0)), 2),
+                        "BB_lower": round(SignalAnalyzer._safe_float(curr.get('BB_lower',0)), 2),
+                        "ADX": round(SignalAnalyzer._safe_float(curr.get('ADX',0)), 1),
+                        "Vol_ratio": round(SignalAnalyzer._safe_float(curr.get('Vol_ratio',1)), 2),
+                        "Supertrend_trend": int(SignalAnalyzer._safe_float(curr.get('Supertrend_trend',0))),
+                        "Stoch_K": round(SignalAnalyzer._safe_float(curr.get('Stoch_K',50)), 1),
+                        "Stoch_D": round(SignalAnalyzer._safe_float(curr.get('Stoch_D',50)), 1),
+                    }
+                    signals.append({
+                        "time": str(df.index[i]),
+                        "signal": sig,
+                        "price": round(SignalAnalyzer._safe_float(curr['Close']), 2),
+                        "rationale": rationale,
+                        "indicators": indi
+                    })
+            all_results[symbol] = {"signals": signals}
+        return jsonify({"results": all_results})
     except Exception as e:
         return jsonify({"error": str(e)})
 
-# ---------- FRONTEND HTML (V1.0.40: BROKER STATUS INDICATOR, REFRESH BUTTON, MARKET SESSION FIX) ----------
+# ---------- FRONTEND HTML (V1.0.41: PAPER REMOVED, BACKTEST UPDATED) ----------
 FRONTEND_HTML = r"""
 <!DOCTYPE html>
 <html>
@@ -993,9 +954,8 @@ FRONTEND_HTML = r"""
   .help-content h3 { color:var(--accent2); margin-top:0; } .help-content h4 { color:var(--text); margin:15px 0 5px; }
   .help-content p, .help-content ul { font-size:0.9rem; line-height:1.6; } .help-content ul { padding-left:20px; } .help-content li { margin-bottom:6px; } .help-content a { color:var(--accent); }
   .indicator-stats { background:var(--card); border-radius:8px; padding:15px; margin:10px 0; }
-  .paper-controls { padding:20px; }
   .backtest-results { overflow-y:auto; flex:1; padding:10px; }
-  .backtest-table { width:100%; border-collapse:collapse; font-size:0.85rem; }
+  .backtest-table { width:100%; border-collapse:collapse; font-size:0.85rem; margin-bottom:20px; }
   .backtest-table th, .backtest-table td { padding:6px 8px; border:1px solid var(--border); text-align:center; }
   .backtest-table th { color:var(--accent); }
   #broker-status { font-size:0.8rem; color:var(--text-muted); margin-top:4px; }
@@ -1024,7 +984,6 @@ FRONTEND_HTML = r"""
     <option>Binance</option>
     <option>Bybit</option>
     <option>OKX</option>
-    <option>Paper (Built‑in)</option>
   </select>
   <div id="broker-status"></div>
   <div id="cred-entries"></div>
@@ -1066,6 +1025,7 @@ FRONTEND_HTML = r"""
   <button onclick="killSwitch()" class="danger">⚠️ Kill Switch</button>
   <button onclick="resetDefaults()" style="background:var(--card); border:1px solid var(--border); margin-top:8px;">↺ Reset to Defaults</button>
   <button onclick="checkForUpdates()" style="margin-top:20px; background:var(--card); border:1px solid var(--border);">🔄 Check for Updates</button>
+  <button onclick="runBacktest()" style="background:var(--accent2); color:#fff; margin-top:10px;">🧪 Backtest All Tickers</button>
 </div>
 
 <!-- MAIN CONTENT -->
@@ -1075,7 +1035,6 @@ FRONTEND_HTML = r"""
     <button class="tab-btn" data-tab="signals">Signals</button>
     <button class="tab-btn" data-tab="history">History</button>
     <button class="tab-btn" data-tab="ema">EMA Monitor</button>
-    <button class="tab-btn" data-tab="paper">Paper Trade</button>
     <button class="tab-btn" data-tab="backtest">Backtest</button>
     <button class="tab-btn" data-tab="help">Help & Ops</button>
   </div>
@@ -1100,21 +1059,8 @@ FRONTEND_HTML = r"""
   <div id="tab-signals" class="tab-content"><div id="signals-list" style="overflow-y:auto;flex:1;"></div></div>
   <div id="tab-history" class="tab-content"><div id="history-list" style="overflow-y:auto;flex:1;"></div></div>
   <div id="tab-ema" class="tab-content"><div class="ema-monitor" id="ema-monitor">Loading...</div></div>
-  <div id="tab-paper" class="tab-content">
-    <div class="paper-controls">
-      <h3 style="color:var(--accent);">🧪 Paper Simulator</h3>
-      <label>Virtual Balance ($)</label>
-      <input type="number" id="paper-balance" value="100000" step="1000" style="width:200px;">
-      <p style="color:var(--text-muted);">Paper trading simulates orders without a real broker. Use this to test strategies risk‑free.</p>
-      <button onclick="startPaperBot()" style="background:var(--accent); color:#050505; width:auto; padding:10px 20px;">▶️ Start Paper Bot</button>
-      <button onclick="stopBot()" style="background:#555; width:auto; padding:10px 20px; margin-left:10px;">⏹️ Stop</button>
-      <div id="paper-log" style="margin-top:15px; max-height:200px; overflow-y:auto; background:var(--card); padding:10px; border-radius:8px; font-size:0.85rem;"></div>
-    </div>
-  </div>
   <div id="tab-backtest" class="tab-content">
     <div style="padding:20px;">
-      <button onclick="runBacktest()" style="background:var(--accent2); color:#fff; width:auto; padding:10px 20px;">🧪 Run Backtest</button>
-      <p style="color:var(--text-muted);">Runs the current indicator settings on historical data for the selected ticker.</p>
       <div id="backtest-results" class="backtest-results"></div>
     </div>
   </div>
@@ -1135,10 +1081,8 @@ FRONTEND_HTML = r"""
       </div>
       <h4>🔑 License</h4>
       <p>Purchase a license from our <a href="https://shafayrich.gumroad.com/l/ykaoov" target="_blank">Gumroad store</a>. Paste the key in the sidebar and click <strong>Validate</strong>. A valid license unlocks Auto Trade, unlimited tickers, all 9 indicators, ATR stops, Telegram alerts, and all 6 brokers.</p>
-      <h4>🧪 Paper Trading</h4>
-      <p>The <strong>Paper Trade</strong> tab lets you simulate trades with virtual money. Set your starting balance and start the paper bot. It will execute signals just like real trading, but without risking capital. Use it to test strategies before going live.</p>
       <h4>🧠 Backtesting</h4>
-      <p>Click <strong>Backtest</strong> in the sidebar or the Backtest tab to run your current indicator configuration on historical data. The results show you what signals would have fired, helping you evaluate strategy performance without waiting for live trades.</p>
+      <p>Click <strong>Backtest All Tickers</strong> in the sidebar to run your current indicator configuration on historical data for every ticker in your list. The results show what signals would have fired, helping you evaluate strategy performance.</p>
       <h4>🏦 Broker Connection Guides</h4>
       <p><strong>Alpaca:</strong> API Key + Secret from <a href="https://alpaca.markets/" target="_blank">alpaca.markets</a>. Check "Paper Trading" for paper account.</p>
       <p><strong>Interactive Brokers:</strong> TWS/Gateway required. Host 127.0.0.1, port 7497 (paper) / 7496 (live), Client ID 1. Enable API connections in TWS settings.</p>
@@ -1151,7 +1095,7 @@ FRONTEND_HTML = r"""
       <h4>🔧 Troubleshooting</h4>
       <ul>
         <li><strong>No signals?</strong> Too many filters may be enabled. Try toggling SuperTrend or Stochastic off.</li>
-        <li><strong>Broker connection error?</strong> Double‑check API keys and ensure your broker account is active.</li>
+        <li><strong>Broker connection error?</strong> Double‑check API keys and ensure your broker account is active. The broker status indicator below the broker selector shows the last connection message.</li>
         <li><strong>Charts not loading?</strong> Wait a few seconds or switch tickers. The TradingView library loads asynchronously.</li>
       </ul>
     </div>
@@ -1167,7 +1111,7 @@ let lastLoadedSymbol = '';
 
 function cleanSymbol(raw) { return raw.split(':')[0].trim().toUpperCase(); }
 
-// ── MARKET SESSION STATUS (FIXED WITH DAY CHECK) ──
+// ── MARKET SESSION STATUS ──
 function updateMarketSessions() {
   const now = new Date();
   const day = now.getUTCDay();
@@ -1238,7 +1182,6 @@ function updateCredFields() {
   else if (broker === 'Binance') { c.innerHTML = `<label>API Key</label><input type="password" id="binance-key"><label>API Secret</label><input type="password" id="binance-secret"><label><input type="checkbox" id="binance-testnet" checked> Testnet (Paper Trading)</label>`; }
   else if (broker === 'Bybit') { c.innerHTML = `<label>API Key</label><input type="password" id="bybit-key"><label>API Secret</label><input type="password" id="bybit-secret"><label><input type="checkbox" id="bybit-testnet" checked> Testnet (Paper Trading)</label>`; }
   else if (broker === 'OKX') { c.innerHTML = `<label>API Key</label><input type="password" id="okx-key"><label>API Secret</label><input type="password" id="okx-secret"><label>API Passphrase</label><input type="password" id="okx-passphrase"><label><input type="checkbox" id="okx-demo" checked> Demo Trading</label>`; }
-  else { c.innerHTML = '<p style="color:var(--text-muted);">No credentials needed for built‑in paper simulator.</p>'; }
 }
 
 function initUI(cfg) {
@@ -1254,7 +1197,6 @@ function initUI(cfg) {
   document.getElementById('sl-percent').value = cfg.sl_percent || 2;
   document.getElementById('tp-percent').value = cfg.tp_percent || 4;
   document.getElementById('use-atr-stops').checked = cfg.use_atr_stops !== false;
-  document.getElementById('paper-balance').value = cfg.paper_balance || 100000;
   document.getElementById('use-rsi').checked = cfg.use_rsi !== false;
   document.getElementById('use-macd').checked = cfg.use_macd !== false;
   document.getElementById('use-vwap').checked = cfg.use_vwap !== false;
@@ -1357,7 +1299,6 @@ setInterval(pollStatus, 1500);
 document.getElementById('broker-select').addEventListener('change', updateCredFields);
 if ('Notification' in window && Notification.permission === 'default') { Notification.requestPermission(); }
 
-// Broker status polling
 async function pollBrokerStatus() {
   try {
     const r = await fetch('/api/broker_status');
@@ -1428,8 +1369,6 @@ function buildConfig() {
     use_bracket: document.getElementById('use-bracket').checked,
     sl_percent: parseFloat(document.getElementById('sl-percent').value), tp_percent: parseFloat(document.getElementById('tp-percent').value),
     use_atr_stops: document.getElementById('use-atr-stops').checked,
-    paper_sim: false,
-    paper_balance: parseFloat(document.getElementById('paper-balance').value) || 100000,
     telegram: { token: document.getElementById('tg-token').value, chat_id: document.getElementById('tg-chat').value },
     use_rsi: document.getElementById('use-rsi').checked, use_macd: document.getElementById('use-macd').checked,
     use_vwap: document.getElementById('use-vwap').checked, use_bollinger: document.getElementById('use-bollinger').checked,
@@ -1450,56 +1389,52 @@ async function startBot() { config = buildConfig(); const r = await fetch('/api/
 async function stopBot() { await fetch('/api/stop', {method:'POST'}); showToast('Bot stopped','success'); }
 async function killSwitch() { await fetch('/api/kill', {method:'POST'}); showToast('Kill switch activated','success'); }
 
-async function startPaperBot() {
-  const cfg = buildConfig();
-  cfg.paper_sim = true;
-  cfg.paper_balance = parseFloat(document.getElementById('paper-balance').value) || 100000;
-  cfg.broker = "Paper (Built‑in)";
-  config = cfg;
-  await fetch('/api/config', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(cfg)});
-  const r = await fetch('/api/start', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(cfg)});
-  const d = await r.json();
-  showToast(d.message, d.status==='ok'?'success':'error');
-}
-
 async function runBacktest() {
-  const sym = currentTicker || 'AAPL';
-  const interval = document.getElementById('timeframe').value;
-  const days = 5;
-  showToast('Running backtest on ' + sym + '...', 'info');
+  showToast('Running backtest on all tickers...', 'info');
   switchTab('backtest');
   try {
-    const r = await fetch('/api/backtest', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ symbol: sym, interval, days, config: buildConfig() }) });
+    const r = await fetch('/api/backtest', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ config: buildConfig(), days: 5 }) });
     const data = await r.json();
     if (data.error) { showToast('Backtest error: ' + data.error, 'error'); return; }
-    const signals = data.signals || [];
+    const results = data.results;
     const resDiv = document.getElementById('backtest-results');
-    if (signals.length === 0) {
-      resDiv.innerHTML = '<p style="color:var(--text-muted);">No signals found in the last ' + days + ' days.</p>';
-      return;
+    let html = '';
+    let totalSignals = 0;
+    for (const symbol in results) {
+      const info = results[symbol];
+      html += `<h4 style="color:var(--accent); margin-top:15px;">${symbol}</h4>`;
+      if (info.error) {
+        html += `<p style="color:var(--danger);">Error: ${info.error}</p>`;
+        continue;
+      }
+      const signals = info.signals || [];
+      totalSignals += signals.length;
+      if (signals.length === 0) {
+        html += '<p style="color:var(--text-muted);">No signals found.</p>';
+        continue;
+      }
+      html += '<table class="backtest-table"><tr><th>Time</th><th>Signal</th><th>Price</th><th>RSI</th><th>MACD</th><th>MacSig</th><th>VWAP</th><th>BB L/U</th><th>ADX</th><th>VolRatio</th><th>SupTrend</th><th>Stoch %K/%D</th><th>Rationale</th></tr>';
+      signals.forEach(s => {
+        const ind = s.indicators;
+        html += `<tr>
+          <td>${s.time.slice(11,19)}</td>
+          <td class="${s.signal==='BUY'?'buy':'sell'}">${s.signal}</td>
+          <td>$${s.price}</td>
+          <td>${ind.RSI}</td>
+          <td>${ind.MACD}</td>
+          <td>${ind.MACD_signal}</td>
+          <td>$${ind.VWAP}</td>
+          <td>${ind.BB_lower}/${ind.BB_upper}</td>
+          <td>${ind.ADX}</td>
+          <td>${ind.Vol_ratio}x</td>
+          <td>${ind.Supertrend_trend === 1 ? '🟢' : '🔴'}</td>
+          <td>${ind.Stoch_K}/${ind.Stoch_D}</td>
+          <td>${s.rationale}</td>
+        </tr>`;
+      });
+      html += '</table>';
     }
-    let html = '<h4 style="color:var(--accent);">Signals (' + signals.length + ' found)</h4>';
-    html += '<table class="backtest-table"><tr><th>Time</th><th>Signal</th><th>Price</th><th>RSI</th><th>MACD</th><th>MacSig</th><th>VWAP</th><th>BB L/U</th><th>ADX</th><th>VolRatio</th><th>SupTrend</th><th>Stoch %K/%D</th><th>Rationale</th></tr>';
-    signals.forEach(s => {
-      const ind = s.indicators;
-      html += `<tr>
-        <td>${s.time.slice(11,19)}</td>
-        <td class="${s.signal==='BUY'?'buy':'sell'}">${s.signal}</td>
-        <td>$${s.price}</td>
-        <td>${ind.RSI}</td>
-        <td>${ind.MACD}</td>
-        <td>${ind.MACD_signal}</td>
-        <td>$${ind.VWAP}</td>
-        <td>${ind.BB_lower}/${ind.BB_upper}</td>
-        <td>${ind.ADX}</td>
-        <td>${ind.Vol_ratio}x</td>
-        <td>${ind.Supertrend_trend === 1 ? '🟢' : '🔴'}</td>
-        <td>${ind.Stoch_K}/${ind.Stoch_D}</td>
-        <td>${s.rationale}</td>
-      </tr>`;
-    });
-    html += '</table>';
-    resDiv.innerHTML = html;
+    resDiv.innerHTML = `<p>Total signals across ${Object.keys(results).length} tickers: ${totalSignals}</p>` + html;
   } catch(e) { showToast('Backtest failed', 'error'); }
 }
 
