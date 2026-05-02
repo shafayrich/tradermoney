@@ -1,5 +1,5 @@
 """
-TraderMoney v1.0.42 – Immortal Persistence, SQLite, Universal Broker Errors, Scrollable Backtest.
+TraderMoney v1.0.43 – Immortal Persistence, SQLite, Universal Broker Errors, Scrollable Backtest.
 """
 
 import json, os, queue, signal, sys, socket, sqlite3, threading, time, traceback, atexit, urllib.request
@@ -11,7 +11,7 @@ import webview
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 
-APP_VERSION = "1.0.42"
+APP_VERSION = "1.0.43"
 
 # ── Gumroad ──────────────────────────────────────────────
 GUMMROAD_PRODUCT_ID = "73otoT7rzJukCy-Lt4hhkQ=="
