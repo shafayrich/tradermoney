@@ -1,6 +1,6 @@
 """
-TraderMoney v1.0.39 – Broker fixes, market session day-of-week check, refresh button,
-credential persistence verified, built‑in paper broker selectable.
+TraderMoney v1.0.40 – Final Broker Fixes, Broker Status Indicator,
+Market Session Fix, Ticker Refresh, All Previous Features Intact.
 """
 
 import json, os, queue, signal, sys, socket, threading, time, traceback, atexit, urllib.request
@@ -12,7 +12,7 @@ import webview
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 
-APP_VERSION = "1.0.39"
+APP_VERSION = "1.0.40"
 
 # ── Gumroad ──────────────────────────────────────────────
 GUMMROAD_PRODUCT_ID = "73otoT7rzJukCy-Lt4hhkQ=="
@@ -108,7 +108,8 @@ class AppState:
             "use_adx":True, "use_vol_confirm":True,
             "use_supertrend":True, "use_stochastic":True, "use_atr_stops":True,
             "license_key":"", "license_valid":False,
-            "paper_sim":False, "paper_balance":DEFAULT_PAPER_BALANCE
+            "paper_sim":False, "paper_balance":DEFAULT_PAPER_BALANCE,
+            "last_broker_message":""
         }
         self.ui_queue = queue.Queue()
         self.engine = None
@@ -778,7 +779,6 @@ def start_bot():
     EncryptedConfigManager.save(state.config)
     if state.engine and state.engine.running:
         return jsonify({"status":"error","message":"Bot already running"})
-    # Determine broker: paper sim uses built‑in, otherwise use selected or config broker
     if data.get("paper_sim"):
         broker_choice = "Paper (Built‑in)"
     else:
@@ -788,9 +788,19 @@ def start_bot():
         return jsonify({"status":"error","message":f"Broker '{broker_choice}' not supported"})
     state.broker_instance = broker_cls(state.config, state.ui_queue)
     if not state.broker_instance.connect():
-        return jsonify({"status":"error","message":"Broker connection failed – check log for details."})
+        # Gather last error from queue for the response
+        last_msg = ""
+        while not state.ui_queue.empty():
+            msg = state.ui_queue.get_nowait()
+            if msg[0] == "error":
+                last_msg = msg[1]
+        state.config["last_broker_message"] = last_msg
+        EncryptedConfigManager.save(state.config)
+        return jsonify({"status":"error","message":f"Broker connection failed – {last_msg}"})
     state.engine = TradingEngine(state.ui_queue, state.config, state.broker_instance)
     state.engine.running = True; state.engine.start(); state.running = True
+    state.config["last_broker_message"] = "Connected"
+    EncryptedConfigManager.save(state.config)
     return jsonify({"status":"ok","message":"Bot started"})
 
 @app.route('/api/stop', methods=['POST'])
@@ -827,6 +837,10 @@ def get_status():
     for key in ["signals","orders","log"]:
         if len(state.dashboard[key])>50: state.dashboard[key] = state.dashboard[key][-50:]
     return jsonify({"running":state.running, **state.dashboard})
+
+@app.route('/api/broker_status', methods=['GET'])
+def broker_status():
+    return jsonify({"message": state.config.get("last_broker_message", "")})
 
 @app.route('/api/update', methods=['GET'])
 def check_update():
@@ -916,7 +930,7 @@ def backtest():
     except Exception as e:
         return jsonify({"error": str(e)})
 
-# ---------- FRONTEND HTML (V1.0.39: DAY‑OF‑WEEK FIX, REFRESH BUTTON) ----------
+# ---------- FRONTEND HTML (V1.0.40: BROKER STATUS INDICATOR, REFRESH BUTTON, MARKET SESSION FIX) ----------
 FRONTEND_HTML = r"""
 <!DOCTYPE html>
 <html>
@@ -984,6 +998,7 @@ FRONTEND_HTML = r"""
   .backtest-table { width:100%; border-collapse:collapse; font-size:0.85rem; }
   .backtest-table th, .backtest-table td { padding:6px 8px; border:1px solid var(--border); text-align:center; }
   .backtest-table th { color:var(--accent); }
+  #broker-status { font-size:0.8rem; color:var(--text-muted); margin-top:4px; }
 </style>
 <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
 </head>
@@ -1011,6 +1026,7 @@ FRONTEND_HTML = r"""
     <option>OKX</option>
     <option>Paper (Built‑in)</option>
   </select>
+  <div id="broker-status"></div>
   <div id="cred-entries"></div>
   <label>Telegram Token (opt)</label>
   <input type="password" id="tg-token">
@@ -1149,13 +1165,12 @@ let currentTicker = '', tickers = [], chartWidget = null, config = {};
 let licenseValid = false;
 let lastLoadedSymbol = '';
 
-// ── SYMBOL SCRUBBER ──
 function cleanSymbol(raw) { return raw.split(':')[0].trim().toUpperCase(); }
 
 // ── MARKET SESSION STATUS (FIXED WITH DAY CHECK) ──
 function updateMarketSessions() {
   const now = new Date();
-  const day = now.getUTCDay(); // 0=Sun, 6=Sat
+  const day = now.getUTCDay();
   const isWeekend = (day === 0 || day === 6);
   const utc = now.getUTCHours() + now.getUTCMinutes()/60;
   let sydney, tokyo, london, newyork;
@@ -1175,7 +1190,6 @@ function updateMarketSessions() {
 setInterval(updateMarketSessions, 60000);
 updateMarketSessions();
 
-// ── SIDEBAR + MAIN TAB LOGIC ──
 const tabHeader = document.getElementById('tab-header');
 Sortable.create(tabHeader, { animation: 150, handle: '.tab-btn', onEnd: function () { const first = tabHeader.querySelector('.tab-btn'); if (!document.querySelector('.tab-btn.active') && first) first.click(); } });
 
@@ -1294,7 +1308,6 @@ function loadChart(sym) {
   });
 }
 
-// ── REFRESH TICKERS (without restarting bot) ──
 async function refreshTickers() {
   const r = await fetch('/api/config');
   const cfg = await r.json();
@@ -1308,7 +1321,6 @@ async function refreshTickers() {
   showToast('Tickers refreshed', 'success');
 }
 
-// ── POLLING ──
 async function pollStatus() {
   try {
     const r = await fetch('/api/status'); const data = await r.json();
@@ -1345,7 +1357,17 @@ setInterval(pollStatus, 1500);
 document.getElementById('broker-select').addEventListener('change', updateCredFields);
 if ('Notification' in window && Notification.permission === 'default') { Notification.requestPermission(); }
 
-// ── DEFAULT CONFIG ──
+// Broker status polling
+async function pollBrokerStatus() {
+  try {
+    const r = await fetch('/api/broker_status');
+    const data = await r.json();
+    document.getElementById('broker-status').textContent = data.message ? 'Last message: ' + data.message : '';
+  } catch(e) {}
+}
+setInterval(pollBrokerStatus, 3000);
+pollBrokerStatus();
+
 const defaultConfig = {
   broker: "Alpaca", tickers: "AAPL", mode: "signal", quantity: 1,
   emas: [9, 50], use_bracket: false, sl_percent: 2.0, tp_percent: 4.0,
@@ -1363,7 +1385,6 @@ function resetDefaults() {
   showToast('Settings reset to defaults & saved', 'success');
 }
 
-// ── BUTTON HANDLERS ──
 async function validateLicense() {
   const key = document.getElementById('license-key').value.trim();
   if (!key) { showToast('Please enter a license key', 'error'); return; }
@@ -1429,7 +1450,6 @@ async function startBot() { config = buildConfig(); const r = await fetch('/api/
 async function stopBot() { await fetch('/api/stop', {method:'POST'}); showToast('Bot stopped','success'); }
 async function killSwitch() { await fetch('/api/kill', {method:'POST'}); showToast('Kill switch activated','success'); }
 
-// ── PAPER BOT START ──
 async function startPaperBot() {
   const cfg = buildConfig();
   cfg.paper_sim = true;
@@ -1442,7 +1462,6 @@ async function startPaperBot() {
   showToast(d.message, d.status==='ok'?'success':'error');
 }
 
-// ── BACKTEST ──
 async function runBacktest() {
   const sym = currentTicker || 'AAPL';
   const interval = document.getElementById('timeframe').value;
