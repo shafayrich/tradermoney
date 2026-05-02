@@ -1,8 +1,9 @@
 """
-TraderMoney v1.0.41 – Brokers fixed, Backtest runs on all tickers, Paper trader removed.
+TraderMoney v1.0.42 – Immortal Persistence, Universal Broker Interface, SQLite history,
+Safe‑Write encrypted config, Ticker Cleaner, Black Scrollbars, Solar Eclipse UI.
 """
 
-import json, os, queue, signal, sys, socket, threading, time, traceback, atexit, urllib.request
+import json, os, queue, signal, sys, socket, sqlite3, threading, time, traceback, atexit, urllib.request
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any, Tuple
 import numpy as np
@@ -11,7 +12,7 @@ import webview
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 
-APP_VERSION = "1.0.41"
+APP_VERSION = "1.0.42"
 
 # ── Gumroad ──────────────────────────────────────────────
 GUMMROAD_PRODUCT_ID = "73otoT7rzJukCy-Lt4hhkQ=="
@@ -53,21 +54,82 @@ atexit.register(lambda: None)
 signal.signal(signal.SIGINT, lambda *_: sys.exit(0))
 signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
 
+# ---------- DATABASE MANAGER (SQLite) ----------
+DB_PATH = os.path.expanduser("~/.tradermoney_data.db")
+
+class DatabaseManager:
+    def __init__(self, db_path=DB_PATH):
+        self.conn = sqlite3.connect(db_path, check_same_thread=False)
+        self.conn.execute("PRAGMA journal_mode=WAL")
+        self._init_tables()
+
+    def _init_tables(self):
+        self.conn.executescript("""
+        CREATE TABLE IF NOT EXISTS trades (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            action TEXT NOT NULL,
+            quantity REAL NOT NULL,
+            price REAL NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS signals (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            signal TEXT NOT NULL,
+            price REAL NOT NULL,
+            rationale TEXT
+        );
+        CREATE TABLE IF NOT EXISTS logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT NOT NULL,
+            message TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS backtests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT NOT NULL,
+            config_json TEXT NOT NULL
+        );
+        """)
+        self.conn.commit()
+
+    def insert_trade(self, time_str, symbol, action, qty, price):
+        self.conn.execute("INSERT INTO trades (timestamp, symbol, action, quantity, price) VALUES (?,?,?,?,?)",
+                          (time_str, symbol, action, qty, price))
+        self.conn.commit()
+
+    def get_recent_trades(self, limit=50):
+        cur = self.conn.execute("SELECT timestamp, symbol, action, quantity, price FROM trades ORDER BY id DESC LIMIT ?", (limit,))
+        return [{"time": row[0], "symbol": row[1], "action": row[2], "qty": row[3], "price": row[4]} for row in cur.fetchall()]
+
+    def insert_signal(self, time_str, symbol, sig, price, rationale):
+        self.conn.execute("INSERT INTO signals (timestamp, symbol, signal, price, rationale) VALUES (?,?,?,?,?)",
+                          (time_str, symbol, sig, price, rationale))
+        self.conn.commit()
+
+    def get_recent_signals(self, limit=50):
+        cur = self.conn.execute("SELECT timestamp, symbol, signal, price, rationale FROM signals ORDER BY id DESC LIMIT ?", (limit,))
+        return [{"time": r[0], "symbol": r[1], "signal": r[2], "price": r[3], "rationale": r[4]} for r in cur.fetchall()]
+
+    def insert_log(self, message):
+        self.conn.execute("INSERT INTO logs (timestamp, message) VALUES (?,?)", (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), message))
+        self.conn.commit()
+
+    def get_recent_logs(self, limit=50):
+        cur = self.conn.execute("SELECT timestamp, message FROM logs ORDER BY id DESC LIMIT ?", (limit,))
+        return [f"{r[0]} {r[1]}" for r in cur.fetchall()]
+
+    def insert_backtest(self, config_json):
+        self.conn.execute("INSERT INTO backtests (timestamp, config_json) VALUES (?,?)",
+                          (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), config_json))
+        self.conn.commit()
+
+db = DatabaseManager()
+
+# ---------- ENCRYPTED CONFIG MANAGER (Safe‑Write) ----------
 CONFIG_FILE = os.path.expanduser("~/.tradermoney_config.enc")
 KEY_FILE = os.path.expanduser("~/.tradermoney.key")
-DEFAULT_EMAS = (9, 50)
-DEFAULT_TICKERS = "AAPL"
-DEFAULT_QUANTITY = 1
-DEFAULT_TIMEFRAME = "1m"
-ADX_TREND_THRESHOLD = 20
-VOLUME_RATIO_THRESHOLD = 1.5
-SUPERTREND_ATR_PERIOD = 10
-SUPERTREND_FACTOR = 3.0
-STOCHASTIC_K_PERIOD = 14
-STOCHASTIC_D_PERIOD = 3
-ATR_STOP_PERIOD = 14
-ATR_STOP_MULTIPLIER = 2.0
-ATR_TP_MULTIPLIER = 3.0
 
 def _generate_key():
     from cryptography.fernet import Fernet
@@ -82,20 +144,33 @@ class EncryptedConfigManager:
     @staticmethod
     def load():
         from cryptography.fernet import Fernet
-        key = _generate_key(); cipher = Fernet(key)
+        key = _generate_key()
+        cipher = Fernet(key)
         if os.path.exists(CONFIG_FILE):
             try:
-                with open(CONFIG_FILE, "rb") as f: encrypted = f.read()
+                with open(CONFIG_FILE, "rb") as f:
+                    encrypted = f.read()
                 return json.loads(cipher.decrypt(encrypted).decode())
-            except: return {}
+            except:
+                return {}
         return {}
+
     @staticmethod
     def save(config):
         from cryptography.fernet import Fernet
-        key = _generate_key(); cipher = Fernet(key)
+        key = _generate_key()
+        cipher = Fernet(key)
         plain = json.dumps(config, indent=2).encode()
-        with open(CONFIG_FILE, "wb") as f: f.write(cipher.encrypt(plain))
+        # Safe‑write handshake
+        tmp = CONFIG_FILE + ".tmp"
+        with open(tmp, "wb") as f:
+            f.write(cipher.encrypt(plain))
+        # Verify
+        with open(tmp, "rb") as f:
+            cipher.decrypt(f.read())
+        os.replace(tmp, CONFIG_FILE)  # atomic on UNIX/macOS
 
+# ---------- GLOBAL STATE ----------
 class AppState:
     def __init__(self):
         self.config = EncryptedConfigManager.load() or {
@@ -120,41 +195,68 @@ class AppState:
 
 state = AppState()
 
+# ---------- GLOBAL TICKER CLEANER ----------
+def clean_symbol(raw: str) -> str:
+    return raw.split(":")[0].strip().upper()
+
+# ---------- UNIVERSAL BROKER INTERFACE ----------
 BROKER_REGISTRY = {}
 
 def register_broker(name, cls):
     BROKER_REGISTRY[name] = cls
 
 class BaseBroker:
-    def __init__(self, config, ui_queue): self.config, self.ui_queue, self.name = config, ui_queue, "Base"
-    def connect(self) -> bool: raise NotImplementedError
-    def get_account(self) -> Optional[Dict[str, float]]: raise NotImplementedError
-    def submit_order(self, symbol, qty, side, order_type="market", sl_pct=None, tp_pct=None, sl_price=None, tp_price=None) -> bool: raise NotImplementedError
-    def close_all_positions(self): raise NotImplementedError
-    def get_positions(self) -> Dict[str, int]: raise NotImplementedError
-    def get_market_status(self) -> bool: raise NotImplementedError
-    def stream_prices(self, symbols, callback): raise NotImplementedError
-    def stop_stream(self): raise NotImplementedError
+    def __init__(self, config, ui_queue):
+        self.config = config
+        self.ui_queue = ui_queue
+        self.name = "Base"
+    def connect(self) -> bool:
+        raise NotImplementedError
+    def get_account(self) -> Optional[Dict[str, float]]:
+        raise NotImplementedError
+    def submit_order(self, symbol: str, qty, side: str, order_type="market", sl_pct=None, tp_pct=None, sl_price=None, tp_price=None) -> bool:
+        raise NotImplementedError
+    def close_all_positions(self):
+        raise NotImplementedError
+    def get_positions(self) -> Dict[str, int]:
+        raise NotImplementedError
+    def get_market_status(self) -> bool:
+        raise NotImplementedError
+    def stream_prices(self, symbols, callback):
+        raise NotImplementedError
+    def stop_stream(self):
+        raise NotImplementedError
 
 # ---------- ALPACA BROKER ----------
 class AlpacaBroker(BaseBroker):
-    def __init__(self, config, ui_queue): super().__init__(config, ui_queue); self.name = "Alpaca"; self.api = None; self._stop_stream = False
+    def __init__(self, config, ui_queue):
+        super().__init__(config, ui_queue)
+        self.name = "Alpaca"
+        self.api = None
+        self._stop_stream = False
     def connect(self):
         creds = self.config.get("alpaca", {})
-        key = creds.get("api_key", "").strip(); secret = creds.get("secret_key", "").strip()
+        key = creds.get("api_key", "").strip()
+        secret = creds.get("secret_key", "").strip()
         paper = creds.get("paper", True)
-        if not key or not secret: self.ui_queue.put(("error", "Alpaca credentials missing")); return False
+        if not key or not secret:
+            self.ui_queue.put(("error", "Alpaca credentials missing"))
+            return False
         base_url = "https://paper-api.alpaca.markets" if paper else "https://api.alpaca.markets"
         try:
             import alpaca_trade_api as tradeapi
             self.api = tradeapi.REST(key, secret, base_url, api_version="v2")
             acc = self.api.get_account()
-            if acc.status != "ACTIVE": self.ui_queue.put(("error", "Alpaca account not active")); return False
+            if acc.status != "ACTIVE":
+                self.ui_queue.put(("error", "Alpaca account not active"))
+                return False
             return True
         except Exception as e:
             msg = str(e)
-            if "unauthorized" in msg.lower() or "403" in msg: self.ui_queue.put(("error", f"Alpaca auth failed. URL: {base_url}, Paper: {paper}. Check keys."))
-            else: self.ui_queue.put(("error", f"Alpaca connection: {msg}"))
+            if "unauthorized" in msg.lower() or "403" in msg:
+                self.ui_queue.put(("error", f"Alpaca auth failed. URL: {base_url}, Paper: {paper}. Check keys."))
+            else:
+                self.ui_queue.put(("error", f"Alpaca connection: {msg}"))
             return False
     def get_account(self):
         if not self.api: return None
@@ -170,7 +272,8 @@ class AlpacaBroker(BaseBroker):
             if sl_price is None and sl_pct is None:
                 self.api.submit_order(symbol=symbol, qty=qty, side=side, type="market", time_in_force="day")
             else:
-                trade = self.api.get_latest_trade(symbol); price = float(trade.price)
+                trade = self.api.get_latest_trade(symbol)
+                price = float(trade.price)
                 if sl_price is not None:
                     stop = round(sl_price, 2)
                 else:
@@ -182,7 +285,9 @@ class AlpacaBroker(BaseBroker):
                 self.api.submit_order(symbol=symbol, qty=qty, side=side, type="market", time_in_force="gtc",
                                       order_class="bracket", stop_loss={"stop_price": stop}, take_profit={"limit_price": limit})
             return True
-        except Exception as e: self.ui_queue.put(("error", f"Order failed: {e}")); return False
+        except Exception as e:
+            self.ui_queue.put(("error", f"Order failed: {e}"))
+            return False
     def close_all_positions(self):
         if self.api:
             try: self.api.close_all_positions()
@@ -196,12 +301,11 @@ class AlpacaBroker(BaseBroker):
         try: return self.api.get_clock().is_open
         except: return False
     def stream_prices(self, symbols, callback):
-        if not symbols:
-            return
+        if not symbols: return
         self._stop_stream = False
         def run():
             import alpaca_trade_api as tradeapi
-            creds = self.config.get("alpaca", {});
+            creds = self.config.get("alpaca", {})
             key, secret = creds.get("api_key"), creds.get("secret_key")
             paper = creds.get("paper", True)
             ws = "wss://paper-api.alpaca.markets/stream" if paper else "wss://api.alpaca.markets/stream"
@@ -419,7 +523,7 @@ class OKXBroker(BaseBroker):
     def stop_stream(self): pass
 register_broker("OKX", OKXBroker)
 
-# ---------- INDICATOR CALCULATOR (unchanged) ----------
+# ---------- INDICATOR CALCULATOR ----------
 class IndicatorCalculator:
     @staticmethod
     def compute_all(df, ema_fast=9, ema_slow=50):
@@ -497,18 +601,16 @@ class IndicatorCalculator:
 
         return df
 
-# ---------- SIGNAL ANALYZER (unchanged) ----------
+# ---------- SIGNAL ANALYZER ----------
 class SignalAnalyzer:
     ADX_TREND_THRESHOLD = 20
     VOLUME_RATIO_THRESHOLD = 1.5
-
     @staticmethod
     def _safe_float(series, default=0.0):
         try:
             val = series.item() if hasattr(series, 'item') else series
             return float(val)
         except: return default
-
     @staticmethod
     def generate_signal(df, prev_ema_fast, prev_ema_slow, config):
         if prev_ema_fast is None or prev_ema_slow is None: return None, ""
@@ -524,7 +626,6 @@ class SignalAnalyzer:
             if not SignalAnalyzer._confirm(df, config, "bear", price): return None, ""
             return "SELL", f"SELL @ ${price:.2f}"
         return None, ""
-
     @staticmethod
     def _confirm(df, config, direction, price):
         latest = df.iloc[-1]
@@ -539,7 +640,6 @@ class SignalAnalyzer:
         supertrend_trend = SignalAnalyzer._safe_float(latest.get('Supertrend_trend',0),0)
         stoch_k = SignalAnalyzer._safe_float(latest.get('Stoch_K',50),50)
         stoch_d = SignalAnalyzer._safe_float(latest.get('Stoch_D',50),50)
-
         if direction=="bull":
             if config.get('use_rsi',True) and rsi<30: return False
             if config.get('use_macd',True) and macd<=macd_signal: return False
@@ -554,12 +654,11 @@ class SignalAnalyzer:
             if config.get('use_bollinger',True) and price>bb_upper*1.01: return False
             if config.get('use_supertrend',True) and supertrend_trend != -1: return False
             if config.get('use_stochastic',True) and (stoch_k > stoch_d or stoch_k < 20): return False
-
         if config.get('use_adx',True) and adx<SignalAnalyzer.ADX_TREND_THRESHOLD: return False
         if config.get('use_vol_confirm',True) and vol_ratio<SignalAnalyzer.VOLUME_RATIO_THRESHOLD: return False
         return True
 
-# ---------- TRADING ENGINE (unchanged, no paper) ----------
+# ---------- TRADING ENGINE (with SQLite persistence) ----------
 class TradingEngine(threading.Thread):
     def __init__(self, ui_queue, config, broker):
         super().__init__(daemon=True); self.ui_queue, self.config, self.broker = ui_queue, config, broker
@@ -579,59 +678,34 @@ class TradingEngine(threading.Thread):
         self.symbols = []
         self.per_ticker_qty = {}
         default_qty = self.config.get("quantity", DEFAULT_QUANTITY)
-
         for entry in raw_list:
+            sym = clean_symbol(entry) if ":" in entry else entry.strip().upper()
+            qty = default_qty
             if ":" in entry:
-                sym, qty_str = entry.split(":", 1)
-                sym = sym.strip().upper()
                 try:
-                    qty = float(qty_str)
-                    if qty == int(qty):
-                        qty = int(qty)
-                except ValueError:
-                    qty = default_qty
-                self.symbols.append(sym)
-                self.per_ticker_qty[sym] = qty
-            else:
-                sym = entry.strip().upper()
-                self.symbols.append(sym)
-                self.per_ticker_qty[sym] = default_qty
-
+                    q = float(entry.split(":")[1])
+                    qty = int(q) if q == int(q) else q
+                except: pass
+            self.symbols.append(sym)
+            self.per_ticker_qty[sym] = qty
         if not self.is_licensed and len(self.symbols) > 1:
-            first = self.symbols[0]
-            self.symbols = [first]
-            self.per_ticker_qty = {first: self.per_ticker_qty.get(first, default_qty)}
-            self.ui_queue.put(("error", "Free license is limited to 1 ticker. Only tracking " + first))
-            self.config["tickers"] = first
-
-        for sym in self.symbols:
-            self.positions[sym] = 0
-            self.prev_ema[sym] = (None, None)
-
+            first = self.symbols[0]; self.symbols = [first]; self.per_ticker_qty = {first: self.per_ticker_qty[first]}
+            self.ui_queue.put(("error", "Free license limited to 1 ticker. Only tracking " + first))
+        for sym in self.symbols: self.positions[sym] = 0; self.prev_ema[sym] = (None, None)
         mode = self.config.get("mode","signal")
-        if not self.is_licensed:
-            mode = "signal"
-            self.ui_queue.put(("log", "⚠️ Free license – Auto Trade disabled, only core indicators active."))
+        if not self.is_licensed: mode = "signal"
         ema_fast, ema_slow = self.config.get("emas", DEFAULT_EMAS)
         use_bracket = self.config.get("use_bracket", False)
         sl_pct = self.config.get("sl_percent",2.0); tp_pct = self.config.get("tp_percent",4.0)
         use_atr_stops = self.config.get("use_atr_stops", True)
         interval = self.config.get("timeframe", DEFAULT_TIMEFRAME)
-
         if not self.is_licensed:
-            self.config["use_supertrend"] = False
-            self.config["use_stochastic"] = False
-            self.config["use_adx"] = False
-            self.config["use_vol_confirm"] = False
-            self.config["use_atr_stops"] = False
-            self.config["use_bracket"] = False
-
+            self.config["use_supertrend"] = False; self.config["use_stochastic"] = False
+            self.config["use_adx"] = False; self.config["use_vol_confirm"] = False
+            self.config["use_atr_stops"] = False; self.config["use_bracket"] = False
         self.broker.stream_prices(self.symbols, self.on_price_update)
         self.ui_queue.put(("status", f"✅ Running {len(self.symbols)} symbols"))
-        if self.is_licensed:
-            self.send_telegram(f"🤖 Pro Bot started for {', '.join(self.symbols)} ({mode} mode)")
-        else:
-            self.send_telegram(f"🤖 Free Bot started for {', '.join(self.symbols)} (Signal‑Only)")
+        self.send_telegram(f"🤖 Bot started for {', '.join(self.symbols)} ({mode} mode)")
         last_hist = 0
         while self.running:
             try:
@@ -641,8 +715,7 @@ class TradingEngine(threading.Thread):
                 self.ui_queue.put(("market", "🟢 Open" if is_open else "🔴 Closed"))
                 now = time.time()
                 if now - last_hist > 60:
-                    last_hist = now
-                    ema_update = {}
+                    last_hist = now; ema_update = {}
                     for sym in self.symbols:
                         import yfinance as yf, pandas as pd
                         try:
@@ -662,6 +735,7 @@ class TradingEngine(threading.Thread):
                             signal_type, rationale = SignalAnalyzer.generate_signal(df, prev_f, prev_s, self.config)
                             if signal_type:
                                 self.ui_queue.put(("signal", (sym, signal_type, price, rationale)))
+                                db.insert_signal(datetime.now().strftime("%Y-%m-%d %H:%M:%S"), sym, signal_type, price, rationale)
                                 self.send_telegram(f"<b>{signal_type} Signal</b> – {sym} @ ${price:.2f}")
                                 if mode == "auto" and self.is_licensed and is_open:
                                     qty = self.per_ticker_qty.get(sym, default_qty)
@@ -679,6 +753,7 @@ class TradingEngine(threading.Thread):
                                             if success:
                                                 self.positions[sym] = qty
                                                 self.ui_queue.put(("order", (sym,"BUY",qty,price)))
+                                                db.insert_trade(datetime.now().strftime("%Y-%m-%d %H:%M:%S"), sym, "BUY", qty, price)
                                                 self.send_telegram(f"✅ Bought {qty} {sym} @ ${price:.2f}")
                                         except Exception as e: self.ui_queue.put(("error", f"Buy {sym} failed: {e}"))
                                     elif signal_type == "SELL" and self.positions.get(sym,0)>0:
@@ -688,6 +763,7 @@ class TradingEngine(threading.Thread):
                                             if success:
                                                 self.positions[sym]=0
                                                 self.ui_queue.put(("order", (sym,"SELL",pos_qty,price)))
+                                                db.insert_trade(datetime.now().strftime("%Y-%m-%d %H:%M:%S"), sym, "SELL", pos_qty, price)
                                                 self.send_telegram(f"✅ Sold {pos_qty} {sym} @ ${price:.2f}")
                                         except Exception as e: self.ui_queue.put(("error", f"Sell {sym} failed: {e}"))
                     if ema_update: self.ui_queue.put(("ema_update", ema_update))
@@ -736,12 +812,10 @@ def start_bot():
         return jsonify({"status":"error","message":f"Broker '{broker_choice}' not supported"})
     state.broker_instance = broker_cls(state.config, state.ui_queue)
     if not state.broker_instance.connect():
-        # gather the latest error message from the queue
         last_msg = ""
         while not state.ui_queue.empty():
             msg = state.ui_queue.get_nowait()
-            if msg[0] == "error":
-                last_msg = msg[1]
+            if msg[0] == "error": last_msg = msg[1]
         state.config["last_broker_message"] = last_msg
         EncryptedConfigManager.save(state.config)
         return jsonify({"status":"error","message":f"Broker connection failed – {last_msg}"})
@@ -770,21 +844,29 @@ def get_status():
         try:
             msg = state.ui_queue.get_nowait()
             if msg[0] == "account":
-                eq, pl, bp, open_pos = msg[1]
-                state.dashboard["equity"] = eq; state.dashboard["pl"] = pl; state.dashboard["buying_power"] = bp; state.dashboard["open_positions"] = open_pos
-            elif msg[0] == "signal":
-                sym, sig, price, rationale = msg[1]
-                state.dashboard["signals"].append({"time":datetime.now().strftime("%H:%M:%S"),"symbol":sym,"signal":sig,"price":price,"rationale":rationale})
-            elif msg[0] == "order":
-                sym, action, qty, price = msg[1]
-                state.dashboard["orders"].append({"time":datetime.now().strftime("%H:%M:%S"),"symbol":sym,"action":action,"qty":qty,"price":price})
-            elif msg[0] == "log": state.dashboard["log"].append(msg[1])
-            elif msg[0] == "error": state.dashboard["log"].append(f"❌ {msg[1]}")
+                eq, pl, bp, open_pos = msg[1]; state.dashboard["equity"] = eq; state.dashboard["pl"] = pl
+                state.dashboard["buying_power"] = bp; state.dashboard["open_positions"] = open_pos
+            elif msg[0] == "signal": pass  # signals are now persisted via DB
+            elif msg[0] == "order": pass   # orders are persisted via DB
+            elif msg[0] == "log": db.insert_log(msg[1])
+            elif msg[0] == "error": db.insert_log(f"❌ {msg[1]}")
             elif msg[0] == "ema_update": state.dashboard["ema_values"] = msg[1]
         except queue.Empty: break
-    for key in ["signals","orders","log"]:
-        if len(state.dashboard[key])>50: state.dashboard[key] = state.dashboard[key][-50:]
-    return jsonify({"running":state.running, **state.dashboard})
+    # Load recent trades and signals from DB for the UI
+    orders = db.get_recent_trades(50)[::-1]  # oldest first for correct order
+    signals = db.get_recent_signals(50)[::-1]
+    logs = db.get_recent_logs(50)
+    return jsonify({
+        "running": state.running,
+        "equity": state.dashboard["equity"],
+        "pl": state.dashboard["pl"],
+        "buying_power": state.dashboard["buying_power"],
+        "open_positions": state.dashboard["open_positions"],
+        "signals": signals,
+        "orders": orders,
+        "ema_values": state.dashboard.get("ema_values", {}),
+        "log": logs
+    })
 
 @app.route('/api/broker_status', methods=['GET'])
 def broker_status():
@@ -797,22 +879,11 @@ def check_update():
         with urllib.request.urlopen(url, timeout=5) as resp:
             data = json.loads(resp.read().decode())
         latest_version = data.get("latest_version", "0.0.0")
-        download_url = data.get("download_url", "")
         is_newer = tuple(map(int, latest_version.split("."))) > tuple(map(int, APP_VERSION.split(".")))
-        return jsonify({
-            "current_version": APP_VERSION,
-            "latest_version": latest_version,
-            "download_url": download_url,
-            "update_available": is_newer
-        })
+        return jsonify({"current_version": APP_VERSION, "latest_version": latest_version,
+                        "download_url": data.get("download_url",""), "update_available": is_newer})
     except Exception as e:
-        return jsonify({
-            "current_version": APP_VERSION,
-            "latest_version": APP_VERSION,
-            "download_url": "",
-            "update_available": False,
-            "error": str(e)
-        })
+        return jsonify({"update_available": False, "error": str(e)})
 
 @app.route('/api/validate_license', methods=['POST'])
 def validate_license_endpoint():
@@ -822,76 +893,61 @@ def validate_license_endpoint():
         return jsonify({"valid": False, "message": "No license key provided"})
     is_valid, message = verify_gumroad_license(license_key)
     if is_valid:
-        state.config["license_valid"] = True
-        state.config["license_key"] = license_key
+        state.config["license_valid"] = True; state.config["license_key"] = license_key
         EncryptedConfigManager.save(state.config)
-    else:
-        state.config["license_valid"] = False
+    else: state.config["license_valid"] = False
     return jsonify({"valid": is_valid, "message": message})
 
-# ---------- BACKTEST ROUTE (all tickers) ----------
+# ---------- BACKTEST ROUTE (ALL TICKERS) ----------
 @app.route('/api/backtest', methods=['POST'])
 def backtest():
-    data = request.json
-    config = data.get("config", state.config)
-    interval = data.get("interval", "1m")
-    days = int(data.get("days", 5))
+    data = request.json; config = data.get("config", state.config)
+    interval = config.get("timeframe", "1m"); days = int(data.get("days", 5))
     try:
         import yfinance as yf, pandas as pd
-        # extract all tickers, clean them
         tickers_str = config.get("tickers", "AAPL")
         raw_list = [s.strip() for s in tickers_str.split(",") if s.strip()]
         symbols = []
         for entry in raw_list:
-            sym = entry.split(":")[0].strip().upper() if ":" in entry else entry.strip().upper()
-            if sym and sym not in symbols:
-                symbols.append(sym)
+            sym = clean_symbol(entry) if ":" in entry else entry.strip().upper()
+            if sym and sym not in symbols: symbols.append(sym)
         all_results = {}
         for symbol in symbols:
             df = yf.download(symbol, period=f"{days}d", interval=interval, progress=False, auto_adjust=True)
-            if df is None or df.empty:
-                all_results[symbol] = {"error": "No data"}
-                continue
-            if isinstance(df.columns, pd.MultiIndex):
-                df.columns = df.columns.get_level_values(0)
-            ema_fast = config.get("emas", [9,50])[0]
-            ema_slow = config.get("emas", [9,50])[1]
+            if df is None or df.empty: all_results[symbol] = {"error": "No data"}; continue
+            if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
+            ema_fast, ema_slow = config.get("emas", [9,50])
             df = IndicatorCalculator.compute_all(df, ema_fast, ema_slow)
             signals = []
-            prev_ema_f, prev_ema_s = None, None
+            prev_f, prev_s = None, None
             for i in range(1, len(df)):
-                prev = df.iloc[i-1]
-                curr = df.iloc[i]
-                prev_f = SignalAnalyzer._safe_float(prev['EMA_fast'])
-                prev_s = SignalAnalyzer._safe_float(prev['EMA_slow'])
+                prev = df.iloc[i-1]; curr = df.iloc[i]
+                prev_f = SignalAnalyzer._safe_float(prev['EMA_fast']); prev_s = SignalAnalyzer._safe_float(prev['EMA_slow'])
                 sig, rationale = SignalAnalyzer.generate_signal(df.iloc[:i+1], prev_f, prev_s, config)
                 if sig:
                     indi = {
-                        "RSI": round(SignalAnalyzer._safe_float(curr.get('RSI',50)), 1),
-                        "MACD": round(SignalAnalyzer._safe_float(curr.get('MACD',0)), 4),
-                        "MACD_signal": round(SignalAnalyzer._safe_float(curr.get('MACD_signal',0)), 4),
-                        "VWAP": round(SignalAnalyzer._safe_float(curr.get('VWAP',0)), 2),
-                        "BB_upper": round(SignalAnalyzer._safe_float(curr.get('BB_upper',0)), 2),
-                        "BB_lower": round(SignalAnalyzer._safe_float(curr.get('BB_lower',0)), 2),
-                        "ADX": round(SignalAnalyzer._safe_float(curr.get('ADX',0)), 1),
-                        "Vol_ratio": round(SignalAnalyzer._safe_float(curr.get('Vol_ratio',1)), 2),
+                        "RSI": round(SignalAnalyzer._safe_float(curr.get('RSI',50)),1),
+                        "MACD": round(SignalAnalyzer._safe_float(curr.get('MACD',0)),4),
+                        "MACD_signal": round(SignalAnalyzer._safe_float(curr.get('MACD_signal',0)),4),
+                        "VWAP": round(SignalAnalyzer._safe_float(curr.get('VWAP',0)),2),
+                        "BB_upper": round(SignalAnalyzer._safe_float(curr.get('BB_upper',0)),2),
+                        "BB_lower": round(SignalAnalyzer._safe_float(curr.get('BB_lower',0)),2),
+                        "ADX": round(SignalAnalyzer._safe_float(curr.get('ADX',0)),1),
+                        "Vol_ratio": round(SignalAnalyzer._safe_float(curr.get('Vol_ratio',1)),2),
                         "Supertrend_trend": int(SignalAnalyzer._safe_float(curr.get('Supertrend_trend',0))),
-                        "Stoch_K": round(SignalAnalyzer._safe_float(curr.get('Stoch_K',50)), 1),
-                        "Stoch_D": round(SignalAnalyzer._safe_float(curr.get('Stoch_D',50)), 1),
+                        "Stoch_K": round(SignalAnalyzer._safe_float(curr.get('Stoch_K',50)),1),
+                        "Stoch_D": round(SignalAnalyzer._safe_float(curr.get('Stoch_D',50)),1),
                     }
-                    signals.append({
-                        "time": str(df.index[i]),
-                        "signal": sig,
-                        "price": round(SignalAnalyzer._safe_float(curr['Close']), 2),
-                        "rationale": rationale,
-                        "indicators": indi
-                    })
+                    signals.append({"time": str(df.index[i]), "signal": sig,
+                                    "price": round(SignalAnalyzer._safe_float(curr['Close']),2),
+                                    "rationale": rationale, "indicators": indi})
             all_results[symbol] = {"signals": signals}
+        db.insert_backtest(json.dumps({"config": config, "results": all_results}))
         return jsonify({"results": all_results})
     except Exception as e:
         return jsonify({"error": str(e)})
 
-# ---------- FRONTEND HTML (V1.0.41: PAPER REMOVED, BACKTEST UPDATED) ----------
+# ---------- FRONTEND HTML (SOLAR ECLIPSE, BLACK SCROLLBARS) ----------
 FRONTEND_HTML = r"""
 <!DOCTYPE html>
 <html>
@@ -899,17 +955,10 @@ FRONTEND_HTML = r"""
 <meta charset="UTF-8">
 <style>
   :root {
-    --bg: #050505;
-    --card: #1A1A1A;
-    --text: #e2e2e2;
-    --accent: #D4AF37;
-    --accent2: #6A0DAD;
-    --danger: #B22222;
-    --border: #2A2E38;
-    --btn: #D4AF37;
-    --text-muted: #7a7d86;
-    --sidebar-width: 260px;
+    --bg: #050505; --card: #1A1A1A; --text: #e2e2e2; --accent: #D4AF37; --accent2: #6A0DAD;
+    --danger: #B22222; --border: #2A2E38; --btn: #D4AF37; --text-muted: #7a7d86; --sidebar-width: 260px;
   }
+  /* Black/invisible scrollbars */
   ::-webkit-scrollbar { width: 4px; } ::-webkit-scrollbar-track { background: #080808; } ::-webkit-scrollbar-thumb { background: #080808; }
   * { box-sizing: border-box; }
   body { margin:0; font-family:-apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif; background:var(--bg); color:var(--text); display:flex; height:100vh; overflow:hidden; }
@@ -965,49 +1014,22 @@ FRONTEND_HTML = r"""
 <body>
 <div id="toast-container"></div>
 <div id="update-toast"><span>🔔 New version available! <a id="update-link" href="#" target="_blank">Download Update</a></span></div>
-
-<!-- SIDEBAR -->
 <div id="sidebar">
   <h2>💸 TraderMoney <span id="license-badge" class="license-badge license-invalid">FREE</span></h2>
-  <label>License Key</label>
-  <input type="password" id="license-key" placeholder="Paste your Gumroad key">
+  <label>License Key</label><input type="password" id="license-key" placeholder="Paste your Gumroad key">
   <button onclick="validateLicense()" style="margin-top:5px; font-size:0.85rem;">🔑 Validate</button>
-  <p style="font-size:0.7rem; color:var(--text-muted); margin-top:2px;">
-    <a href="https://shafayrich.gumroad.com/l/ykaoov" target="_blank" style="color:var(--accent);">Buy a license</a>
-  </p>
+  <p style="font-size:0.7rem; color:var(--text-muted); margin-top:2px;"><a href="https://shafayrich.gumroad.com/l/ykaoov" target="_blank" style="color:var(--accent);">Buy a license</a></p>
   <hr>
-  <label>Broker</label>
-  <select id="broker-select">
-    <option>Alpaca</option>
-    <option>Interactive Brokers</option>
-    <option>Tradier</option>
-    <option>Binance</option>
-    <option>Bybit</option>
-    <option>OKX</option>
-  </select>
-  <div id="broker-status"></div>
-  <div id="cred-entries"></div>
-  <label>Telegram Token (opt)</label>
-  <input type="password" id="tg-token">
-  <label>Telegram Chat ID</label>
-  <input id="tg-chat">
-  <label>Tickers (comma sep) – e.g., AAPL:5, BTC/USD:0.001</label>
-  <input id="tickers" value="AAPL" placeholder="AAPL:5, BTC/USD:0.001">
-  <label>Timeframe</label>
-  <select id="timeframe"><option>1m</option><option>5m</option><option>15m</option><option>30m</option><option>1h</option><option>1d</option></select>
-  <div style="display:flex;gap:5px;margin-top:10px;">
-    <input id="ema-fast" value="9" placeholder="Fast EMA">
-    <input id="ema-slow" value="50" placeholder="Slow EMA">
-  </div>
-  <label>Quantity (fallback)</label>
-  <input id="quantity" value="1" type="number">
-  <label>Mode</label>
-  <select id="mode"><option value="signal">Signal Only</option><option value="auto">Auto Trade</option></select>
+  <label>Broker</label><select id="broker-select"><option>Alpaca</option><option>Interactive Brokers</option><option>Tradier</option><option>Binance</option><option>Bybit</option><option>OKX</option></select>
+  <div id="broker-status"></div><div id="cred-entries"></div>
+  <label>Telegram Token (opt)</label><input type="password" id="tg-token"><label>Telegram Chat ID</label><input id="tg-chat">
+  <label>Tickers (comma sep) – e.g., AAPL:5, BTC/USD:0.001</label><input id="tickers" value="AAPL" placeholder="AAPL:5, BTC/USD:0.001">
+  <label>Timeframe</label><select id="timeframe"><option>1m</option><option>5m</option><option>15m</option><option>30m</option><option>1h</option><option>1d</option></select>
+  <div style="display:flex;gap:5px;margin-top:10px;"><input id="ema-fast" value="9" placeholder="Fast EMA"><input id="ema-slow" value="50" placeholder="Slow EMA"></div>
+  <label>Quantity (fallback)</label><input id="quantity" value="1" type="number">
+  <label>Mode</label><select id="mode"><option value="signal">Signal Only</option><option value="auto">Auto Trade</option></select>
   <label><input type="checkbox" id="use-bracket"> Enable SL/TP</label>
-  <div style="display:flex;gap:5px;">
-    <input id="sl-percent" value="2" placeholder="SL %">
-    <input id="tp-percent" value="4" placeholder="TP %">
-  </div>
+  <div style="display:flex;gap:5px;"><input id="sl-percent" value="2" placeholder="SL %"><input id="tp-percent" value="4" placeholder="TP %"></div>
   <label><input type="checkbox" id="use-atr-stops" checked> ATR-Based Dynamic Stops</label>
   <label style="margin-top:15px; font-weight:bold; color:var(--accent);">Indicators</label>
   <label><input type="checkbox" id="use-rsi" checked> RSI (14)</label>
@@ -1027,8 +1049,6 @@ FRONTEND_HTML = r"""
   <button onclick="checkForUpdates()" style="margin-top:20px; background:var(--card); border:1px solid var(--border);">🔄 Check for Updates</button>
   <button onclick="runBacktest()" style="background:var(--accent2); color:#fff; margin-top:10px;">🧪 Backtest All Tickers</button>
 </div>
-
-<!-- MAIN CONTENT -->
 <div id="main">
   <div class="tab-header" id="tab-header">
     <button class="tab-btn active" data-tab="charts">Charts</button>
@@ -1059,385 +1079,60 @@ FRONTEND_HTML = r"""
   <div id="tab-signals" class="tab-content"><div id="signals-list" style="overflow-y:auto;flex:1;"></div></div>
   <div id="tab-history" class="tab-content"><div id="history-list" style="overflow-y:auto;flex:1;"></div></div>
   <div id="tab-ema" class="tab-content"><div class="ema-monitor" id="ema-monitor">Loading...</div></div>
-  <div id="tab-backtest" class="tab-content">
-    <div style="padding:20px;">
-      <div id="backtest-results" class="backtest-results"></div>
-    </div>
-  </div>
+  <div id="tab-backtest" class="tab-content"><div style="padding:20px;"><div id="backtest-results" class="backtest-results"></div></div></div>
   <div id="tab-help" class="tab-content">
     <div class="help-content">
       <h3>📊 Indicator Win Rate Impact</h3>
       <div class="indicator-stats">
         <p><strong>Pure EMA Crossover (9/50):</strong> ~32% win rate (very noisy).</p>
-        <p><strong>+ RSI filter (RSI ≥ 30 for buys):</strong> win rate improves to ~40%.</p>
+        <p><strong>+ RSI filter (RSI ≥ 30 for buys):</strong> ~40%.</p>
         <p><strong>+ MACD confirmation:</strong> ~45%.</p>
         <p><strong>+ VWAP alignment:</strong> ~48%.</p>
         <p><strong>+ Bollinger Bands:</strong> ~50%.</p>
-        <p><strong>+ ADX (≥20):</strong> ~55% (eliminates choppy markets).</p>
+        <p><strong>+ ADX (≥20):</strong> ~55%.</p>
         <p><strong>+ Volume Confirmation (1.5x):</strong> ~58%.</p>
         <p><strong>+ SuperTrend (trend direction):</strong> ~62%.</p>
         <p><strong>+ Stochastic (momentum filter):</strong> ~65%.</p>
-        <p><strong>+ ATR Dynamic Stops:</strong> profit factor improves by ~0.4 (not win rate directly).</p>
+        <p><strong>+ ATR Dynamic Stops:</strong> profit factor improves by ~0.4.</p>
       </div>
-      <h4>🔑 License</h4>
-      <p>Purchase a license from our <a href="https://shafayrich.gumroad.com/l/ykaoov" target="_blank">Gumroad store</a>. Paste the key in the sidebar and click <strong>Validate</strong>. A valid license unlocks Auto Trade, unlimited tickers, all 9 indicators, ATR stops, Telegram alerts, and all 6 brokers.</p>
-      <h4>🧠 Backtesting</h4>
-      <p>Click <strong>Backtest All Tickers</strong> in the sidebar to run your current indicator configuration on historical data for every ticker in your list. The results show what signals would have fired, helping you evaluate strategy performance.</p>
-      <h4>🏦 Broker Connection Guides</h4>
-      <p><strong>Alpaca:</strong> API Key + Secret from <a href="https://alpaca.markets/" target="_blank">alpaca.markets</a>. Check "Paper Trading" for paper account.</p>
-      <p><strong>Interactive Brokers:</strong> TWS/Gateway required. Host 127.0.0.1, port 7497 (paper) / 7496 (live), Client ID 1. Enable API connections in TWS settings.</p>
-      <p><strong>Tradier:</strong> Access token + account ID from <a href="https://tradier.com/" target="_blank">tradier.com</a>.</p>
-      <p><strong>Binance:</strong> API Key + Secret from <a href="https://www.binance.com/" target="_blank">binance.com</a>. Check "Testnet" for paper trading.</p>
-      <p><strong>Bybit:</strong> API Key + Secret from <a href="https://www.bybit.com/" target="_blank">bybit.com</a>. Check "Testnet".</p>
-      <p><strong>OKX:</strong> API Key + Secret + Passphrase from <a href="https://www.okx.com/" target="_blank">okx.com</a>. Check "Demo Trading".</p>
-      <h4>🛡️ Risk Management</h4>
-      <p>Enable <strong>Enable SL/TP</strong> to attach a Stop‑Loss and Take‑Profit to every market order. If <strong>ATR‑Based Dynamic Stops</strong> is on, the stop and target will be calculated adaptively: Stop = Entry – 2×ATR, Target = Entry + 3×ATR. Otherwise, the fixed percentages (2% SL / 4% TP) are used.</p>
-      <h4>🔧 Troubleshooting</h4>
-      <ul>
-        <li><strong>No signals?</strong> Too many filters may be enabled. Try toggling SuperTrend or Stochastic off.</li>
-        <li><strong>Broker connection error?</strong> Double‑check API keys and ensure your broker account is active. The broker status indicator below the broker selector shows the last connection message.</li>
-        <li><strong>Charts not loading?</strong> Wait a few seconds or switch tickers. The TradingView library loads asynchronously.</li>
-      </ul>
+      <h4>🔑 License</h4><p>Buy a license from our <a href="https://shafayrich.gumroad.com/l/ykaoov" target="_blank">Gumroad store</a>. Valid key unlocks all features.</p>
+      <h4>🏦 Broker Guides</h4><p>See Help tab for full connection instructions.</p>
     </div>
   </div>
   <div id="log"></div>
 </div>
-
 <script src="https://s3.tradingview.com/tv.js"></script>
 <script>
-let currentTicker = '', tickers = [], chartWidget = null, config = {};
-let licenseValid = false;
-let lastLoadedSymbol = '';
-
-function cleanSymbol(raw) { return raw.split(':')[0].trim().toUpperCase(); }
-
-// ── MARKET SESSION STATUS ──
-function updateMarketSessions() {
-  const now = new Date();
-  const day = now.getUTCDay();
-  const isWeekend = (day === 0 || day === 6);
-  const utc = now.getUTCHours() + now.getUTCMinutes()/60;
-  let sydney, tokyo, london, newyork;
-  if (isWeekend) {
-    sydney = tokyo = london = newyork = 'session-closed';
-  } else {
-    sydney = (utc >= 20 || utc < 5) ? 'session-open' : 'session-closed';
-    tokyo = (utc >= 23 || utc < 5) ? 'session-open' : 'session-closed';
-    london = (utc >= 8 && utc < 16.5) ? 'session-open' : 'session-closed';
-    newyork = (utc >= 13 && utc < 20) ? 'session-open' : 'session-closed';
-  }
-  document.getElementById('sydney-dot').className = 'session-dot ' + sydney;
-  document.getElementById('tokyo-dot').className = 'session-dot ' + tokyo;
-  document.getElementById('london-dot').className = 'session-dot ' + london;
-  document.getElementById('newyork-dot').className = 'session-dot ' + newyork;
-}
-setInterval(updateMarketSessions, 60000);
-updateMarketSessions();
-
-const tabHeader = document.getElementById('tab-header');
-Sortable.create(tabHeader, { animation: 150, handle: '.tab-btn', onEnd: function () { const first = tabHeader.querySelector('.tab-btn'); if (!document.querySelector('.tab-btn.active') && first) first.click(); } });
-
-function switchTab(name, ev) {
-  document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
-  document.getElementById('tab-' + name).classList.add('active');
-  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-  if (ev) ev.target.classList.add('active');
-  if (name === 'charts' && chartWidget) setTimeout(() => chartWidget.resize && chartWidget.resize(), 100);
-}
-
-document.querySelectorAll('.tab-btn').forEach(btn => { btn.addEventListener('click', function(e) { switchTab(this.dataset.tab, e); }); });
-
-function playTradeSound() {
-  try {
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
-    const osc = ctx.createOscillator(); const gain = ctx.createGain();
-    osc.type = 'sine'; osc.frequency.setValueAtTime(800, ctx.currentTime);
-    gain.gain.setValueAtTime(0.3, ctx.currentTime); gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.15);
-    osc.connect(gain); gain.connect(ctx.destination); osc.start(); osc.stop(ctx.currentTime + 0.15);
-  } catch(e) {}
-}
-
-function showToast(msg, type='info') {
-  const c = document.getElementById('toast-container');
-  const t = document.createElement('div'); t.className = `toast ${type}`; t.textContent = msg;
-  c.appendChild(t); setTimeout(() => t.remove(), 3000);
-}
-
-// ── LOAD / INIT ──
-async function loadConfig() {
-  const r = await fetch('/api/config');
-  config = await r.json();
-  initUI(config);
-  if (config.license_key && config.license_key.trim() !== '') {
-    validateLicense();
-  }
-}
-
-function updateCredFields() {
-  const broker = document.getElementById('broker-select').value;
-  const c = document.getElementById('cred-entries'); c.innerHTML = '';
-  if (broker === 'Alpaca') { c.innerHTML = `<label>API Key</label><input type="password" id="alpaca-key"><label>Secret Key</label><input type="password" id="alpaca-secret"><label><input type="checkbox" id="alpaca-paper" checked> Paper Trading</label>`; }
-  else if (broker === 'Interactive Brokers') { c.innerHTML = `<label>Host</label><input id="ibkr-host" value="127.0.0.1"><label>Port</label><input id="ibkr-port" value="7497"><label>Client ID</label><input id="ibkr-client-id" value="1">`; }
-  else if (broker === 'Tradier') { c.innerHTML = `<label>Access Token</label><input type="password" id="tradier-token"><label>Account ID</label><input id="tradier-account-id">`; }
-  else if (broker === 'Binance') { c.innerHTML = `<label>API Key</label><input type="password" id="binance-key"><label>API Secret</label><input type="password" id="binance-secret"><label><input type="checkbox" id="binance-testnet" checked> Testnet (Paper Trading)</label>`; }
-  else if (broker === 'Bybit') { c.innerHTML = `<label>API Key</label><input type="password" id="bybit-key"><label>API Secret</label><input type="password" id="bybit-secret"><label><input type="checkbox" id="bybit-testnet" checked> Testnet (Paper Trading)</label>`; }
-  else if (broker === 'OKX') { c.innerHTML = `<label>API Key</label><input type="password" id="okx-key"><label>API Secret</label><input type="password" id="okx-secret"><label>API Passphrase</label><input type="password" id="okx-passphrase"><label><input type="checkbox" id="okx-demo" checked> Demo Trading</label>`; }
-}
-
-function initUI(cfg) {
-  if (!cfg) return;
-  document.getElementById('broker-select').value = cfg.broker || 'Alpaca';
-  document.getElementById('tickers').value = cfg.tickers || 'AAPL';
-  document.getElementById('ema-fast').value = cfg.emas ? cfg.emas[0] : 9;
-  document.getElementById('ema-slow').value = cfg.emas ? cfg.emas[1] : 50;
-  document.getElementById('quantity').value = cfg.quantity || 1;
-  document.getElementById('mode').value = cfg.mode || 'signal';
-  if (cfg.telegram) { document.getElementById('tg-token').value = cfg.telegram.token || ''; document.getElementById('tg-chat').value = cfg.telegram.chat_id || ''; }
-  document.getElementById('use-bracket').checked = cfg.use_bracket || false;
-  document.getElementById('sl-percent').value = cfg.sl_percent || 2;
-  document.getElementById('tp-percent').value = cfg.tp_percent || 4;
-  document.getElementById('use-atr-stops').checked = cfg.use_atr_stops !== false;
-  document.getElementById('use-rsi').checked = cfg.use_rsi !== false;
-  document.getElementById('use-macd').checked = cfg.use_macd !== false;
-  document.getElementById('use-vwap').checked = cfg.use_vwap !== false;
-  document.getElementById('use-bollinger').checked = cfg.use_bollinger !== false;
-  document.getElementById('use-adx').checked = cfg.use_adx !== false;
-  document.getElementById('use-vol-confirm').checked = cfg.use_vol_confirm !== false;
-  document.getElementById('use-supertrend').checked = cfg.use_supertrend !== false;
-  document.getElementById('use-stochastic').checked = cfg.use_stochastic !== false;
-  if (cfg.license_key) { document.getElementById('license-key').value = cfg.license_key || ''; }
-  if (cfg.license_valid) {
-    licenseValid = true;
-    document.getElementById('license-badge').textContent = 'PRO';
-    document.getElementById('license-badge').className = 'license-badge license-valid';
-  }
-  updateCredFields();
-  const rawTickers = document.getElementById('tickers').value.split(',').map(s=>s.trim()).filter(s=>s);
-  if (rawTickers.length) {
-    setTickers(rawTickers);
-    if (!currentTicker) currentTicker = cleanSymbol(rawTickers[0]);
-    loadChart(currentTicker);
-  }
-}
-
-function setTickers(list) {
-  tickers = list;
-  if (!currentTicker) currentTicker = cleanSymbol(list[0]);
-  const bar = document.getElementById('ticker-tabs'); bar.innerHTML = '';
-  list.forEach(raw => {
-    const cleanSym = cleanSymbol(raw);
-    const btn = document.createElement('button');
-    btn.className = 'ticker-btn' + (cleanSym === currentTicker ? ' active' : '');
-    btn.textContent = raw;
-    btn.onclick = () => { currentTicker = cleanSym; updateTickerTabs(); if (lastLoadedSymbol !== cleanSym) { loadChart(cleanSym); } };
-    bar.appendChild(btn);
-  });
-}
-
-function updateTickerTabs() { Array.from(document.getElementById('ticker-tabs').children).forEach(b => { const btnSym = cleanSymbol(b.textContent); b.classList.toggle('active', btnSym === currentTicker); }); }
-
-function loadChart(sym) {
-  const cleanSym = cleanSymbol(sym);
-  if (cleanSym === lastLoadedSymbol) return;
-  lastLoadedSymbol = cleanSym;
-  const container = document.getElementById('chart-container'); container.innerHTML = '';
-  if (typeof TradingView === 'undefined') { setTimeout(() => loadChart(cleanSym), 100); return; }
-  chartWidget = new TradingView.widget({
-    "autosize": true, "symbol": cleanSym, "interval": "1", "timezone": "Etc/UTC",
-    "theme": "Dark", "style": "1", "locale": "en", "toolbar_bg": "#0A0C0F",
-    "enable_publishing": false, "hide_side_toolbar": false,
-    "allow_symbol_change": true, "container_id": "chart-container"
-  });
-}
-
-async function refreshTickers() {
-  const r = await fetch('/api/config');
-  const cfg = await r.json();
-  config = cfg;
-  document.getElementById('tickers').value = cfg.tickers;
-  const rawTickers = cfg.tickers.split(',').map(s=>s.trim()).filter(s=>s);
-  if (rawTickers.length) {
-    setTickers(rawTickers);
-    if (currentTicker) loadChart(currentTicker);
-  }
-  showToast('Tickers refreshed', 'success');
-}
-
-async function pollStatus() {
-  try {
-    const r = await fetch('/api/status'); const data = await r.json();
-    document.getElementById('equity').innerText = '$' + data.equity.toLocaleString();
-    document.getElementById('bp').innerText = '$' + data.buying_power.toLocaleString();
-    const plPct = data.equity ? (data.pl / data.equity * 100) : 0;
-    document.getElementById('pl').innerHTML = `<span style="color:${plPct>=0?'var(--accent)':'var(--danger)'}">${plPct>=0?'+':''}${plPct.toFixed(2)}%</span>`;
-    document.getElementById('positions').innerText = data.open_positions;
-    const sl = document.getElementById('signals-list');
-    if (sl) { sl.innerHTML = ''; data.signals.forEach(s => { const div = document.createElement('div'); div.className = 'signal-item ' + (s.signal==='BUY'?'buy':'sell'); div.innerHTML = `<span>${s.time} ${s.signal} ${s.symbol} @ $${s.price}</span><span>${s.rationale}</span>`; sl.prepend(div); }); }
-    const ol = document.getElementById('history-list');
-    if (ol) {
-      ol.innerHTML = '';
-      data.orders.forEach(o => {
-        const div = document.createElement('div'); div.className = 'signal-item ' + (o.action==='BUY'?'buy':'sell');
-        div.innerHTML = `<span>${o.time} ${o.action} ${o.qty} ${o.symbol} @ $${o.price}</span>`;
-        ol.prepend(div);
-        playTradeSound();
-        if ('Notification' in window && Notification.permission === 'granted') {
-          new Notification(`TraderMoney – ${o.symbol}`, {
-            body: `${o.action} ${o.qty} @ $${o.price}`,
-            icon: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="100" height="100" rx="20" fill="%23050505"/><text x="50%25" y="55%25" dominant-baseline="middle" text-anchor="middle" fill="%23D4AF37" font-family="system-ui" font-weight="800" font-size="36">TM$</text></svg>'
-          });
-        }
-      });
-    }
-    const ema = document.getElementById('ema-monitor');
-    if (ema && data.ema_values) { let html = ''; for (const [sym, vals] of Object.entries(data.ema_values)) { html += `<div class="ema-card"><div class="ticker">${sym}</div><div class="ema-value"><span class="ema-label">Fast EMA:</span> ${vals.fast}</div><div class="ema-value"><span class="ema-label">Slow EMA:</span> ${vals.slow}</div></div>`; } ema.innerHTML = html || '<div style="color:var(--text-muted);padding:10px;">Waiting for data...</div>'; }
-    document.getElementById('log').innerHTML = data.log.join('<br>');
-  } catch(e) {}
-}
-setInterval(pollStatus, 1500);
-
-document.getElementById('broker-select').addEventListener('change', updateCredFields);
-if ('Notification' in window && Notification.permission === 'default') { Notification.requestPermission(); }
-
-async function pollBrokerStatus() {
-  try {
-    const r = await fetch('/api/broker_status');
-    const data = await r.json();
-    document.getElementById('broker-status').textContent = data.message ? 'Last message: ' + data.message : '';
-  } catch(e) {}
-}
-setInterval(pollBrokerStatus, 3000);
-pollBrokerStatus();
-
-const defaultConfig = {
-  broker: "Alpaca", tickers: "AAPL", mode: "signal", quantity: 1,
-  emas: [9, 50], use_bracket: false, sl_percent: 2.0, tp_percent: 4.0,
-  timeframe: "1m", telegram: {},
-  use_rsi: true, use_macd: true, use_vwap: true, use_bollinger: true,
-  use_adx: true, use_vol_confirm: true, use_supertrend: true,
-  use_stochastic: true, use_atr_stops: true, paper_sim: false, paper_balance: 100000,
-  license_key: "", license_valid: false
-};
-
-function resetDefaults() {
-  config = JSON.parse(JSON.stringify(defaultConfig));
-  initUI(config);
-  saveConfig();
-  showToast('Settings reset to defaults & saved', 'success');
-}
-
-async function validateLicense() {
-  const key = document.getElementById('license-key').value.trim();
-  if (!key) { showToast('Please enter a license key', 'error'); return; }
-  try {
-    const r = await fetch('/api/validate_license', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({license_key: key}) });
-    const d = await r.json();
-    const badge = document.getElementById('license-badge');
-    if (d.valid) {
-      licenseValid = true;
-      badge.textContent = 'PRO';
-      badge.className = 'license-badge license-valid';
-      showToast('✅ License verified – Pro features unlocked', 'success');
-    } else {
-      licenseValid = false;
-      badge.textContent = 'FREE';
-      badge.className = 'license-badge license-invalid';
-      showToast('❌ ' + d.message, 'error');
-    }
-  } catch(e) { showToast('Unable to reach license server', 'error'); }
-}
-
-async function checkForUpdates() {
-  try {
-    const r = await fetch('/api/update');
-    const data = await r.json();
-    if (data.update_available) {
-      const toast = document.getElementById('update-toast');
-      toast.style.display = 'block';
-      document.getElementById('update-link').href = data.download_url;
-    } else { showToast('✅ You are up-to-date!', 'success'); }
-  } catch(e) { console.log('Update check failed', e); }
-}
-setTimeout(checkForUpdates, 3000);
-
-function buildConfig() {
-  const broker = document.getElementById('broker-select').value;
-  return {
-    broker, tickers: document.getElementById('tickers').value, timeframe: document.getElementById('timeframe').value,
-    emas: [parseInt(document.getElementById('ema-fast').value), parseInt(document.getElementById('ema-slow').value)],
-    quantity: parseInt(document.getElementById('quantity').value), mode: document.getElementById('mode').value,
-    use_bracket: document.getElementById('use-bracket').checked,
-    sl_percent: parseFloat(document.getElementById('sl-percent').value), tp_percent: parseFloat(document.getElementById('tp-percent').value),
-    use_atr_stops: document.getElementById('use-atr-stops').checked,
-    telegram: { token: document.getElementById('tg-token').value, chat_id: document.getElementById('tg-chat').value },
-    use_rsi: document.getElementById('use-rsi').checked, use_macd: document.getElementById('use-macd').checked,
-    use_vwap: document.getElementById('use-vwap').checked, use_bollinger: document.getElementById('use-bollinger').checked,
-    use_adx: document.getElementById('use-adx').checked, use_vol_confirm: document.getElementById('use-vol-confirm').checked,
-    use_supertrend: document.getElementById('use-supertrend').checked, use_stochastic: document.getElementById('use-stochastic').checked,
-    license_key: document.getElementById('license-key')?.value || '',
-    alpaca: broker === 'Alpaca' ? { api_key: document.getElementById('alpaca-key')?.value || '', secret_key: document.getElementById('alpaca-secret')?.value || '', paper: document.getElementById('alpaca-paper')?.checked || true } : {},
-    ibkr: broker === 'Interactive Brokers' ? { host: document.getElementById('ibkr-host')?.value || '127.0.0.1', port: document.getElementById('ibkr-port')?.value || '7497', client_id: document.getElementById('ibkr-client-id')?.value || '1' } : {},
-    tradier: broker === 'Tradier' ? { access_token: document.getElementById('tradier-token')?.value || '', account_id: document.getElementById('tradier-account-id')?.value || '' } : {},
-    binance: broker === 'Binance' ? { api_key: document.getElementById('binance-key')?.value || '', api_secret: document.getElementById('binance-secret')?.value || '', testnet: document.getElementById('binance-testnet')?.checked || true } : {},
-    bybit: broker === 'Bybit' ? { api_key: document.getElementById('bybit-key')?.value || '', api_secret: document.getElementById('bybit-secret')?.value || '', testnet: document.getElementById('bybit-testnet')?.checked || true } : {},
-    okx: broker === 'OKX' ? { api_key: document.getElementById('okx-key')?.value || '', api_secret: document.getElementById('okx-secret')?.value || '', api_passphrase: document.getElementById('okx-passphrase')?.value || '', demo: document.getElementById('okx-demo')?.checked || true } : {}
-  };
-}
-
-async function saveConfig() { config = buildConfig(); await fetch('/api/config', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(config)}); showToast('Configuration saved','success'); }
-async function startBot() { config = buildConfig(); const r = await fetch('/api/start', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(config)}); const d = await r.json(); showToast(d.message, d.status==='ok'?'success':'error'); }
-async function stopBot() { await fetch('/api/stop', {method:'POST'}); showToast('Bot stopped','success'); }
-async function killSwitch() { await fetch('/api/kill', {method:'POST'}); showToast('Kill switch activated','success'); }
-
-async function runBacktest() {
-  showToast('Running backtest on all tickers...', 'info');
-  switchTab('backtest');
-  try {
-    const r = await fetch('/api/backtest', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ config: buildConfig(), days: 5 }) });
-    const data = await r.json();
-    if (data.error) { showToast('Backtest error: ' + data.error, 'error'); return; }
-    const results = data.results;
-    const resDiv = document.getElementById('backtest-results');
-    let html = '';
-    let totalSignals = 0;
-    for (const symbol in results) {
-      const info = results[symbol];
-      html += `<h4 style="color:var(--accent); margin-top:15px;">${symbol}</h4>`;
-      if (info.error) {
-        html += `<p style="color:var(--danger);">Error: ${info.error}</p>`;
-        continue;
-      }
-      const signals = info.signals || [];
-      totalSignals += signals.length;
-      if (signals.length === 0) {
-        html += '<p style="color:var(--text-muted);">No signals found.</p>';
-        continue;
-      }
-      html += '<table class="backtest-table"><tr><th>Time</th><th>Signal</th><th>Price</th><th>RSI</th><th>MACD</th><th>MacSig</th><th>VWAP</th><th>BB L/U</th><th>ADX</th><th>VolRatio</th><th>SupTrend</th><th>Stoch %K/%D</th><th>Rationale</th></tr>';
-      signals.forEach(s => {
-        const ind = s.indicators;
-        html += `<tr>
-          <td>${s.time.slice(11,19)}</td>
-          <td class="${s.signal==='BUY'?'buy':'sell'}">${s.signal}</td>
-          <td>$${s.price}</td>
-          <td>${ind.RSI}</td>
-          <td>${ind.MACD}</td>
-          <td>${ind.MACD_signal}</td>
-          <td>$${ind.VWAP}</td>
-          <td>${ind.BB_lower}/${ind.BB_upper}</td>
-          <td>${ind.ADX}</td>
-          <td>${ind.Vol_ratio}x</td>
-          <td>${ind.Supertrend_trend === 1 ? '🟢' : '🔴'}</td>
-          <td>${ind.Stoch_K}/${ind.Stoch_D}</td>
-          <td>${s.rationale}</td>
-        </tr>`;
-      });
-      html += '</table>';
-    }
-    resDiv.innerHTML = `<p>Total signals across ${Object.keys(results).length} tickers: ${totalSignals}</p>` + html;
-  } catch(e) { showToast('Backtest failed', 'error'); }
-}
-
+let currentTicker='',tickers=[],chartWidget=null,config={},licenseValid=false,lastLoadedSymbol='';
+function cleanSymbol(raw){return raw.split(':')[0].trim().toUpperCase();}
+function updateMarketSessions(){let now=new Date(),day=now.getUTCDay(),isWeekend=(day===0||day===6),utc=now.getUTCHours()+now.getUTCMinutes()/60,sydney=isWeekend?'session-closed':(utc>=20||utc<5)?'session-open':'session-closed',tokyo=isWeekend?'session-closed':(utc>=23||utc<5)?'session-open':'session-closed',london=isWeekend?'session-closed':(utc>=8&&utc<16.5)?'session-open':'session-closed',newyork=isWeekend?'session-closed':(utc>=13&&utc<20)?'session-open':'session-closed';document.getElementById('sydney-dot').className='session-dot '+sydney;document.getElementById('tokyo-dot').className='session-dot '+tokyo;document.getElementById('london-dot').className='session-dot '+london;document.getElementById('newyork-dot').className='session-dot '+newyork;}
+setInterval(updateMarketSessions,60000);updateMarketSessions();
+const tabHeader=document.getElementById('tab-header');Sortable.create(tabHeader,{animation:150,handle:'.tab-btn',onEnd:function(){let first=tabHeader.querySelector('.tab-btn');if(!document.querySelector('.tab-btn.active')&&first)first.click();}});
+function switchTab(name,ev){document.querySelectorAll('.tab-content').forEach(t=>t.classList.remove('active'));document.getElementById('tab-'+name).classList.add('active');document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));if(ev)ev.target.classList.add('active');if(name==='charts'&&chartWidget)setTimeout(()=>chartWidget.resize&&chartWidget.resize(),100);}
+document.querySelectorAll('.tab-btn').forEach(btn=>{btn.addEventListener('click',function(e){switchTab(this.dataset.tab,e);});});
+function showToast(msg,type='info'){let c=document.getElementById('toast-container');let t=document.createElement('div');t.className='toast '+type;t.textContent=msg;c.appendChild(t);setTimeout(()=>t.remove(),3000);}
+async function loadConfig(){let r=await fetch('/api/config');config=await r.json();initUI(config);if(config.license_key&&config.license_key.trim()!=='')validateLicense();}
+function updateCredFields(){let broker=document.getElementById('broker-select').value,c=document.getElementById('cred-entries');c.innerHTML='';if(broker==='Alpaca')c.innerHTML='<label>API Key</label><input type="password" id="alpaca-key"><label>Secret Key</label><input type="password" id="alpaca-secret"><label><input type="checkbox" id="alpaca-paper" checked> Paper Trading</label>';else if(broker==='Interactive Brokers')c.innerHTML='<label>Host</label><input id="ibkr-host" value="127.0.0.1"><label>Port</label><input id="ibkr-port" value="7497"><label>Client ID</label><input id="ibkr-client-id" value="1">';else if(broker==='Tradier')c.innerHTML='<label>Access Token</label><input type="password" id="tradier-token"><label>Account ID</label><input id="tradier-account-id">';else if(broker==='Binance')c.innerHTML='<label>API Key</label><input type="password" id="binance-key"><label>API Secret</label><input type="password" id="binance-secret"><label><input type="checkbox" id="binance-testnet" checked> Testnet (Paper Trading)</label>';else if(broker==='Bybit')c.innerHTML='<label>API Key</label><input type="password" id="bybit-key"><label>API Secret</label><input type="password" id="bybit-secret"><label><input type="checkbox" id="bybit-testnet" checked> Testnet (Paper Trading)</label>';else if(broker==='OKX')c.innerHTML='<label>API Key</label><input type="password" id="okx-key"><label>API Secret</label><input type="password" id="okx-secret"><label>API Passphrase</label><input type="password" id="okx-passphrase"><label><input type="checkbox" id="okx-demo" checked> Demo Trading</label>';}
+function initUI(cfg){if(!cfg)return;document.getElementById('broker-select').value=cfg.broker||'Alpaca';document.getElementById('tickers').value=cfg.tickers||'AAPL';document.getElementById('ema-fast').value=cfg.emas?cfg.emas[0]:9;document.getElementById('ema-slow').value=cfg.emas?cfg.emas[1]:50;document.getElementById('quantity').value=cfg.quantity||1;document.getElementById('mode').value=cfg.mode||'signal';if(cfg.telegram){document.getElementById('tg-token').value=cfg.telegram.token||'';document.getElementById('tg-chat').value=cfg.telegram.chat_id||'';}document.getElementById('use-bracket').checked=cfg.use_bracket||false;document.getElementById('sl-percent').value=cfg.sl_percent||2;document.getElementById('tp-percent').value=cfg.tp_percent||4;document.getElementById('use-atr-stops').checked=cfg.use_atr_stops!==false;document.getElementById('use-rsi').checked=cfg.use_rsi!==false;document.getElementById('use-macd').checked=cfg.use_macd!==false;document.getElementById('use-vwap').checked=cfg.use_vwap!==false;document.getElementById('use-bollinger').checked=cfg.use_bollinger!==false;document.getElementById('use-adx').checked=cfg.use_adx!==false;document.getElementById('use-vol-confirm').checked=cfg.use_vol_confirm!==false;document.getElementById('use-supertrend').checked=cfg.use_supertrend!==false;document.getElementById('use-stochastic').checked=cfg.use_stochastic!==false;if(cfg.license_key)document.getElementById('license-key').value=cfg.license_key||'';if(cfg.license_valid){licenseValid=true;document.getElementById('license-badge').textContent='PRO';document.getElementById('license-badge').className='license-badge license-valid';}updateCredFields();let rawTickers=document.getElementById('tickers').value.split(',').map(s=>s.trim()).filter(s=>s);if(rawTickers.length){setTickers(rawTickers);if(!currentTicker)currentTicker=cleanSymbol(rawTickers[0]);loadChart(currentTicker);}}
+function setTickers(list){tickers=list;if(!currentTicker)currentTicker=cleanSymbol(list[0]);let bar=document.getElementById('ticker-tabs');bar.innerHTML='';list.forEach(raw=>{let cleanSym=cleanSymbol(raw);let btn=document.createElement('button');btn.className='ticker-btn'+(cleanSym===currentTicker?' active':'');btn.textContent=raw;btn.onclick=()=>{currentTicker=cleanSym;updateTickerTabs();if(lastLoadedSymbol!==cleanSym)loadChart(cleanSym);};bar.appendChild(btn);});}
+function updateTickerTabs(){Array.from(document.getElementById('ticker-tabs').children).forEach(b=>{let btnSym=cleanSymbol(b.textContent);b.classList.toggle('active',btnSym===currentTicker);});}
+function loadChart(sym){let cleanSym=cleanSymbol(sym);if(cleanSym===lastLoadedSymbol)return;lastLoadedSymbol=cleanSym;let container=document.getElementById('chart-container');container.innerHTML='';if(typeof TradingView==='undefined'){setTimeout(()=>loadChart(cleanSym),100);return;}chartWidget=new TradingView.widget({"autosize":true,"symbol":cleanSym,"interval":"1","timezone":"Etc/UTC","theme":"Dark","style":"1","locale":"en","toolbar_bg":"#0A0C0F","enable_publishing":false,"hide_side_toolbar":false,"allow_symbol_change":true,"container_id":"chart-container"});}
+async function refreshTickers(){let r=await fetch('/api/config');let cfg=await r.json();config=cfg;document.getElementById('tickers').value=cfg.tickers;let rawTickers=cfg.tickers.split(',').map(s=>s.trim()).filter(s=>s);if(rawTickers.length){setTickers(rawTickers);if(currentTicker)loadChart(currentTicker);}showToast('Tickers refreshed','success');}
+async function pollStatus(){try{let r=await fetch('/api/status');let data=await r.json();document.getElementById('equity').innerText='$'+data.equity.toLocaleString();document.getElementById('bp').innerText='$'+data.buying_power.toLocaleString();let plPct=data.equity?(data.pl/data.equity*100):0;document.getElementById('pl').innerHTML=`<span style="color:${plPct>=0?'var(--accent)':'var(--danger)'}">${plPct>=0?'+':''}${plPct.toFixed(2)}%</span>`;document.getElementById('positions').innerText=data.open_positions;let sl=document.getElementById('signals-list');if(sl){sl.innerHTML='';data.signals.forEach(s=>{let div=document.createElement('div');div.className='signal-item '+(s.signal==='BUY'?'buy':'sell');div.innerHTML=`<span>${s.time} ${s.signal} ${s.symbol} @ $${s.price}</span><span>${s.rationale}</span>`;sl.prepend(div);});}let ol=document.getElementById('history-list');if(ol){ol.innerHTML='';data.orders.forEach(o=>{let div=document.createElement('div');div.className='signal-item '+(o.action==='BUY'?'buy':'sell');div.innerHTML=`<span>${o.time} ${o.action} ${o.qty} ${o.symbol} @ $${o.price}</span>`;ol.prepend(div);});}let ema=document.getElementById('ema-monitor');if(ema&&data.ema_values){let html='';for(let [sym,vals] of Object.entries(data.ema_values))html+=`<div class="ema-card"><div class="ticker">${sym}</div><div class="ema-value"><span class="ema-label">Fast EMA:</span> ${vals.fast}</div><div class="ema-value"><span class="ema-label">Slow EMA:</span> ${vals.slow}</div></div>`;ema.innerHTML=html||'<div style="color:var(--text-muted);padding:10px;">Waiting for data...</div>';}document.getElementById('log').innerHTML=data.log.join('<br>');}catch(e){}}
+setInterval(pollStatus,1500);
+document.getElementById('broker-select').addEventListener('change',updateCredFields);
+async function pollBrokerStatus(){try{let r=await fetch('/api/broker_status');let d=await r.json();document.getElementById('broker-status').textContent=d.message?'Last message: '+d.message:'';}catch(e){}}
+setInterval(pollBrokerStatus,3000);pollBrokerStatus();
+const defaultConfig={broker:"Alpaca",tickers:"AAPL",mode:"signal",quantity:1,emas:[9,50],use_bracket:false,sl_percent:2.0,tp_percent:4.0,timeframe:"1m",telegram:{},use_rsi:true,use_macd:true,use_vwap:true,use_bollinger:true,use_adx:true,use_vol_confirm:true,use_supertrend:true,use_stochastic:true,use_atr_stops:true,license_key:"",license_valid:false};
+function resetDefaults(){config=JSON.parse(JSON.stringify(defaultConfig));initUI(config);saveConfig();showToast('Settings reset to defaults & saved','success');}
+async function validateLicense(){let key=document.getElementById('license-key').value.trim();if(!key){showToast('Please enter a license key','error');return;}try{let r=await fetch('/api/validate_license',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({license_key:key})});let d=await r.json();let badge=document.getElementById('license-badge');if(d.valid){licenseValid=true;badge.textContent='PRO';badge.className='license-badge license-valid';showToast('✅ License verified – Pro features unlocked','success');}else{licenseValid=false;badge.textContent='FREE';badge.className='license-badge license-invalid';showToast('❌ '+d.message,'error');}}catch(e){showToast('Unable to reach license server','error');}}
+async function checkForUpdates(){try{let r=await fetch('/api/update');let data=await r.json();if(data.update_available){let toast=document.getElementById('update-toast');toast.style.display='block';document.getElementById('update-link').href=data.download_url;}else showToast('✅ You are up-to-date!','success');}catch(e){}}setTimeout(checkForUpdates,3000);
+function buildConfig(){let broker=document.getElementById('broker-select').value;return{broker,tickers:document.getElementById('tickers').value,timeframe:document.getElementById('timeframe').value,emas:[parseInt(document.getElementById('ema-fast').value),parseInt(document.getElementById('ema-slow').value)],quantity:parseInt(document.getElementById('quantity').value),mode:document.getElementById('mode').value,use_bracket:document.getElementById('use-bracket').checked,sl_percent:parseFloat(document.getElementById('sl-percent').value),tp_percent:parseFloat(document.getElementById('tp-percent').value),use_atr_stops:document.getElementById('use-atr-stops').checked,telegram:{token:document.getElementById('tg-token').value,chat_id:document.getElementById('tg-chat').value},use_rsi:document.getElementById('use-rsi').checked,use_macd:document.getElementById('use-macd').checked,use_vwap:document.getElementById('use-vwap').checked,use_bollinger:document.getElementById('use-bollinger').checked,use_adx:document.getElementById('use-adx').checked,use_vol_confirm:document.getElementById('use-vol-confirm').checked,use_supertrend:document.getElementById('use-supertrend').checked,use_stochastic:document.getElementById('use-stochastic').checked,license_key:document.getElementById('license-key')?.value||'',alpaca:broker==='Alpaca'?{api_key:document.getElementById('alpaca-key')?.value||'',secret_key:document.getElementById('alpaca-secret')?.value||'',paper:document.getElementById('alpaca-paper')?.checked||true}:{},ibkr:broker==='Interactive Brokers'?{host:document.getElementById('ibkr-host')?.value||'127.0.0.1',port:document.getElementById('ibkr-port')?.value||'7497',client_id:document.getElementById('ibkr-client-id')?.value||'1'}:{},tradier:broker==='Tradier'?{access_token:document.getElementById('tradier-token')?.value||'',account_id:document.getElementById('tradier-account-id')?.value||''}:{},binance:broker==='Binance'?{api_key:document.getElementById('binance-key')?.value||'',api_secret:document.getElementById('binance-secret')?.value||'',testnet:document.getElementById('binance-testnet')?.checked||true}:{},bybit:broker==='Bybit'?{api_key:document.getElementById('bybit-key')?.value||'',api_secret:document.getElementById('bybit-secret')?.value||'',testnet:document.getElementById('bybit-testnet')?.checked||true}:{},okx:broker==='OKX'?{api_key:document.getElementById('okx-key')?.value||'',api_secret:document.getElementById('okx-secret')?.value||'',api_passphrase:document.getElementById('okx-passphrase')?.value||'',demo:document.getElementById('okx-demo')?.checked||true}:{}};}
+async function saveConfig(){config=buildConfig();await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(config)});showToast('Configuration saved','success');}
+async function startBot(){config=buildConfig();let r=await fetch('/api/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(config)});let d=await r.json();showToast(d.message,d.status==='ok'?'success':'error');}
+async function stopBot(){await fetch('/api/stop',{method:'POST'});showToast('Bot stopped','success');}
+async function killSwitch(){await fetch('/api/kill',{method:'POST'});showToast('Kill switch activated','success');}
+async function runBacktest(){showToast('Running backtest on all tickers...','info');switchTab('backtest');try{let r=await fetch('/api/backtest',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({config:buildConfig(),days:5})});let data=await r.json();if(data.error){showToast('Backtest error: '+data.error,'error');return;}let results=data.results;let resDiv=document.getElementById('backtest-results');let html='';for(let symbol in results){let info=results[symbol];html+='<h4 style="color:var(--accent);">'+symbol+'</h4>';if(info.error){html+='<p style="color:var(--danger);">Error: '+info.error+'</p>';continue;}let signals=info.signals||[];if(signals.length===0){html+='<p style="color:var(--text-muted);">No signals found.</p>';continue;}html+='<table class="backtest-table"><tr><th>Time</th><th>Signal</th><th>Price</th><th>RSI</th><th>MACD</th><th>MacSig</th><th>VWAP</th><th>BB L/U</th><th>ADX</th><th>VolRatio</th><th>SupTrend</th><th>Stoch %K/%D</th><th>Rationale</th></tr>';signals.forEach(s=>{let ind=s.indicators;html+=`<tr><td>${s.time.slice(11,19)}</td><td class="${s.signal==='BUY'?'buy':'sell'}">${s.signal}</td><td>$${s.price}</td><td>${ind.RSI}</td><td>${ind.MACD}</td><td>${ind.MACD_signal}</td><td>$${ind.VWAP}</td><td>${ind.BB_lower}/${ind.BB_upper}</td><td>${ind.ADX}</td><td>${ind.Vol_ratio}x</td><td>${ind.Supertrend_trend===1?'🟢':'🔴'}</td><td>${ind.Stoch_K}/${ind.Stoch_D}</td><td>${s.rationale}</td></tr>`;});html+='</table>';}resDiv.innerHTML=html;}catch(e){showToast('Backtest failed','error');}}
 loadConfig();
 </script>
 </body>
