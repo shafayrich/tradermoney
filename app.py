@@ -1,7 +1,6 @@
 """
-TraderMoney v1.0.38 – Maximum Effort Fixes: Built‑in paper simulator (no broker required),
-all brokers working with clear error feedback, detailed backtest results,
-market session status icons, credential saving fixed.
+TraderMoney v1.0.39 – Broker fixes, market session day-of-week check, refresh button,
+credential persistence verified, built‑in paper broker selectable.
 """
 
 import json, os, queue, signal, sys, socket, threading, time, traceback, atexit, urllib.request
@@ -13,7 +12,7 @@ import webview
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 
-APP_VERSION = "1.0.38"
+APP_VERSION = "1.0.39"
 
 # ── Gumroad ──────────────────────────────────────────────
 GUMMROAD_PRODUCT_ID = "73otoT7rzJukCy-Lt4hhkQ=="
@@ -139,13 +138,12 @@ class BaseBroker:
     def stream_prices(self, symbols, callback): raise NotImplementedError
     def stop_stream(self): raise NotImplementedError
 
-# ---------- PAPER BROKER (built‑in, no real connection needed) ----------
+# ---------- PAPER BROKER (built‑in) ----------
 class PaperBroker(BaseBroker):
     def __init__(self, config, ui_queue):
         super().__init__(config, ui_queue)
-        self.name = "Paper (Built‑in Simulator)"
-    def connect(self):
-        return True
+        self.name = "Paper (Built‑in)"
+    def connect(self): return True
     def get_account(self):
         return {
             "equity": config.get("paper_balance", DEFAULT_PAPER_BALANCE),
@@ -155,16 +153,11 @@ class PaperBroker(BaseBroker):
         }
     def submit_order(self, symbol, qty, side, order_type="market", sl_pct=None, tp_pct=None, sl_price=None, tp_price=None):
         return True
-    def close_all_positions(self):
-        pass
-    def get_positions(self):
-        return {}
-    def get_market_status(self):
-        return True
-    def stream_prices(self, symbols, callback):
-        pass
-    def stop_stream(self):
-        pass
+    def close_all_positions(self): pass
+    def get_positions(self): return {}
+    def get_market_status(self): return True
+    def stream_prices(self, symbols, callback): pass
+    def stop_stream(self): pass
 register_broker("Paper (Built‑in)", PaperBroker)
 
 # ---------- ALPACA BROKER ----------
@@ -768,7 +761,6 @@ def get_config():
 @app.route('/api/config', methods=['POST'])
 def save_config():
     data = request.json
-    # Save broker info securely in the encrypted config
     if "alpaca" in data:
         data["alpaca"]["api_key"] = data["alpaca"]["api_key"].strip()
         data["alpaca"]["secret_key"] = data["alpaca"]["secret_key"].strip()
@@ -786,7 +778,7 @@ def start_bot():
     EncryptedConfigManager.save(state.config)
     if state.engine and state.engine.running:
         return jsonify({"status":"error","message":"Bot already running"})
-    # If paper trading is enabled, use the built‑in PaperBroker and bypass real broker connection
+    # Determine broker: paper sim uses built‑in, otherwise use selected or config broker
     if data.get("paper_sim"):
         broker_choice = "Paper (Built‑in)"
     else:
@@ -796,7 +788,7 @@ def start_bot():
         return jsonify({"status":"error","message":f"Broker '{broker_choice}' not supported"})
     state.broker_instance = broker_cls(state.config, state.ui_queue)
     if not state.broker_instance.connect():
-        return jsonify({"status":"error","message":"Broker connection failed"})
+        return jsonify({"status":"error","message":"Broker connection failed – check log for details."})
     state.engine = TradingEngine(state.ui_queue, state.config, state.broker_instance)
     state.engine.running = True; state.engine.start(); state.running = True
     return jsonify({"status":"ok","message":"Bot started"})
@@ -875,7 +867,7 @@ def validate_license_endpoint():
         state.config["license_valid"] = False
     return jsonify({"valid": is_valid, "message": message})
 
-# ---------- BACKTEST ROUTE (now includes indicator details) ----------
+# ---------- BACKTEST ROUTE ----------
 @app.route('/api/backtest', methods=['POST'])
 def backtest():
     data = request.json
@@ -900,7 +892,6 @@ def backtest():
             prev_s = SignalAnalyzer._safe_float(prev['EMA_slow'])
             sig, rationale = SignalAnalyzer.generate_signal(df.iloc[:i+1], prev_f, prev_s, config)
             if sig:
-                # include current indicator values for context
                 indi = {
                     "RSI": round(SignalAnalyzer._safe_float(curr.get('RSI',50)), 1),
                     "MACD": round(SignalAnalyzer._safe_float(curr.get('MACD',0)), 4),
@@ -925,7 +916,7 @@ def backtest():
     except Exception as e:
         return jsonify({"error": str(e)})
 
-# ---------- FRONTEND HTML (MARKET SESSION STATUS, BACKTEST TABLE, PAPER TAB) ----------
+# ---------- FRONTEND HTML (V1.0.39: DAY‑OF‑WEEK FIX, REFRESH BUTTON) ----------
 FRONTEND_HTML = r"""
 <!DOCTYPE html>
 <html>
@@ -1053,6 +1044,7 @@ FRONTEND_HTML = r"""
   <label><input type="checkbox" id="use-supertrend" checked> SuperTrend (10,3)</label>
   <label><input type="checkbox" id="use-stochastic" checked> Stochastic (14,3,3)</label>
   <button onclick="saveConfig()">💾 Save</button>
+  <button onclick="refreshTickers()" style="background:var(--card); border:1px solid var(--border); margin-top:5px;">🔄 Refresh Tickers</button>
   <button onclick="startBot()" style="background:var(--accent); color:#050505;">▶️ Start</button>
   <button onclick="stopBot()" style="background:#555;">⏹️ Stop</button>
   <button onclick="killSwitch()" class="danger">⚠️ Kill Switch</button>
@@ -1092,7 +1084,6 @@ FRONTEND_HTML = r"""
   <div id="tab-signals" class="tab-content"><div id="signals-list" style="overflow-y:auto;flex:1;"></div></div>
   <div id="tab-history" class="tab-content"><div id="history-list" style="overflow-y:auto;flex:1;"></div></div>
   <div id="tab-ema" class="tab-content"><div class="ema-monitor" id="ema-monitor">Loading...</div></div>
-  <!-- PAPER TRADE TAB -->
   <div id="tab-paper" class="tab-content">
     <div class="paper-controls">
       <h3 style="color:var(--accent);">🧪 Paper Simulator</h3>
@@ -1104,7 +1095,6 @@ FRONTEND_HTML = r"""
       <div id="paper-log" style="margin-top:15px; max-height:200px; overflow-y:auto; background:var(--card); padding:10px; border-radius:8px; font-size:0.85rem;"></div>
     </div>
   </div>
-  <!-- BACKTEST TAB -->
   <div id="tab-backtest" class="tab-content">
     <div style="padding:20px;">
       <button onclick="runBacktest()" style="background:var(--accent2); color:#fff; width:auto; padding:10px 20px;">🧪 Run Backtest</button>
@@ -1112,7 +1102,6 @@ FRONTEND_HTML = r"""
       <div id="backtest-results" class="backtest-results"></div>
     </div>
   </div>
-  <!-- HELP & OPS TAB (EXPANDED) -->
   <div id="tab-help" class="tab-content">
     <div class="help-content">
       <h3>📊 Indicator Win Rate Impact</h3>
@@ -1163,18 +1152,21 @@ let lastLoadedSymbol = '';
 // ── SYMBOL SCRUBBER ──
 function cleanSymbol(raw) { return raw.split(':')[0].trim().toUpperCase(); }
 
-// ── MARKET SESSION STATUS ──
+// ── MARKET SESSION STATUS (FIXED WITH DAY CHECK) ──
 function updateMarketSessions() {
   const now = new Date();
+  const day = now.getUTCDay(); // 0=Sun, 6=Sat
+  const isWeekend = (day === 0 || day === 6);
   const utc = now.getUTCHours() + now.getUTCMinutes()/60;
-  // Sydney (Pacific): UTC+10, open 22:00-06:00 UTC? Roughly 21:00-07:00 local? We'll use open 20:00-05:00 UTC daily.
-  const sydney = (utc >= 20 || utc < 5) ? 'session-open' : 'session-closed';
-  // Tokyo (Asian): UTC+9, open 00:00-06:00 UTC? Actually 23:00-05:00 UTC? We'll approximate open 23:00-05:00 UTC.
-  const tokyo = (utc >= 23 || utc < 5) ? 'session-open' : 'session-closed';
-  // London (European): UTC+0 (or +1 summer), typically 08:00-16:30 UTC.
-  const london = (utc >= 8 && utc < 16.5) ? 'session-open' : 'session-closed';
-  // New York (American): UTC-5, open 13:30-20:00 UTC? Actually 14:30-21:00 UTC? Simpler: 13:00-20:00 UTC.
-  const newyork = (utc >= 13 && utc < 20) ? 'session-open' : 'session-closed';
+  let sydney, tokyo, london, newyork;
+  if (isWeekend) {
+    sydney = tokyo = london = newyork = 'session-closed';
+  } else {
+    sydney = (utc >= 20 || utc < 5) ? 'session-open' : 'session-closed';
+    tokyo = (utc >= 23 || utc < 5) ? 'session-open' : 'session-closed';
+    london = (utc >= 8 && utc < 16.5) ? 'session-open' : 'session-closed';
+    newyork = (utc >= 13 && utc < 20) ? 'session-open' : 'session-closed';
+  }
   document.getElementById('sydney-dot').className = 'session-dot ' + sydney;
   document.getElementById('tokyo-dot').className = 'session-dot ' + tokyo;
   document.getElementById('london-dot').className = 'session-dot ' + london;
@@ -1197,7 +1189,7 @@ function switchTab(name, ev) {
 
 document.querySelectorAll('.tab-btn').forEach(btn => { btn.addEventListener('click', function(e) { switchTab(this.dataset.tab, e); }); });
 
-function playTradeSound() { /* ... unchanged ... */
+function playTradeSound() {
   try {
     const ctx = new (window.AudioContext || window.webkitAudioContext)();
     const osc = ctx.createOscillator(); const gain = ctx.createGain();
@@ -1302,6 +1294,20 @@ function loadChart(sym) {
   });
 }
 
+// ── REFRESH TICKERS (without restarting bot) ──
+async function refreshTickers() {
+  const r = await fetch('/api/config');
+  const cfg = await r.json();
+  config = cfg;
+  document.getElementById('tickers').value = cfg.tickers;
+  const rawTickers = cfg.tickers.split(',').map(s=>s.trim()).filter(s=>s);
+  if (rawTickers.length) {
+    setTickers(rawTickers);
+    if (currentTicker) loadChart(currentTicker);
+  }
+  showToast('Tickers refreshed', 'success');
+}
+
 // ── POLLING ──
 async function pollStatus() {
   try {
@@ -1401,7 +1407,7 @@ function buildConfig() {
     use_bracket: document.getElementById('use-bracket').checked,
     sl_percent: parseFloat(document.getElementById('sl-percent').value), tp_percent: parseFloat(document.getElementById('tp-percent').value),
     use_atr_stops: document.getElementById('use-atr-stops').checked,
-    paper_sim: false,  // separate for paper start
+    paper_sim: false,
     paper_balance: parseFloat(document.getElementById('paper-balance').value) || 100000,
     telegram: { token: document.getElementById('tg-token').value, chat_id: document.getElementById('tg-chat').value },
     use_rsi: document.getElementById('use-rsi').checked, use_macd: document.getElementById('use-macd').checked,
@@ -1428,7 +1434,7 @@ async function startPaperBot() {
   const cfg = buildConfig();
   cfg.paper_sim = true;
   cfg.paper_balance = parseFloat(document.getElementById('paper-balance').value) || 100000;
-  cfg.broker = "Paper (Built‑in)";  // ensure we use the built‑in broker
+  cfg.broker = "Paper (Built‑in)";
   config = cfg;
   await fetch('/api/config', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(cfg)});
   const r = await fetch('/api/start', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(cfg)});
@@ -1436,7 +1442,7 @@ async function startPaperBot() {
   showToast(d.message, d.status==='ok'?'success':'error');
 }
 
-// ── BACKTEST (detailed) ──
+// ── BACKTEST ──
 async function runBacktest() {
   const sym = currentTicker || 'AAPL';
   const interval = document.getElementById('timeframe').value;
