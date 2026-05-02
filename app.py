@@ -1,5 +1,6 @@
 """
-TraderMoney v1.0.36 – Icon & broker fixes, restored features, backtesting, paper simulator.
+TraderMoney v1.0.37 – Paper Trade dedicated tab, Backtest tab with results,
+expanded Help, enhanced broker error visibility, all features intact.
 """
 
 import json, os, queue, signal, sys, socket, threading, time, traceback, atexit, urllib.request
@@ -11,7 +12,7 @@ import webview
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 
-APP_VERSION = "1.0.36"
+APP_VERSION = "1.0.37"
 
 # ── Gumroad ──────────────────────────────────────────────
 GUMMROAD_PRODUCT_ID = "73otoT7rzJukCy-Lt4hhkQ=="          # your real product ID
@@ -68,6 +69,7 @@ STOCHASTIC_D_PERIOD = 3
 ATR_STOP_PERIOD = 14
 ATR_STOP_MULTIPLIER = 2.0
 ATR_TP_MULTIPLIER = 3.0
+DEFAULT_PAPER_BALANCE = 100000.0
 
 def _generate_key():
     from cryptography.fernet import Fernet
@@ -105,7 +107,8 @@ class AppState:
             "use_rsi":True, "use_macd":True, "use_vwap":True, "use_bollinger":True,
             "use_adx":True, "use_vol_confirm":True,
             "use_supertrend":True, "use_stochastic":True, "use_atr_stops":True,
-            "license_key":"", "license_valid":False
+            "license_key":"", "license_valid":False,
+            "paper_sim":False, "paper_balance":DEFAULT_PAPER_BALANCE
         }
         self.ui_queue = queue.Queue()
         self.engine = None
@@ -222,7 +225,6 @@ class IBKRBroker(BaseBroker):
         creds = self.config.get("ibkr", {})
         host = creds.get("host", "127.0.0.1")
         port = int(creds.get("port", 7497))
-        # basic check: host and port must be present
         if not host:
             self.ui_queue.put(("error", "IBKR host missing – please enter the TWS/Gateway address."))
             return False
@@ -559,14 +561,16 @@ class SignalAnalyzer:
         if config.get('use_vol_confirm',True) and vol_ratio<SignalAnalyzer.VOLUME_RATIO_THRESHOLD: return False
         return True
 
-# ---------- TRADING ENGINE (with paywall, per‑ticker qty, paper sim) ----------
+# ---------- TRADING ENGINE (with paper balance support) ----------
 class TradingEngine(threading.Thread):
     def __init__(self, ui_queue, config, broker):
         super().__init__(daemon=True); self.ui_queue, self.config, self.broker = ui_queue, config, broker
         self.running = False; self.symbols = []; self.positions = {}; self.prev_ema = {}; self.trade_history = []
         self.per_ticker_qty = {}
         self.is_licensed = config.get("license_valid", False)
-        self.paper_sim = config.get("paper_sim", False)   # simulate orders locally
+        self.paper_sim = config.get("paper_sim", False)
+        self.paper_balance = config.get("paper_balance", DEFAULT_PAPER_BALANCE)
+        self.paper_pl = 0.0
     def send_telegram(self, message):
         tg = self.config.get("telegram", {})
         token, chat = tg.get("token"), tg.get("chat_id")
@@ -636,9 +640,16 @@ class TradingEngine(threading.Thread):
         last_hist = 0
         while self.running:
             try:
-                acc = self.broker.get_account() if not self.paper_sim else {"equity": 100000, "pl": 0, "buying_power": 100000, "open_positions": 0}
-                if acc: self.ui_queue.put(("account", (acc["equity"],acc["pl"],acc["buying_power"],acc.get("open_positions",0))))
-                is_open = self.broker.get_market_status() if not self.paper_sim else True
+                if self.paper_sim:
+                    account_info = {"equity": self.paper_balance + self.paper_pl, "pl": self.paper_pl,
+                                    "buying_power": self.paper_balance + self.paper_pl, "open_positions": len(self.positions)}
+                    self.ui_queue.put(("account", (account_info["equity"], account_info["pl"],
+                                                   account_info["buying_power"], account_info["open_positions"])))
+                    is_open = True
+                else:
+                    acc = self.broker.get_account()
+                    if acc: self.ui_queue.put(("account", (acc["equity"],acc["pl"],acc["buying_power"],acc.get("open_positions",0))))
+                    is_open = self.broker.get_market_status()
                 self.ui_queue.put(("market", "🟢 Open" if is_open else "🔴 Closed"))
                 now = time.time()
                 if now - last_hist > 60:
@@ -669,6 +680,8 @@ class TradingEngine(threading.Thread):
                                     if signal_type == "BUY" and self.positions.get(sym,0)==0:
                                         try:
                                             if self.paper_sim:
+                                                cost = price * qty
+                                                self.paper_pl -= cost  # will be offset when sold
                                                 self.positions[sym] = qty
                                                 self.ui_queue.put(("order", (sym,"BUY",qty,price)))
                                                 self.send_telegram(f"✅ Paper Buy {qty} {sym} @ ${price:.2f}")
@@ -691,6 +704,8 @@ class TradingEngine(threading.Thread):
                                         pos_qty = self.positions[sym]
                                         try:
                                             if self.paper_sim:
+                                                revenue = price * pos_qty
+                                                self.paper_pl += revenue
                                                 self.positions[sym] = 0
                                                 self.ui_queue.put(("order", (sym,"SELL",pos_qty,price)))
                                                 self.send_telegram(f"✅ Paper Sell {pos_qty} {sym} @ ${price:.2f}")
@@ -861,7 +876,7 @@ def backtest():
     except Exception as e:
         return jsonify({"error": str(e)})
 
-# ---------- FRONTEND HTML (SOLAR ECLIPSE + PAPER SIM + BACKTEST + HELP) ----------
+# ---------- FRONTEND HTML (V1.0.37: PAPER TRADE + BACKTEST TABS, EXPANDED HELP) ----------
 FRONTEND_HTML = r"""
 <!DOCTYPE html>
 <html>
@@ -872,9 +887,9 @@ FRONTEND_HTML = r"""
     --bg: #050505;
     --card: #1A1A1A;
     --text: #e2e2e2;
-    --accent: #D4AF37;      /* Burnished Gold */
-    --accent2: #6A0DAD;     /* Royal Purple */
-    --danger: #B22222;      /* Firebrick Red */
+    --accent: #D4AF37;
+    --accent2: #6A0DAD;
+    --danger: #B22222;
     --border: #2A2E38;
     --btn: #D4AF37;
     --text-muted: #7a7d86;
@@ -921,6 +936,9 @@ FRONTEND_HTML = r"""
   .help-content h3 { color:var(--accent2); margin-top:0; } .help-content h4 { color:var(--text); margin:15px 0 5px; }
   .help-content p, .help-content ul { font-size:0.9rem; line-height:1.6; } .help-content ul { padding-left:20px; } .help-content li { margin-bottom:6px; } .help-content a { color:var(--accent); }
   .indicator-stats { background:var(--card); border-radius:8px; padding:15px; margin:10px 0; }
+  .paper-controls { padding:20px; }
+  .paper-controls label { color:var(--text); }
+  .backtest-results { overflow-y:auto; flex:1; padding:10px; }
 </style>
 <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
 </head>
@@ -941,7 +959,6 @@ FRONTEND_HTML = r"""
   <label>Broker</label>
   <select id="broker-select"><option>Alpaca</option><option>Interactive Brokers</option><option>Tradier</option><option>Binance</option><option>Bybit</option><option>OKX</option></select>
   <div id="cred-entries"></div>
-  <label><input type="checkbox" id="paper-sim"> Paper Simulator (no broker needed)</label>
   <label>Telegram Token (opt)</label>
   <input type="password" id="tg-token">
   <label>Telegram Chat ID</label>
@@ -979,7 +996,6 @@ FRONTEND_HTML = r"""
   <button onclick="killSwitch()" class="danger">⚠️ Kill Switch</button>
   <button onclick="resetDefaults()" style="background:var(--card); border:1px solid var(--border); margin-top:8px;">↺ Reset to Defaults</button>
   <button onclick="checkForUpdates()" style="margin-top:20px; background:var(--card); border:1px solid var(--border);">🔄 Check for Updates</button>
-  <button onclick="runBacktest()" style="background:var(--accent2); color:#fff; margin-top:10px;">🧪 Backtest Current Ticker</button>
 </div>
 
 <!-- MAIN CONTENT -->
@@ -989,6 +1005,8 @@ FRONTEND_HTML = r"""
     <button class="tab-btn" data-tab="signals">Signals</button>
     <button class="tab-btn" data-tab="history">History</button>
     <button class="tab-btn" data-tab="ema">EMA Monitor</button>
+    <button class="tab-btn" data-tab="paper">Paper Trade</button>
+    <button class="tab-btn" data-tab="backtest">Backtest</button>
     <button class="tab-btn" data-tab="help">Help & Ops</button>
   </div>
   <div id="tab-charts" class="tab-content active">
@@ -1004,6 +1022,27 @@ FRONTEND_HTML = r"""
   <div id="tab-signals" class="tab-content"><div id="signals-list" style="overflow-y:auto;flex:1;"></div></div>
   <div id="tab-history" class="tab-content"><div id="history-list" style="overflow-y:auto;flex:1;"></div></div>
   <div id="tab-ema" class="tab-content"><div class="ema-monitor" id="ema-monitor">Loading...</div></div>
+  <!-- PAPER TRADE TAB -->
+  <div id="tab-paper" class="tab-content">
+    <div class="paper-controls">
+      <h3 style="color:var(--accent);">🧪 Paper Simulator</h3>
+      <label>Virtual Balance ($)</label>
+      <input type="number" id="paper-balance" value="100000" step="1000" style="width:200px;">
+      <p style="color:var(--text-muted);">Paper trading simulates orders without a real broker. Use this to test strategies risk‑free.</p>
+      <button onclick="startPaperBot()" style="background:var(--accent); color:#050505; width:auto; padding:10px 20px;">▶️ Start Paper Bot</button>
+      <button onclick="stopBot()" style="background:#555; width:auto; padding:10px 20px; margin-left:10px;">⏹️ Stop</button>
+      <div id="paper-log" style="margin-top:15px; max-height:200px; overflow-y:auto; background:var(--card); padding:10px; border-radius:8px; font-size:0.85rem;"></div>
+    </div>
+  </div>
+  <!-- BACKTEST TAB -->
+  <div id="tab-backtest" class="tab-content">
+    <div style="padding:20px;">
+      <button onclick="runBacktest()" style="background:var(--accent2); color:#fff; width:auto; padding:10px 20px;">🧪 Run Backtest</button>
+      <p style="color:var(--text-muted);">Runs the current indicator settings on historical data for the selected ticker.</p>
+      <div id="backtest-results" class="backtest-results"></div>
+    </div>
+  </div>
+  <!-- HELP & OPS TAB (EXPANDED) -->
   <div id="tab-help" class="tab-content">
     <div class="help-content">
       <h3>📊 Indicator Win Rate Impact</h3>
@@ -1021,13 +1060,25 @@ FRONTEND_HTML = r"""
       </div>
       <h4>🔑 License</h4>
       <p>Purchase a license from our <a href="https://shafayrich.gumroad.com/l/ykaoov" target="_blank">Gumroad store</a>. Paste the key in the sidebar and click <strong>Validate</strong>. A valid license unlocks Auto Trade, unlimited tickers, all 9 indicators, ATR stops, Telegram alerts, and all 6 brokers.</p>
-      <h4>🏦 Broker Guides</h4>
+      <h4>🧪 Paper Trading</h4>
+      <p>The <strong>Paper Trade</strong> tab lets you simulate trades with virtual money. Set your starting balance and start the paper bot. It will execute signals just like real trading, but without risking capital. Use it to test strategies before going live.</p>
+      <h4>🧠 Backtesting</h4>
+      <p>Click <strong>Backtest</strong> in the sidebar or the Backtest tab to run your current indicator configuration on historical data. The results show you what signals would have fired, helping you evaluate strategy performance without waiting for live trades.</p>
+      <h4>🏦 Broker Connection Guides</h4>
       <p><strong>Alpaca:</strong> API Key + Secret from <a href="https://alpaca.markets/" target="_blank">alpaca.markets</a>. Check "Paper Trading" for paper account.</p>
       <p><strong>Interactive Brokers:</strong> TWS/Gateway required. Host 127.0.0.1, port 7497 (paper) / 7496 (live), Client ID 1. Enable API connections in TWS settings.</p>
       <p><strong>Tradier:</strong> Access token + account ID from <a href="https://tradier.com/" target="_blank">tradier.com</a>.</p>
       <p><strong>Binance:</strong> API Key + Secret from <a href="https://www.binance.com/" target="_blank">binance.com</a>. Check "Testnet" for paper trading.</p>
       <p><strong>Bybit:</strong> API Key + Secret from <a href="https://www.bybit.com/" target="_blank">bybit.com</a>. Check "Testnet".</p>
       <p><strong>OKX:</strong> API Key + Secret + Passphrase from <a href="https://www.okx.com/" target="_blank">okx.com</a>. Check "Demo Trading".</p>
+      <h4>🛡️ Risk Management</h4>
+      <p>Enable <strong>Enable SL/TP</strong> to attach a Stop‑Loss and Take‑Profit to every market order. If <strong>ATR‑Based Dynamic Stops</strong> is on, the stop and target will be calculated adaptively: Stop = Entry – 2×ATR, Target = Entry + 3×ATR. Otherwise, the fixed percentages (2% SL / 4% TP) are used.</p>
+      <h4>🔧 Troubleshooting</h4>
+      <ul>
+        <li><strong>No signals?</strong> Too many filters may be enabled. Try toggling SuperTrend or Stochastic off.</li>
+        <li><strong>Broker connection error?</strong> Double‑check API keys and ensure your broker account is active.</li>
+        <li><strong>Charts not loading?</strong> Wait a few seconds or switch tickers. The TradingView library loads asynchronously.</li>
+      </ul>
     </div>
   </div>
   <div id="log"></div>
@@ -1103,7 +1154,7 @@ function initUI(cfg) {
   document.getElementById('sl-percent').value = cfg.sl_percent || 2;
   document.getElementById('tp-percent').value = cfg.tp_percent || 4;
   document.getElementById('use-atr-stops').checked = cfg.use_atr_stops !== false;
-  document.getElementById('paper-sim').checked = cfg.paper_sim || false;
+  document.getElementById('paper-balance').value = cfg.paper_balance || 100000;
   document.getElementById('use-rsi').checked = cfg.use_rsi !== false;
   document.getElementById('use-macd').checked = cfg.use_macd !== false;
   document.getElementById('use-vwap').checked = cfg.use_vwap !== false;
@@ -1204,7 +1255,7 @@ const defaultConfig = {
   timeframe: "1m", telegram: {},
   use_rsi: true, use_macd: true, use_vwap: true, use_bollinger: true,
   use_adx: true, use_vol_confirm: true, use_supertrend: true,
-  use_stochastic: true, use_atr_stops: true, paper_sim: false,
+  use_stochastic: true, use_atr_stops: true, paper_sim: false, paper_balance: 100000,
   license_key: "", license_valid: false
 };
 
@@ -1258,7 +1309,8 @@ function buildConfig() {
     use_bracket: document.getElementById('use-bracket').checked,
     sl_percent: parseFloat(document.getElementById('sl-percent').value), tp_percent: parseFloat(document.getElementById('tp-percent').value),
     use_atr_stops: document.getElementById('use-atr-stops').checked,
-    paper_sim: document.getElementById('paper-sim').checked,
+    paper_sim: false,  // controlled separately via Paper tab
+    paper_balance: parseFloat(document.getElementById('paper-balance').value) || 100000,
     telegram: { token: document.getElementById('tg-token').value, chat_id: document.getElementById('tg-chat').value },
     use_rsi: document.getElementById('use-rsi').checked, use_macd: document.getElementById('use-macd').checked,
     use_vwap: document.getElementById('use-vwap').checked, use_bollinger: document.getElementById('use-bollinger').checked,
@@ -1279,19 +1331,42 @@ async function startBot() { config = buildConfig(); const r = await fetch('/api/
 async function stopBot() { await fetch('/api/stop', {method:'POST'}); showToast('Bot stopped','success'); }
 async function killSwitch() { await fetch('/api/kill', {method:'POST'}); showToast('Kill switch activated','success'); }
 
+// ── PAPER BOT START ──
+async function startPaperBot() {
+  const cfg = buildConfig();
+  cfg.paper_sim = true;
+  cfg.paper_balance = parseFloat(document.getElementById('paper-balance').value) || 100000;
+  config = cfg;
+  // Save the config with paper mode enabled
+  await fetch('/api/config', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(cfg)});
+  // Start the bot (the same /api/start will use the updated config)
+  const r = await fetch('/api/start', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(cfg)});
+  const d = await r.json();
+  showToast(d.message, d.status==='ok'?'success':'error');
+}
+
+// ── BACKTEST ──
 async function runBacktest() {
   const sym = currentTicker || 'AAPL';
   const interval = document.getElementById('timeframe').value;
   const days = 5;
   showToast('Running backtest on ' + sym + '...', 'info');
+  switchTab('backtest');
   try {
     const r = await fetch('/api/backtest', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ symbol: sym, interval, days, config: buildConfig() }) });
     const data = await r.json();
     if (data.error) { showToast('Backtest error: ' + data.error, 'error'); return; }
     const signals = data.signals || [];
-    showToast('Found ' + signals.length + ' signals in last ' + days + ' days', 'success');
-    // Show signals in the console for now
-    console.log('Backtest results:', signals);
+    const resDiv = document.getElementById('backtest-results');
+    if (signals.length === 0) {
+      resDiv.innerHTML = '<p style="color:var(--text-muted);">No signals found in the last ' + days + ' days.</p>';
+      return;
+    }
+    let html = '<h4 style="color:var(--accent);">Signals (' + signals.length + ' found)</h4>';
+    signals.forEach(s => {
+      html += `<div class="signal-item"><span>${s.time}</span><span class="${s.signal==='BUY'?'buy':'sell'}">${s.signal}</span><span>$${s.price}</span><span>${s.rationale}</span></div>`;
+    });
+    resDiv.innerHTML = html;
   } catch(e) { showToast('Backtest failed', 'error'); }
 }
 
