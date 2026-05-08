@@ -1,6 +1,5 @@
 """
-TraderMoney v1.0.49 – Compact ticker tabs, backtest fix, quiet stream errors,
-custom select arrows, reset logs, Telegram support link.
+TraderMoney v1.0.50 – Dark inputs, custom backtest days, loading states, error feedback, empty placeholders.
 """
 
 import asyncio
@@ -25,7 +24,7 @@ import webview
 from flask import Flask, jsonify, request, send_file
 from flask_cors import CORS
 
-APP_VERSION = "1.0.49"
+APP_VERSION = "1.0.50"
 
 # ── Gumroad ─────────────────────────────────────────────────
 GUMMROAD_PRODUCT_ID = "73otoT7rzJukCy-Lt4hhkQ=="
@@ -226,33 +225,8 @@ class EncryptedConfigManager:
 
 
 # ── Global state ────────────────────────────────────────────
-DEFAULT_EMAS = (9, 50)
-DEFAULT_TICKERS = "AAPL"
-DEFAULT_QUANTITY = 1
-DEFAULT_TIMEFRAME = "1m"
-ADX_TREND_THRESHOLD = 20
-VOLUME_RATIO_THRESHOLD = 1.5
-SUPERTREND_ATR_PERIOD = 10
-SUPERTREND_FACTOR = 3.0
-STOCHASTIC_K_PERIOD = 14
-STOCHASTIC_D_PERIOD = 3
-ATR_STOP_PERIOD = 14
-ATR_STOP_MULTIPLIER = 2.0
-ATR_TP_MULTIPLIER = 3.0
-DEFAULT_PAPER_BALANCE = 100000.0
-
-
-def _generate_key():
-    from cryptography.fernet import Fernet
-
-    if not os.path.exists(KEY_FILE):
-        key = Fernet.generate_key()
-        with open(KEY_FILE, "wb") as f:
-            f.write(key)
-    else:
-        with open(KEY_FILE, "rb") as f:
-            key = f.read()
-    return key
+ATR_STOP_MULT = 2.0
+ATR_TP_MULT = 3.0
 
 
 class AppState:
@@ -502,8 +476,7 @@ class AlpacaBroker(BaseBroker):
                         self._emit_log(f"Stream retry: {e}")
                         time.sleep(5)
             except ImportError:
-                # silently skip – don't show error toast
-                pass
+                pass  # silent
             except Exception as e:
                 self._emit_log(f"Alpaca stream warning: {e}")
 
@@ -1299,7 +1272,7 @@ class OKXBroker(BaseBroker):
                     if not self._stop_stream:
                         time.sleep(3)
             except ImportError:
-                pass  # silent
+                pass
             except Exception as e:
                 self._emit_log(f"OKX stream warning: {e}")
 
@@ -1904,7 +1877,7 @@ def api_backtest():
         return jsonify({"error": str(e)})
 
 
-# ── FRONTEND HTML (v49: compact tickers, backtest fix, arrow selects, dark inputs) ──
+# ── FRONTEND HTML (v50: dark inputs, custom backtest days, loading states, empty placeholders, no support) ──
 FRONTEND_HTML = r"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1914,7 +1887,7 @@ FRONTEND_HTML = r"""<!DOCTYPE html>
 :root{--bg:#050505;--card:#1A1A1A;--text:#e2e2e2;--accent:#D4AF37;--accent2:#6A0DAD;--danger:#B22222;--border:#2A2E38;--muted:#7a7d86;--sw:268px;}
 ::-webkit-scrollbar{width:4px;}::-webkit-scrollbar-track{background:#080808;}::-webkit-scrollbar-thumb{background:#111;}
 *{box-sizing:border-box;}
-body{margin:0;font-family:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',sans-serif;background:var(--bg);color:var(--text);display:flex;height:100vh;overflow:hidden;}
+body{margin:0;font-family:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',sans-serif;background:var(--bg);color:var(--text);display:flex;height:100vh;overflow:hidden;color-scheme:dark;}
 #sb{width:var(--sw);background:#0b0b0b;border-right:1px solid var(--border);display:flex;flex-direction:column;overflow-y:auto;overflow-x:hidden;padding:16px 13px;flex-shrink:0;}
 #sb h2{color:var(--accent);margin:0 0 10px;font-size:1.15rem;letter-spacing:.3px;}
 .lbadge{display:inline-block;padding:1px 8px;border-radius:11px;font-size:.67rem;margin-left:5px;vertical-align:middle;}
@@ -1931,11 +1904,14 @@ select{
     color:var(--text);border:1px solid #333;padding:6px 30px 6px 8px;border-radius:8px;width:100%;font-size:.86rem;transition:border .2s;cursor:pointer;
 }
 select:focus{border-color:var(--accent);outline:none;}
-input[type="text"],input[type="password"],input[type="number"]{
+/* all text inputs dark */
+input[type="text"],input[type="password"],input[type="number"],textarea{
     background:#1A1A1A;color:var(--text);border:1px solid #252525;padding:6px 8px;border-radius:6px;width:100%;font-size:.86rem;transition:border .2s;
+    -webkit-appearance:none;appearance:none;
 }
-input:focus{border-color:var(--accent);outline:none;}
-input:-webkit-autofill,input:-webkit-autofill:hover,input:-webkit-autofill:focus{
+input:focus,textarea:focus{border-color:var(--accent);outline:none;}
+/* force dark autofill */
+input:-webkit-autofill,input:-webkit-autofill:hover,input:-webkit-autofill:focus,textarea:-webkit-autofill,textarea:-webkit-autofill:hover,textarea:-webkit-autofill:focus{
     -webkit-text-fill-color:var(--text);-webkit-box-shadow:0 0 0 30px #1A1A1A inset;box-shadow:0 0 0 30px #1A1A1A inset;
 }
 button{cursor:pointer;background:var(--accent);color:#050505;border:none;padding:8px 10px;border-radius:6px;width:100%;font-weight:600;margin-top:9px;font-size:.86rem;}
@@ -1961,15 +1937,12 @@ hr{border-color:var(--border);margin:11px 0;}
 .so{background:#00c9b1;}.sc{background:var(--danger);}
 /* compact ticker tabs */
 #tkbar{display:flex;flex-wrap:nowrap;overflow-x:auto;background:var(--card);border-bottom:1px solid var(--border);}
-.tkbtn{
-    padding:6px 10px;background:transparent;border:none;color:var(--text);cursor:pointer;white-space:nowrap;
-    border-bottom:2px solid transparent;transition:.2s;font-size:.84rem;flex-shrink:0;
-    max-width:140px;overflow:hidden;text-overflow:ellipsis;
-}
+.tkbtn{padding:6px 10px;background:transparent;border:none;color:var(--text);cursor:pointer;white-space:nowrap;border-bottom:2px solid transparent;transition:.2s;font-size:.84rem;flex-shrink:0;max-width:140px;overflow:hidden;text-overflow:ellipsis;}
 .tkbtn.active{border-bottom-color:var(--accent2);color:var(--accent);font-weight:700;}
 #chart-c{flex:1;min-height:0;}
 .sitem{display:flex;justify-content:space-between;padding:8px 11px;border-bottom:1px solid var(--border);font-size:.83rem;}
 .buy{color:var(--accent);}.sell{color:var(--danger);}
+.empty-placeholder{color:var(--muted);text-align:center;padding:20px;font-size:.9rem;}
 /* larger toasts */
 #toasts{position:fixed;top:16px;right:16px;z-index:9999;display:flex;flex-direction:column;gap:6px;}
 .toast{padding:14px 22px;border-radius:10px;font-weight:500;box-shadow:0 4px 14px rgba(0,0,0,.4);animation:si .25s ease;max-width:420px;font-size:1rem;border:1px solid #333;}
@@ -2027,12 +2000,16 @@ hr{border-color:var(--border);margin:11px 0;}
   <label><span class="cb"><input type="checkbox" id="ustoch" checked><span class="cm"></span></span> Stochastic</label>
   <button onclick="saveConfig()">Save</button>
   <button class="ghost" onclick="refreshTickers()">Refresh Tickers</button>
-  <button style="background:var(--accent);color:#050505;" onclick="startBot()">&#9654; Start Bot</button>
-  <button class="ghost" onclick="stopBot()">&#9632; Stop Bot</button>
+  <button style="background:var(--accent);color:#050505;" id="startBtn" onclick="startBot()">&#9654; Start Bot</button>
+  <button class="ghost" id="stopBtn" onclick="stopBot()">&#9632; Stop Bot</button>
   <button class="danger" onclick="killSwitch()">&#9650; Kill Switch</button>
   <button class="ghost" style="margin-top:5px" onclick="resetDef()">&#8634; Reset</button>
   <button class="ghost" style="margin-top:16px" onclick="checkUpdate()">Check Updates</button>
   <button class="purple" style="margin-top:7px" onclick="runBT()">&#9874; Backtest All</button>
+  <div style="margin-top:9px;font-size:.77rem;color:var(--muted);">
+    <span>Backtest days:</span>
+    <input type="number" id="btDays" value="5" min="1" max="365" style="width:80px;display:inline-block;margin-left:6px;">
+  </div>
 </div>
 <div id="main">
   <div class="tab-bar" id="tabbar">
@@ -2061,8 +2038,14 @@ hr{border-color:var(--border);margin:11px 0;}
     </div>
     <div id="chart-c"></div>
   </div>
-  <div id="tab-signals" class="tab"><div id="siglist" style="overflow-y:auto;flex:1;"></div></div>
-  <div id="tab-history" class="tab"><div id="histlist" style="overflow-y:auto;flex:1;"></div></div>
+  <div id="tab-signals" class="tab">
+    <div id="siglist" style="overflow-y:auto;flex:1;"></div>
+    <div id="sigempty" class="empty-placeholder" style="display:none;">No signals yet.</div>
+  </div>
+  <div id="tab-history" class="tab">
+    <div id="histlist" style="overflow-y:auto;flex:1;"></div>
+    <div id="hstempty" class="empty-placeholder" style="display:none;">No orders yet.</div>
+  </div>
   <div id="tab-backtest" class="tab">
     <div class="btp">
       <div style="padding:9px"><button class="purple" style="width:auto;padding:8px 18px" onclick="runBT()">&#9874; Run Backtest on All Tickers</button></div>
@@ -2101,8 +2084,6 @@ hr{border-color:var(--border);margin:11px 0;}
       <p><b>Why no signals?</b> Too many filters enabled. Try toggling SuperTrend or Stochastic off.</p>
       <p><b>How to test safely?</b> Use Paper Trading with a virtual balance, or Signal Only mode.</p>
       <p><b>What timeframe is best?</b> 1m-5m for scalping, 15m-1h for swing, 1d for long term.</p>
-      <h4>Contact Support</h4>
-      <p>Message us on Telegram: <a href="https://t.me/your_support_bot" target="_blank" style="color:var(--accent);">@YourSupportBot</a></p>
     </div>
   </div>
   <div id="logbar"></div>
@@ -2133,12 +2114,35 @@ function setTickers(list){allTickers=list;let bar=$('tkbar');bar.innerHTML='';li
 function updTk(){document.querySelectorAll('.tkbtn').forEach(b=>b.classList.toggle('active',cs(b.textContent)===curSym));}
 function loadChart(sym){let s=cs(sym);if(s===lastChart)return;lastChart=s;$('chart-c').innerHTML='';if(typeof TradingView==='undefined'){setTimeout(()=>loadChart(s),150);return;}chart=new TradingView.widget({autosize:true,symbol:s,interval:'1',timezone:'Etc/UTC',theme:'Dark',style:'1',locale:'en',toolbar_bg:'#0A0C0F',enable_publishing:false,allow_symbol_change:true,container_id:'chart-c'});curSym=s;}
 async function loadConfig(){try{let r=await fetch('/api/config');cfg=await r.json();initUI(cfg);if(cfg.license_key&&cfg.license_key.trim())validateLicense();loadHistory();}catch(e){toast('Config load failed','error');}}
-function loadHistory(){fetch('/api/status').then(r=>r.json()).then(d=>{let sl=$('siglist');sl.innerHTML='';(d.signals||[]).forEach(s=>{let div=document.createElement('div');div.className='sitem '+(s.signal==='BUY'?'buy':'sell');div.innerHTML=`<span>${s.time} <b>${s.signal}</b> ${s.symbol} @ $${s.price}</span><span>${s.rationale||''}</span>`;sl.appendChild(div);});let hl=$('histlist');hl.innerHTML='';(d.orders||[]).forEach(o=>{let div=document.createElement('div');div.className='sitem '+(o.action==='BUY'?'buy':'sell');div.innerHTML=`<span>${o.time} <b>${o.action}</b> ${o.qty} ${o.symbol} @ $${o.price}</span>`;hl.appendChild(div);});}).catch(()=>{});}
+function loadHistory(){fetch('/api/status').then(r=>r.json()).then(d=>{
+  let sl=$('siglist'),se=$('sigempty'),hl=$('histlist'),he=$('hstempty');
+  sl.innerHTML='';se.style.display='none';hl.innerHTML='';he.style.display='none';
+  let hasSigs=false,hasOrds=false;
+  (d.signals||[]).forEach(s=>{hasSigs=true;let div=document.createElement('div');div.className='sitem '+(s.signal==='BUY'?'buy':'sell');div.innerHTML=`<span>${s.time} <b>${s.signal}</b> ${s.symbol} @ $${s.price}</span><span>${s.rationale||''}</span>`;sl.appendChild(div);});
+  if(!hasSigs)se.style.display='block';
+  (d.orders||[]).forEach(o=>{hasOrds=true;let div=document.createElement('div');div.className='sitem '+(o.action==='BUY'?'buy':'sell');div.innerHTML=`<span>${o.time} <b>${o.action}</b> ${o.qty} ${o.symbol} @ $${o.price}</span>`;hl.appendChild(div);});
+  if(!hasOrds)he.style.display='block';
+}).catch(()=>{});}
 async function saveConfig(){cfg=buildCfg();await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg)});toast('Config saved','success');}
 const DEF={broker:'Alpaca',tickers:'AAPL',mode:'signal',direction:'both',use_default_qty:true,quantity:1,emas:[9,50],use_bracket:false,sl_percent:2,tp_percent:4,timeframe:'1m',telegram:{},use_rsi:true,use_macd:true,use_vwap:true,use_bollinger:true,use_adx:true,use_vol_confirm:true,use_supertrend:true,use_stochastic:true,use_atr_stops:true,license_key:'',license_valid:false};
 function resetDef(){cfg=JSON.parse(JSON.stringify(DEF));initUI(cfg);saveConfig();toast('Reset to defaults','success');}
-async function startBot(){cfg=buildCfg();let r=await fetch('/api/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg)});let d=await r.json();toast(d.message,d.status==='ok'?'success':'error');if(d.status!=='ok'){$('bstatus').textContent=d.message;$('bstatus').className='err';}}
-async function stopBot(){await fetch('/api/stop',{method:'POST'});toast('Bot stopped','success');}
+async function startBot(){
+  let btn=$('startBtn');
+  btn.textContent='Starting...'; btn.disabled=true;
+  cfg=buildCfg();
+  let r=await fetch('/api/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg)});
+  let d=await r.json();
+  btn.textContent='\u25B6 Start Bot'; btn.disabled=false;
+  toast(d.message,d.status==='ok'?'success':'error');
+  if(d.status!=='ok'){$('bstatus').textContent=d.message;$('bstatus').className='err';}
+}
+async function stopBot(){
+  let btn=$('stopBtn');
+  btn.textContent='Stopping...'; btn.disabled=true;
+  await fetch('/api/stop',{method:'POST'});
+  btn.textContent='\u25A0 Stop Bot'; btn.disabled=false;
+  toast('Bot stopped','success');
+}
 async function killSwitch(){await fetch('/api/kill',{method:'POST'});toast('Kill switch activated','error');}
 async function refreshTickers(){let r=await fetch('/api/config'),c=await r.json();sv('tickers',c.tickers);let raw=c.tickers.split(',').map(s=>s.trim()).filter(s=>s);if(raw.length){setTickers(raw);loadChart(cs(raw[0]));}toast('Tickers refreshed','success');}
 async function validateLicense(){let key=gv('lickey').trim();if(!key){toast('Enter license key','error');return;}let r=await fetch('/api/validate_license',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({license_key:key})});let d=await r.json();if(d.valid){licValid=true;$('lbadge').textContent='PRO';$('lbadge').className='lbadge lv';toast('Pro unlocked','success');}else{licValid=false;$('lbadge').textContent='FREE';$('lbadge').className='lbadge li';toast(d.message,'error');}}
@@ -2146,9 +2150,44 @@ async function checkUpdate(){try{let d=await(await fetch('/api/update')).json();
 setTimeout(checkUpdate,2500);
 async function pollBS(){try{let d=await(await fetch('/api/broker_status')).json();let bs=$('bstatus');if(d.message){bs.textContent=d.message;bs.className=d.message.startsWith('Connected')?'ok':'err';}}catch(e){}}
 setInterval(pollBS,2500);pollBS();
-async function pollStatus(){try{let d=await(await fetch('/api/status')).json();$('v-eq').textContent='$'+fmt(d.equity);$('v-bp').textContent='$'+fmt(d.buying_power);let pct=d.equity?(d.pl/d.equity*100):0;$('v-pl').innerHTML=`<span style="color:${pct>=0?'var(--accent)':'var(--danger)'}">${pct>=0?'+':''}${pct.toFixed(2)}%</span>`;$('v-pos').textContent=d.open_positions;let sl=$('siglist');sl.innerHTML='';(d.signals||[]).forEach(s=>{let div=document.createElement('div');div.className='sitem '+(s.signal==='BUY'?'buy':'sell');div.innerHTML=`<span>${s.time} <b>${s.signal}</b> ${s.symbol} @ $${s.price}</span><span>${s.rationale||''}</span>`;sl.appendChild(div);});let hl=$('histlist');hl.innerHTML='';(d.orders||[]).forEach(o=>{let div=document.createElement('div');div.className='sitem '+(o.action==='BUY'?'buy':'sell');div.innerHTML=`<span>${o.time} <b>${o.action}</b> ${o.qty} ${o.symbol} @ $${o.price}</span>`;hl.appendChild(div);});$('logbar').innerHTML=(d.log||[]).join('<br>');}catch(e){}}
+async function pollStatus(){try{let d=await(await fetch('/api/status')).json();$('v-eq').textContent='$'+fmt(d.equity);$('v-bp').textContent='$'+fmt(d.buying_power);let pct=d.equity?(d.pl/d.equity*100):0;$('v-pl').innerHTML=`<span style="color:${pct>=0?'var(--accent)':'var(--danger)'}">${pct>=0?'+':''}${pct.toFixed(2)}%</span>`;$('v-pos').textContent=d.open_positions;
+  let sl=$('siglist'),se=$('sigempty'),hl=$('histlist'),he=$('hstempty');
+  sl.innerHTML='';se.style.display='none';hl.innerHTML='';he.style.display='none';
+  let hasSigs=false,hasOrds=false;
+  (d.signals||[]).forEach(s=>{hasSigs=true;let div=document.createElement('div');div.className='sitem '+(s.signal==='BUY'?'buy':'sell');div.innerHTML=`<span>${s.time} <b>${s.signal}</b> ${s.symbol} @ $${s.price}</span><span>${s.rationale||''}</span>`;sl.appendChild(div);});
+  if(!hasSigs)se.style.display='block';
+  (d.orders||[]).forEach(o=>{hasOrds=true;let div=document.createElement('div');div.className='sitem '+(o.action==='BUY'?'buy':'sell');div.innerHTML=`<span>${o.time} <b>${o.action}</b> ${o.qty} ${o.symbol} @ $${o.price}</span>`;hl.appendChild(div);});
+  if(!hasOrds)he.style.display='block';
+  $('logbar').innerHTML=(d.log||[]).join('<br>');
+}catch(e){}}
 setInterval(pollStatus,1500);
-async function runBT(){toast('Running backtest...','info');$('btres').innerHTML='<p class="ph">Loading backtest...</p>';document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.tbtn').forEach(x=>x.classList.remove('active'));$('tab-backtest').classList.add('active');document.querySelector('[data-tab="backtest"]').classList.add('active');try{let r=await fetch('/api/backtest',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({config:buildCfg(),days:5})});let data=await r.json();if(data.error){toast('Backtest error: '+data.error,'error');$('btres').innerHTML='<p class="ph">Error: '+data.error+'</p>';return;}let html='',total=0;for(let sym in data.results){let info=data.results[sym];html+=`<h4 style="color:var(--accent)">${sym}</h4>`;if(info.error){html+=`<p style="color:var(--danger)">Error: ${info.error}</p>`;continue;}let sigs=info.signals||[];total+=sigs.length;if(!sigs.length){html+='<p style="color:var(--muted)">No signals found.</p>';continue;}html+=`<table class="bttbl"><tr><th>Time</th><th>Sig</th><th>Price</th><th>RSI</th><th>MACD</th><th>MACDsig</th><th>VWAP</th><th>BB L/U</th><th>ADX</th><th>VolR</th><th>Trend</th><th>%K/%D</th><th>Confidence</th></tr>`;sigs.forEach(s=>{let i=s.indicators;html+=`<tr><td>${s.time.slice(11,19)||s.time.slice(0,19)}</td><td class="${s.signal==='BUY'?'buy':'sell'}">${s.signal}</td><td>$${s.price}</td><td>${i.RSI}</td><td>${i.MACD}</td><td>${i.MACD_signal}</td><td>$${i.VWAP}</td><td>${i.BB_lower}/${i.BB_upper}</td><td>${i.ADX}</td><td>${i.Vol_ratio}×</td><td>${i.Supertrend_trend===1?'Bull':'Bear'}</td><td>${i.Stoch_K}/${i.Stoch_D}</td><td>${(s.confidence*100).toFixed(0)}%</td></tr>`;});html+='</table>';}if(total===0)html='<p class="ph">No signals generated. Try toggling indicators or extending backtest period.</p>';$('btres').innerHTML=html;}catch(e){toast('Backtest failed: '+e,'error');}}
+async function runBT(){
+  let days=parseInt($('btDays').value)||5;
+  toast('Running backtest ('+days+' days)...','info');
+  $('btres').innerHTML='<p class="ph">Loading backtest...</p>';
+  document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
+  document.querySelectorAll('.tbtn').forEach(x=>x.classList.remove('active'));
+  $('tab-backtest').classList.add('active');
+  document.querySelector('[data-tab="backtest"]').classList.add('active');
+  try{
+    let r=await fetch('/api/backtest',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({config:buildCfg(),days:days})});
+    let data=await r.json();
+    if(data.error){toast('Backtest error: '+data.error,'error');$('btres').innerHTML='<p class="ph">Error: '+data.error+'</p>';return;}
+    let html='',total=0;
+    for(let sym in data.results){
+      let info=data.results[sym];
+      html+=`<h4 style="color:var(--accent)">${sym}</h4>`;
+      if(info.error){html+=`<p style="color:var(--danger)">Error: ${info.error}</p>`;continue;}
+      let sigs=info.signals||[];total+=sigs.length;
+      if(!sigs.length){html+='<p style="color:var(--muted)">No signals found.</p>';continue;}
+      html+=`<table class="bttbl"><tr><th>Time</th><th>Sig</th><th>Price</th><th>RSI</th><th>MACD</th><th>MACDsig</th><th>VWAP</th><th>BB L/U</th><th>ADX</th><th>VolR</th><th>Trend</th><th>%K/%D</th><th>Confidence</th></tr>`;
+      sigs.forEach(s=>{let i=s.indicators;html+=`<tr><td>${s.time.slice(11,19)||s.time.slice(0,19)}</td><td class="${s.signal==='BUY'?'buy':'sell'}">${s.signal}</td><td>$${s.price}</td><td>${i.RSI}</td><td>${i.MACD}</td><td>${i.MACD_signal}</td><td>$${i.VWAP}</td><td>${i.BB_lower}/${i.BB_upper}</td><td>${i.ADX}</td><td>${i.Vol_ratio}×</td><td>${i.Supertrend_trend===1?'Bull':'Bear'}</td><td>${i.Stoch_K}/${i.Stoch_D}</td><td>${(s.confidence*100).toFixed(0)}%</td></tr>`;});
+      html+='</table>';
+    }
+    if(total===0)html='<p class="ph">No signals generated. Try toggling indicators or extending backtest period.</p>';
+    $('btres').innerHTML=html;
+  }catch(e){toast('Backtest failed: '+e,'error');}
+}
 updateCreds();loadConfig();
 </script>
 </body>
