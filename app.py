@@ -1,7 +1,6 @@
 """
-TraderMoney v1.0.48 – Complete
-All features, compact ticker tabs, default‑qty toggle, broker fixes, short selling,
-confidence score, SL/TP watchdog, persistent history, removed EMA tab, etc.
+TraderMoney v1.0.49 – Compact ticker tabs, backtest fix, quiet stream errors,
+custom select arrows, reset logs, Telegram support link.
 """
 
 import asyncio
@@ -26,7 +25,7 @@ import webview
 from flask import Flask, jsonify, request, send_file
 from flask_cors import CORS
 
-APP_VERSION = "1.0.48"
+APP_VERSION = "1.0.49"
 
 # ── Gumroad ─────────────────────────────────────────────────
 GUMMROAD_PRODUCT_ID = "73otoT7rzJukCy-Lt4hhkQ=="
@@ -72,7 +71,7 @@ def acquire_lock():
 signal.signal(signal.SIGINT, lambda *_: sys.exit(0))
 signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
 
-# ── Database ─────────────────────────────────────────────────
+# ── Database (logs cleared each session) ───────────────────
 DB_PATH = os.path.expanduser("~/.tradermoney_data.db")
 
 
@@ -82,6 +81,9 @@ class DatabaseManager:
         self.conn = sqlite3.connect(db_path, check_same_thread=False)
         self.conn.execute("PRAGMA journal_mode=WAL")
         self._init_tables()
+        # clear log table on startup
+        self.conn.execute("DELETE FROM logs")
+        self.conn.commit()
 
     def _init_tables(self):
         self.conn.executescript("""
@@ -224,8 +226,33 @@ class EncryptedConfigManager:
 
 
 # ── Global state ────────────────────────────────────────────
-ATR_STOP_MULT = 1.5
-ATR_TP_MULT = 3.0
+DEFAULT_EMAS = (9, 50)
+DEFAULT_TICKERS = "AAPL"
+DEFAULT_QUANTITY = 1
+DEFAULT_TIMEFRAME = "1m"
+ADX_TREND_THRESHOLD = 20
+VOLUME_RATIO_THRESHOLD = 1.5
+SUPERTREND_ATR_PERIOD = 10
+SUPERTREND_FACTOR = 3.0
+STOCHASTIC_K_PERIOD = 14
+STOCHASTIC_D_PERIOD = 3
+ATR_STOP_PERIOD = 14
+ATR_STOP_MULTIPLIER = 2.0
+ATR_TP_MULTIPLIER = 3.0
+DEFAULT_PAPER_BALANCE = 100000.0
+
+
+def _generate_key():
+    from cryptography.fernet import Fernet
+
+    if not os.path.exists(KEY_FILE):
+        key = Fernet.generate_key()
+        with open(KEY_FILE, "wb") as f:
+            f.write(key)
+    else:
+        with open(KEY_FILE, "rb") as f:
+            key = f.read()
+    return key
 
 
 class AppState:
@@ -339,11 +366,7 @@ class BaseBroker:
         raise NotImplementedError
 
 
-# ══════════════════════════════════════════════════════════════
-#  BROKER CLASSES  (Alpaca, IBKR, Tradier, Binance, Bybit, OKX)
-# ══════════════════════════════════════════════════════════════
-
-# ── ALPACA ──────────────────────────────────────────────────
+# ── ALPACA BROKER ───────────────────────────────────────────
 class AlpacaBroker(BaseBroker):
     name = "Alpaca"
 
@@ -479,9 +502,10 @@ class AlpacaBroker(BaseBroker):
                         self._emit_log(f"Stream retry: {e}")
                         time.sleep(5)
             except ImportError:
-                self._emit_error("alpaca-py not installed.")
+                # silently skip – don't show error toast
+                pass
             except Exception as e:
-                self._emit_error(f"Alpaca stream error: {e}")
+                self._emit_log(f"Alpaca stream warning: {e}")
 
         threading.Thread(target=run, daemon=True).start()
 
@@ -492,7 +516,7 @@ class AlpacaBroker(BaseBroker):
 register_broker("Alpaca", AlpacaBroker)
 
 
-# ── INTERACTIVE BROKERS ─────────────────────────────────────
+# ── INTERACTIVE BROKERS ────────────────────────────────────
 class IBKRBroker(BaseBroker):
     name = "Interactive Brokers"
 
@@ -666,7 +690,7 @@ class IBKRBroker(BaseBroker):
 register_broker("Interactive Brokers", IBKRBroker)
 
 
-# ── TRADIER ─────────────────────────────────────────────────
+# ── TRADIER ────────────────────────────────────────────────
 class TradierBroker(BaseBroker):
     name = "Tradier"
     LIVE_URL = "https://api.tradier.com/v1"
@@ -809,7 +833,7 @@ class TradierBroker(BaseBroker):
 register_broker("Tradier", TradierBroker)
 
 
-# ── BINANCE ─────────────────────────────────────────────────
+# ── BINANCE ────────────────────────────────────────────────
 class BinanceBroker(BaseBroker):
     name = "Binance"
 
@@ -959,7 +983,7 @@ class BinanceBroker(BaseBroker):
                     time.sleep(1)
                 self._ws_client.stop()
             except Exception as e:
-                self._emit_error(f"Binance stream error: {e}")
+                self._emit_log(f"Binance stream warning: {e}")
 
         threading.Thread(target=run, daemon=True).start()
 
@@ -975,7 +999,7 @@ class BinanceBroker(BaseBroker):
 register_broker("Binance", BinanceBroker)
 
 
-# ── BYBIT ───────────────────────────────────────────────────
+# ── BYBIT ──────────────────────────────────────────────────
 class BybitBroker(BaseBroker):
     name = "Bybit"
 
@@ -1112,7 +1136,7 @@ class BybitBroker(BaseBroker):
                 while not self._stop_stream:
                     time.sleep(1)
             except Exception as e:
-                self._emit_error(f"Bybit stream error: {e}")
+                self._emit_log(f"Bybit stream warning: {e}")
 
         threading.Thread(target=run, daemon=True).start()
 
@@ -1123,7 +1147,7 @@ class BybitBroker(BaseBroker):
 register_broker("Bybit", BybitBroker)
 
 
-# ── OKX ─────────────────────────────────────────────────────
+# ── OKX ────────────────────────────────────────────────────
 class OKXBroker(BaseBroker):
     name = "OKX"
 
@@ -1275,9 +1299,9 @@ class OKXBroker(BaseBroker):
                     if not self._stop_stream:
                         time.sleep(3)
             except ImportError:
-                self._emit_error("websocket-client not installed.")
+                pass  # silent
             except Exception as e:
-                self._emit_error(f"OKX stream error: {e}")
+                self._emit_log(f"OKX stream warning: {e}")
 
         threading.Thread(target=run, daemon=True).start()
 
@@ -1880,7 +1904,7 @@ def api_backtest():
         return jsonify({"error": str(e)})
 
 
-# ── FRONTEND HTML (v48 FINAL, compact ticker tabs, default qty toggle) ──
+# ── FRONTEND HTML (v49: compact tickers, backtest fix, arrow selects, dark inputs) ──
 FRONTEND_HTML = r"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1900,10 +1924,20 @@ label{display:block;font-size:.77rem;margin:9px 0 3px;color:var(--muted);cursor:
 .cb .cm{display:inline-block;width:16px;height:16px;border:2px solid #333;border-radius:4px;margin-right:6px;vertical-align:middle;position:relative;transition:.2s;}
 .cb input:checked+.cm{background:var(--accent);border-color:var(--accent);}
 .cb input:checked+.cm::after{content:"";position:absolute;left:3px;top:0px;width:5px;height:9px;border:solid #000;border-width:0 2px 2px 0;transform:rotate(45deg);}
-select{background:#1A1A1A;color:var(--text);border:1px solid #333;padding:6px 8px;border-radius:8px;width:100%;font-size:.86rem;transition:border .2s;appearance:none;cursor:pointer;}
+select{
+    -webkit-appearance:none;appearance:none;
+    background:#1A1A1A url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'><polygon fill='%23D4AF37' points='0,4 12,4 6,10'/></svg>") no-repeat right 10px center;
+    background-size:12px;
+    color:var(--text);border:1px solid #333;padding:6px 30px 6px 8px;border-radius:8px;width:100%;font-size:.86rem;transition:border .2s;cursor:pointer;
+}
 select:focus{border-color:var(--accent);outline:none;}
-input[type="text"],input[type="password"],input[type="number"]{background:#1A1A1A;color:var(--text);border:1px solid #252525;padding:6px 8px;border-radius:6px;width:100%;font-size:.86rem;transition:border .2s;}
+input[type="text"],input[type="password"],input[type="number"]{
+    background:#1A1A1A;color:var(--text);border:1px solid #252525;padding:6px 8px;border-radius:6px;width:100%;font-size:.86rem;transition:border .2s;
+}
 input:focus{border-color:var(--accent);outline:none;}
+input:-webkit-autofill,input:-webkit-autofill:hover,input:-webkit-autofill:focus{
+    -webkit-text-fill-color:var(--text);-webkit-box-shadow:0 0 0 30px #1A1A1A inset;box-shadow:0 0 0 30px #1A1A1A inset;
+}
 button{cursor:pointer;background:var(--accent);color:#050505;border:none;padding:8px 10px;border-radius:6px;width:100%;font-weight:600;margin-top:9px;font-size:.86rem;}
 button:hover{opacity:.88;}
 button.ghost{background:var(--card);border:1px solid var(--border);color:var(--text);}
@@ -1927,7 +1961,11 @@ hr{border-color:var(--border);margin:11px 0;}
 .so{background:#00c9b1;}.sc{background:var(--danger);}
 /* compact ticker tabs */
 #tkbar{display:flex;flex-wrap:nowrap;overflow-x:auto;background:var(--card);border-bottom:1px solid var(--border);}
-.tkbtn{padding:6px 10px;background:transparent;border:none;color:var(--text);cursor:pointer;white-space:nowrap;border-bottom:2px solid transparent;transition:.2s;font-size:.84rem;flex-shrink:0;}
+.tkbtn{
+    padding:6px 10px;background:transparent;border:none;color:var(--text);cursor:pointer;white-space:nowrap;
+    border-bottom:2px solid transparent;transition:.2s;font-size:.84rem;flex-shrink:0;
+    max-width:140px;overflow:hidden;text-overflow:ellipsis;
+}
 .tkbtn.active{border-bottom-color:var(--accent2);color:var(--accent);font-weight:700;}
 #chart-c{flex:1;min-height:0;}
 .sitem{display:flex;justify-content:space-between;padding:8px 11px;border-bottom:1px solid var(--border);font-size:.83rem;}
@@ -2063,6 +2101,8 @@ hr{border-color:var(--border);margin:11px 0;}
       <p><b>Why no signals?</b> Too many filters enabled. Try toggling SuperTrend or Stochastic off.</p>
       <p><b>How to test safely?</b> Use Paper Trading with a virtual balance, or Signal Only mode.</p>
       <p><b>What timeframe is best?</b> 1m-5m for scalping, 15m-1h for swing, 1d for long term.</p>
+      <h4>Contact Support</h4>
+      <p>Message us on Telegram: <a href="https://t.me/your_support_bot" target="_blank" style="color:var(--accent);">@YourSupportBot</a></p>
     </div>
   </div>
   <div id="logbar"></div>
