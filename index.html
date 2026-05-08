@@ -3,142 +3,119 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TraderMoney – AI-Powered Trading Terminal</title>
+    <title>TraderMoney – Institutional Trading Terminal</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%23151515'/><text x='50%25' y='55%25' dominant-baseline='middle' text-anchor='middle' fill='%2300C9B1' font-family='system-ui, -apple-system, sans-serif' font-weight='800' font-size='36' letter-spacing='-1'>TM$</text></svg>">
     <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap');
+        :root {
+            --bg-color: #0c0c0c;
+            --text-main: #f5f5f7;
+            --text-muted: #86868b;
+            --card-bg: #151515;
+            --accent: #00C9B1;
+        }
         body {
-            background: #050505;
-            color: #e2e2e2;
-            font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            min-height: 100vh;
-            padding: 2rem;
-            text-align: center;
+            font-family: 'Inter', sans-serif;
+            margin: 0; padding: 0;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            line-height: 1.6;
+            -webkit-font-smoothing: antialiased;
+            display: flex; flex-direction: column; align-items: center; padding: 40px 20px;
         }
-        h1 {
-            font-size: 3rem;
-            color: #D4AF37;
-            margin-bottom: 0.5rem;
-        }
-        .tagline {
-            font-size: 1.3rem;
-            color: #7a7d86;
-            margin-bottom: 2.5rem;
-            max-width: 600px;
-        }
-        .buttons {
-            display: flex;
-            gap: 1rem;
-            flex-wrap: wrap;
-            justify-content: center;
-            margin-bottom: 3rem;
-        }
-        .btn {
-            display: inline-block;
-            padding: 14px 28px;
-            border-radius: 8px;
-            font-weight: 700;
-            text-decoration: none;
-            font-size: 1rem;
-            transition: opacity 0.2s;
-        }
-        .btn:hover { opacity: 0.85; }
-        .btn-gold {
-            background: #D4AF37;
-            color: #050505;
-        }
-        .btn-outline {
-            background: transparent;
-            border: 2px solid #D4AF37;
-            color: #D4AF37;
-        }
-        .gumroad-button {
-            /* Gumroad button will be styled by their JS */
-        }
-        .features {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-            gap: 1.5rem;
-            max-width: 900px;
-            margin: 2rem auto;
-        }
-        .feature {
-            background: #1A1A1A;
-            padding: 2rem 1.5rem;
-            border-radius: 12px;
-            text-align: left;
-        }
-        .feature h3 {
-            color: #D4AF37;
-            margin-bottom: 0.7rem;
-        }
-        .feature p {
-            color: #a0a0a0;
-            line-height: 1.5;
-        }
-        footer {
-            margin-top: 4rem;
-            color: #444;
-        }
+        .container { max-width: 800px; text-align: center; }
+        h1 { font-size: 2.8rem; color: #00C9B1; margin-bottom: 8px; }
+        .tagline { font-size: 1.2rem; color: #aaa; margin-bottom: 25px; }
+        .version-badge { display:inline-block; background:#1A1F26; border:1px solid #2A3440; border-radius:12px; padding:5px 15px; font-size:0.9rem; margin-bottom:30px; }
+        .version-badge span { color:#00C9B1; font-weight:bold; }
+        .buttons { display:flex; justify-content:center; gap:20px; flex-wrap:wrap; margin:30px 0; }
+        .btn { padding:14px 28px; border-radius:8px; text-decoration:none; font-weight:600; font-size:1rem; transition:0.2s; }
+        .btn-mac { background:#333; color:white; border:1px solid #555; }
+        .btn-mac-intel { background:#2d5a3d; color:white; border:1px solid #3d7a4d; }
+        .btn-win { background:#0078D7; color:white; }
+        .btn-buy { background:#00C9B1; color:#000; font-weight:700; font-size:1.1rem; padding:16px 36px; margin-top:10px; }
+        .btn:hover { opacity:0.9; transform:translateY(-2px); }
+        .features { display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:20px; text-align:left; margin:40px 0; }
+        .feature-box { background:#11151A; border:1px solid #2A3440; border-radius:12px; padding:20px; }
+        .feature-box h3 { font-size:1.1rem; color:#00C9B1; margin-bottom:8px; }
+        .feature-box p { font-size:0.9rem; color:#aaa; line-height:1.5; }
+        .pricing { display:flex; justify-content:center; gap:20px; flex-wrap:wrap; margin:40px 0; }
+        .pricing-card { background:#11151A; border:1px solid #2A3440; border-radius:12px; padding:30px; width:260px; text-align:left; }
+        .pricing-card h3 { font-size:1.3rem; color:#00C9B1; }
+        .pricing-card .price { font-size:2rem; font-weight:bold; margin:15px 0; }
+        .pricing-card ul { list-style:none; padding:0; color:#aaa; font-size:0.9rem; margin:20px 0; }
+        .pricing-card ul li { margin:8px 0; }
+        .pricing-card ul li::before { content:'✅ '; color:#00C9B1; }
+        .pricing-card .btn { display:block; text-align:center; margin-top:20px; }
+        footer { margin-top:60px; font-size:0.8rem; color:#6B7280; }
+        footer a { color:#00C9B1; text-decoration:none; }
     </style>
+    <!-- Gumroad overlay script -->
     <script src="https://gumroad.com/js/gumroad.js"></script>
 </head>
 <body>
-    <h1>TraderMoney</h1>
-    <p class="tagline">Automated trading across 6 brokers · 9‑indicator AI pipeline · Pro‑level tools for serious traders</p>
+    <div class="container">
+        <h1>💸 TraderMoney</h1>
+        <p class="tagline">Institutional‑grade trading terminal for macOS & Windows</p>
+        <div class="version-badge">Latest version: <span id="version-number">...</span></div>
 
-    <div class="buttons">
-        <a class="btn btn-gold"
-           href="https://github.com/shafayrich/tradermoney/releases/latest/download/TraderMoney-macOS-intel.dmg">
-           Download for macOS Intel
-        </a>
-        <a class="btn btn-gold"
-           href="https://github.com/shafayrich/tradermoney/releases/latest/download/TraderMoney-macOS-silicon.dmg">
-           Download for macOS Silicon
-        </a>
-        <a class="btn btn-gold"
-           href="https://github.com/shafayrich/tradermoney/releases/latest/download/TraderMoney-Windows.exe">
-           Download for Windows
-        </a>
+        <!-- Download buttons -->
+        <div class="buttons">
+            <a href="https://github.com/shafayrich/tradermoney/releases/latest/download/TraderMoney_macOS_AppleSilicon.tar.gz" class="btn btn-mac">⬇️ Mac (Apple Silicon)</a>
+            <a href="https://github.com/shafayrich/tradermoney/releases/latest/download/TraderMoney_macOS_Intel.tar.gz" class="btn btn-mac-intel">⬇️ Mac (Intel)</a>
+            <a href="https://github.com/shafayrich/tradermoney/releases/latest/download/TraderMoney_Windows.zip" class="btn btn-win">⬇️ Windows</a>
+        </div>
+
+        <!-- Gumroad purchase (opens overlay inside page) -->
+        <a href="https://shafayrich.gumroad.com/l/ykaoov" class="btn btn-buy">🔑 Get Pro License</a>
+
+        <div class="pricing">
+            <div class="pricing-card">
+                <h3>Community (Free)</h3>
+                <div class="price">$0</div>
+                <ul>
+                    <li>Signal‑Only mode</li>
+                    <li>1 ticker</li>
+                    <li>Core indicators (RSI, MACD, VWAP, Bollinger)</li>
+                    <li>Alpaca broker only</li>
+                </ul>
+                <a href="https://github.com/shafayrich/tradermoney/releases/latest" class="btn btn-mac">Download</a>
+            </div>
+            <div class="pricing-card" style="border-color:#00C9B1;">
+                <h3>Pro</h3>
+                <div class="price">$25/mo</div>
+                <ul>
+                    <li>Auto Trade mode</li>
+                    <li>Unlimited tickers</li>
+                    <li>All 9 indicators</li>
+                    <li>All 6 brokers</li>
+                    <li>ATR Dynamic Stops</li>
+                    <li>Telegram alerts</li>
+                    <li>Short selling</li>
+                </ul>
+                <a href="https://shafayrich.gumroad.com/l/ykaoov" class="btn btn-buy">Subscribe</a>
+            </div>
+        </div>
+
+        <div class="features">
+            <div class="feature-box"><h3>📊 TradingView Charts</h3><p>Live interactive charts with symbol search and multiple timeframes.</p></div>
+            <div class="feature-box"><h3>🏦 6 Built‑in Brokers</h3><p>Alpaca, IBKR, Tradier, Binance, Bybit, OKX – with paper & live trading.</p></div>
+            <div class="feature-box"><h3>🧠 Smart Signals</h3><p>EMA crossover with RSI, MACD, VWAP, Bollinger, ADX, SuperTrend, Stochastic & volume confirmation.</p></div>
+            <div class="feature-box"><h3>🛡️ Risk Management</h3><p>Bracket orders, ATR‑based dynamic stops, kill switch, and Telegram alerts.</p></div>
+            <div class="feature-box"><h3>🔒 Secure</h3><p>Credentials encrypted locally. No cloud storage of your keys.</p></div>
+            <div class="feature-box"><h3>🔄 Auto‑Updates</h3><p>Get notified inside the app when a new version is available.</p></div>
+        </div>
+
+        <footer>
+            © 2026 TraderMoney – Built by Shafay Rich. <a href="https://github.com/shafayrich/tradermoney">GitHub</a>
+        </footer>
     </div>
 
-    <!-- Gumroad Pro CTA -->
-    <div style="margin: 2rem 0;">
-        <a class="gumroad-button" href="https://shafayrich.gumroad.com/l/ykaoov">Get Pro</a>
-    </div>
-
-    <div class="features">
-        <div class="feature">
-            <h3>📈 Multi‑Broker</h3>
-            <p>Alpaca, Interactive Brokers, Tradier, Binance, Bybit, OKX – paper & live.</p>
-        </div>
-        <div class="feature">
-            <h3>🧠 AI Signal Engine</h3>
-            <p>9 confirmable indicators with confidence scoring. Only high‑probability trades.</p>
-        </div>
-        <div class="feature">
-            <h3>⚡ Advanced Risk</h3>
-            <p>Bracket orders, ATR‑based stops, kill switch, SL/TP watchdog.</p>
-        </div>
-        <div class="feature">
-            <h3>📊 Full Backtesting</h3>
-            <p>Detailed per‑ticker backtests with custom days and indicator breakdowns.</p>
-        </div>
-        <div class="feature">
-            <h3>📱 Real‑time Alerts</h3>
-            <p>Desktop notifications + Telegram for every signal and fill.</p>
-        </div>
-        <div class="feature">
-            <h3>🔒 Encrypted Config</h3>
-            <p>Fernet‑encrypted safe‑write config – your keys never leak.</p>
-        </div>
-    </div>
-
-    <footer>
-        <p>© 2025 TraderMoney | Build 1.0.51</p>
-    </footer>
+    <script>
+        fetch('https://raw.githubusercontent.com/shafayrich/tradermoney/main/version.json')
+          .then(r => r.json())
+          .then(data => { document.getElementById('version-number').textContent = 'v' + data.latest_version; })
+          .catch(() => { document.getElementById('version-number').textContent = '—'; });
+    </script>
 </body>
 </html>
