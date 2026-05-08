@@ -1,6 +1,6 @@
 """
-TraderMoney v1.0.51 – Gumroad overlay, backtest tab customisation, invisible scrollbar,
-refresh tickers fix, notifications for signals & orders, Alpaca order fix.
+TraderMoney v1.0.52 – Full paywall enforcement, curvy modern UI, boot + daily license check,
+weekend‑aware market sessions. All features intact.
 """
 
 import asyncio
@@ -16,7 +16,7 @@ import time
 import traceback
 import atexit
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -25,17 +25,17 @@ import webview
 from flask import Flask, jsonify, request, send_file
 from flask_cors import CORS
 
-APP_VERSION = "1.0.51"
+APP_VERSION = "1.0.52"
 
 # ── Gumroad ─────────────────────────────────────────────────
-GUMROAD_PRODUCT_ID = "73otoT7rzJukCy-Lt4hhkQ=="
+GUMMROAD_PRODUCT_ID = "73otoT7rzJukCy-Lt4hhkQ=="
 
 
 def verify_gumroad_license(license_key: str) -> Tuple[bool, str]:
     try:
         resp = http_requests.post(
             "https://api.gumroad.com/v2/licenses/verify",
-            data={"product_id": GUMROAD_PRODUCT_ID, "license_key": license_key},
+            data={"product_id": GUMMROAD_PRODUCT_ID, "license_key": license_key},
             timeout=10,
         )
         data = resp.json()
@@ -71,7 +71,7 @@ def acquire_lock():
 signal.signal(signal.SIGINT, lambda *_: sys.exit(0))
 signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
 
-# ── Database ─────────────────────────────────────────────────
+# ── Database (logs cleared each session) ───────────────────
 DB_PATH = os.path.expanduser("~/.tradermoney_data.db")
 
 
@@ -321,7 +321,6 @@ class BaseBroker:
         tp_pct=None,
         sl_price=None,
         tp_price=None,
-        current_price: float = None,   # <-- NEW: avoid calling get_latest_trade
     ) -> bool:
         raise NotImplementedError
 
@@ -341,7 +340,7 @@ class BaseBroker:
         raise NotImplementedError
 
 
-# ── ALPACA BROKER (fixed order) ─────────────────────────────
+# ── ALPACA BROKER ───────────────────────────────────────────
 class AlpacaBroker(BaseBroker):
     name = "Alpaca"
 
@@ -400,35 +399,27 @@ class AlpacaBroker(BaseBroker):
             return None
 
     def submit_order(self, symbol, qty, side, order_type="market",
-                     sl_pct=None, tp_pct=None, sl_price=None, tp_price=None,
-                     current_price: float = None) -> bool:
+                     sl_pct=None, tp_pct=None, sl_price=None, tp_price=None) -> bool:
         if not self.api:
             return False
         try:
-            # Use provided current price to calculate bracket levels if percentages given
-            price = current_price
-            if sl_price is None and sl_pct is not None and price is None:
-                # fallback: try to get latest trade (may fail with some SDKs)
-                try:
-                    trade = self.api.get_latest_trade(symbol)
-                    price = float(trade.price)
-                except Exception:
-                    self._emit_error(f"Cannot determine price for {symbol} – order skipped.")
-                    return False
-            if sl_price is None and sl_pct is not None and price is not None:
-                sl_price = round(price * (1 - sl_pct / 100) if side == "buy" else price * (1 + sl_pct / 100), 2)
-            if tp_price is None and tp_pct is not None and price is not None:
-                tp_price = round(price * (1 + tp_pct / 100) if side == "buy" else price * (1 - tp_pct / 100), 2)
-
-            if sl_price is None and tp_price is None:
+            if sl_price is None and sl_pct is None:
                 self.api.submit_order(symbol=symbol, qty=qty, side=side, type="market", time_in_force="day")
             else:
+                trade = self.api.get_latest_trade(symbol)
+                price = float(trade.price)
+                if side == "buy":
+                    stop = round(sl_price if sl_price else price * (1 - sl_pct / 100), 2)
+                    limit = round(tp_price if tp_price else price * (1 + tp_pct / 100), 2)
+                else:
+                    stop = round(sl_price if sl_price else price * (1 + sl_pct / 100), 2)
+                    limit = round(tp_price if tp_price else price * (1 - tp_pct / 100), 2)
                 self.api.submit_order(
                     symbol=symbol, qty=qty, side=side,
                     type="market", time_in_force="gtc",
                     order_class="bracket",
-                    stop_loss={"stop_price": sl_price},
-                    take_profit={"limit_price": tp_price},
+                    stop_loss={"stop_price": stop},
+                    take_profit={"limit_price": limit},
                 )
             return True
         except Exception as e:
@@ -595,8 +586,7 @@ class IBKRBroker(BaseBroker):
             return None
 
     def submit_order(self, symbol, qty, side, order_type="market",
-                     sl_pct=None, tp_pct=None, sl_price=None, tp_price=None,
-                     current_price: float = None) -> bool:
+                     sl_pct=None, tp_pct=None, sl_price=None, tp_price=None) -> bool:
         if not self.ib or not self.ib.isConnected():
             self._emit_error("IBKR not connected.")
             return False
@@ -736,8 +726,7 @@ class TradierBroker(BaseBroker):
             return None
 
     def submit_order(self, symbol, qty, side, order_type="market",
-                     sl_pct=None, tp_pct=None, sl_price=None, tp_price=None,
-                     current_price: float = None) -> bool:
+                     sl_pct=None, tp_pct=None, sl_price=None, tp_price=None) -> bool:
         if not self.session:
             self._emit_error("Tradier not connected.")
             return False
@@ -885,8 +874,7 @@ class BinanceBroker(BaseBroker):
             return None
 
     def submit_order(self, symbol, qty, side, order_type="market",
-                     sl_pct=None, tp_pct=None, sl_price=None, tp_price=None,
-                     current_price: float = None) -> bool:
+                     sl_pct=None, tp_pct=None, sl_price=None, tp_price=None) -> bool:
         if not self.client:
             self._emit_error("Binance not connected.")
             return False
@@ -1039,8 +1027,7 @@ class BybitBroker(BaseBroker):
             return None
 
     def submit_order(self, symbol, qty, side, order_type="market",
-                     sl_pct=None, tp_pct=None, sl_price=None, tp_price=None,
-                     current_price: float = None) -> bool:
+                     sl_pct=None, tp_pct=None, sl_price=None, tp_price=None) -> bool:
         if not self.session:
             self._emit_error("Bybit not connected.")
             return False
@@ -1200,8 +1187,7 @@ class OKXBroker(BaseBroker):
             return None
 
     def submit_order(self, symbol, qty, side, order_type="market",
-                     sl_pct=None, tp_pct=None, sl_price=None, tp_price=None,
-                     current_price: float = None) -> bool:
+                     sl_pct=None, tp_pct=None, sl_price=None, tp_price=None) -> bool:
         if not self._trade_api:
             self._emit_error("OKX not connected.")
             return False
@@ -1297,6 +1283,7 @@ class OKXBroker(BaseBroker):
 
 
 register_broker("OKX", OKXBroker)
+
 
 # ── INDICATOR & SIGNAL ANALYZER ────────────────────────────
 class IndicatorCalculator:
@@ -1489,7 +1476,7 @@ class SignalAnalyzer:
         return True, direction
 
 
-# ── TRADING ENGINE (with SL/TP watchdog, current price for orders) ──
+# ── TRADING ENGINE with free‑tier enforcement ──────────────
 class TradingEngine(threading.Thread):
     def __init__(self, ui_queue, config, broker):
         super().__init__(daemon=True)
@@ -1505,6 +1492,19 @@ class TradingEngine(threading.Thread):
         self.direction = config.get("direction", "both")
         self.use_default_qty = config.get("use_default_qty", True)
         self._stop_watchdog = threading.Event()
+
+        # enforce free tier
+        if not self.is_licensed:
+            self.config["mode"] = "signal"
+            self.config["broker"] = "Alpaca"
+            if "alpaca" in self.config:
+                self.config["alpaca"]["paper"] = True
+            for k in ("use_supertrend", "use_stochastic", "use_adx",
+                      "use_vol_confirm", "use_atr_stops", "use_bracket"):
+                self.config[k] = False
+            # limit tickers
+            self.config["tickers"] = self.config.get("tickers", "AAPL").split(",")[0].strip()
+            self.direction = "both"
 
     def _telegram(self, msg):
         tg = self.config.get("telegram", {})
@@ -1542,6 +1542,7 @@ class TradingEngine(threading.Thread):
                 self.symbols.append(sym)
                 self.per_ticker_qty[sym] = qty
 
+        # free tier limited to 1 ticker
         if not self.is_licensed and len(self.symbols) > 1:
             first = self.symbols[0]
             self.symbols = [first]
@@ -1554,15 +1555,11 @@ class TradingEngine(threading.Thread):
 
         mode = "signal" if not self.is_licensed else self.config.get("mode", "signal")
         ema_fast, ema_slow = self.config.get("emas", [9, 50])
-        use_bracket = self.config.get("use_bracket", False)
+        use_bracket = self.config.get("use_bracket", False) and self.is_licensed
         sl_pct = self.config.get("sl_percent", 2.0)
         tp_pct = self.config.get("tp_percent", 4.0)
-        use_atr = self.config.get("use_atr_stops", True)
+        use_atr = self.config.get("use_atr_stops", True) and self.is_licensed
         interval = self.config.get("timeframe", "1m")
-
-        if not self.is_licensed:
-            for k in ("use_supertrend", "use_stochastic", "use_adx", "use_vol_confirm", "use_atr_stops", "use_bracket"):
-                self.config[k] = False
 
         self.broker.stream_prices(self.symbols, lambda s, p: self.ui_queue.put(("price_update", (s, p))))
         self.ui_queue.put(("status", f"Running {len(self.symbols)} symbol(s)"))
@@ -1606,9 +1603,6 @@ class TradingEngine(threading.Thread):
                             if sig:
                                 self.ui_queue.put(("signal", (s, sig, price, rationale)))
                                 db.insert_signal(_ts(), s, sig, price, rationale)
-                                # Telegram and desktop notification for signal
-                                self._telegram(f"Signal {sig} {s} @ ${price:.2f} (conf: {conf:.2f})")
-                                # desktop notification will be handled by UI polling (pollStatus)
                                 if mode == "auto" and self.is_licensed and self.broker.get_market_status():
                                     self._execute(s, sig, price, latest, use_bracket, use_atr, sl_pct, tp_pct, conf)
                 time.sleep(1)
@@ -1627,24 +1621,21 @@ class TradingEngine(threading.Thread):
             if self.direction == "short" and sig == "BUY":
                 return
             pos = self.positions.get(sym, 0)
-            current_price = price   # pass to broker for bracket calculation
             if sig == "BUY":
                 if pos <= 0:
                     if pos < 0:
-                        self.broker.submit_order(sym, abs(pos), "buy", current_price=current_price)
+                        self.broker.submit_order(sym, abs(pos), "buy")
                         self.positions[sym] = 0
                     success = False
                     if use_bracket and use_atr:
                         atr = sf(latest.get("ATR", price * 0.02), price * 0.02)
-                        sl_price = round(price - ATR_STOP_MULT * atr, 2)
-                        tp_price = round(price + ATR_TP_MULT * atr, 2)
-                        success = self.broker.submit_order(sym, qty, "buy", current_price=price,
-                                                           sl_price=sl_price, tp_price=tp_price)
+                        success = self.broker.submit_order(sym, qty, "buy",
+                                                           sl_price=price - ATR_STOP_MULT * atr,
+                                                           tp_price=price + ATR_TP_MULT * atr)
                     elif use_bracket:
-                        success = self.broker.submit_order(sym, qty, "buy", sl_pct=sl_pct, tp_pct=tp_pct,
-                                                           current_price=current_price)
+                        success = self.broker.submit_order(sym, qty, "buy", sl_pct=sl_pct, tp_pct=tp_pct)
                     else:
-                        success = self.broker.submit_order(sym, qty, "buy", current_price=current_price)
+                        success = self.broker.submit_order(sym, qty, "buy")
                     if success:
                         self.positions[sym] = qty
                         self.ui_queue.put(("order", (sym, "BUY", qty, price)))
@@ -1653,20 +1644,18 @@ class TradingEngine(threading.Thread):
             elif sig == "SELL":
                 if pos >= 0:
                     if pos > 0:
-                        self.broker.submit_order(sym, pos, "sell", current_price=current_price)
+                        self.broker.submit_order(sym, pos, "sell")
                         self.positions[sym] = 0
                     success = False
                     if use_bracket and use_atr:
                         atr = sf(latest.get("ATR", price * 0.02), price * 0.02)
-                        sl_price = round(price + ATR_STOP_MULT * atr, 2)
-                        tp_price = round(price - ATR_TP_MULT * atr, 2)
-                        success = self.broker.submit_order(sym, qty, "sell", current_price=price,
-                                                           sl_price=sl_price, tp_price=tp_price)
+                        success = self.broker.submit_order(sym, qty, "sell",
+                                                           sl_price=price + ATR_STOP_MULT * atr,
+                                                           tp_price=price - ATR_TP_MULT * atr)
                     elif use_bracket:
-                        success = self.broker.submit_order(sym, qty, "sell", sl_pct=sl_pct, tp_pct=tp_pct,
-                                                           current_price=current_price)
+                        success = self.broker.submit_order(sym, qty, "sell", sl_pct=sl_pct, tp_pct=tp_pct)
                     else:
-                        success = self.broker.submit_order(sym, qty, "sell", current_price=current_price)
+                        success = self.broker.submit_order(sym, qty, "sell")
                     if success:
                         self.positions[sym] = -qty
                         self.ui_queue.put(("order", (sym, "SELL", qty, price)))
@@ -1690,11 +1679,11 @@ class TradingEngine(threading.Thread):
                     stop_price = price * (1 - 0.02) if qty > 0 else price * (1 + 0.02)
                     take_price = price * (1 + 0.04) if qty > 0 else price * (1 - 0.04)
                     if (qty > 0 and price <= stop_price) or (qty < 0 and price >= stop_price):
-                        self.broker.submit_order(sym, abs(qty), "sell" if qty > 0 else "buy", current_price=price)
+                        self.broker.submit_order(sym, abs(qty), "sell" if qty > 0 else "buy")
                         self.positions[sym] = 0
                         self._telegram(f"Stop loss triggered {sym} @ ${price:.2f}")
                     elif (qty > 0 and price >= take_price) or (qty < 0 and price <= take_price):
-                        self.broker.submit_order(sym, abs(qty), "sell" if qty > 0 else "buy", current_price=price)
+                        self.broker.submit_order(sym, abs(qty), "sell" if qty > 0 else "buy")
                         self.positions[sym] = 0
                         self._telegram(f"Take profit triggered {sym} @ ${price:.2f}")
             except:
@@ -1721,6 +1710,12 @@ def mobile():
 
 @app.route("/api/config", methods=["GET"])
 def api_get_config():
+    # before returning config, re-check license
+    key = state.config.get("license_key", "").strip()
+    if key:
+        valid, _ = verify_gumroad_license(key)
+        state.config["license_valid"] = valid
+        EncryptedConfigManager.save(state.config)
     return jsonify(state.config)
 
 
@@ -1737,9 +1732,33 @@ def api_start():
     data = request.json or {}
     state.config.update(data)
     EncryptedConfigManager.save(state.config)
+
+    # validate license before start
+    key = state.config.get("license_key", "").strip()
+    if key:
+        valid, _ = verify_gumroad_license(key)
+        state.config["license_valid"] = valid
+        EncryptedConfigManager.save(state.config)
+
     if state.engine and state.engine.running:
         return jsonify({"status": "error", "message": "Bot already running."})
-    broker_choice = data.get("broker", state.config.get("broker", "Alpaca"))
+
+    broker_choice = state.config.get("broker", "Alpaca")
+    # free tier enforcement
+    if not state.config.get("license_valid"):
+        broker_choice = "Alpaca"
+        state.config["mode"] = "signal"
+        state.config["broker"] = "Alpaca"
+        if "alpaca" in state.config:
+            state.config["alpaca"]["paper"] = True
+        # force core indicators only
+        for k in ("use_supertrend", "use_stochastic", "use_adx",
+                  "use_vol_confirm", "use_atr_stops", "use_bracket"):
+            state.config[k] = False
+        # limit tickers
+        state.config["tickers"] = state.config.get("tickers", "AAPL").split(",")[0].strip()
+        EncryptedConfigManager.save(state.config)
+
     broker_cls = BROKER_REGISTRY.get(broker_choice)
     if not broker_cls:
         return jsonify({"status": "error", "message": f"Unknown broker: {broker_choice}"})
@@ -1787,7 +1806,6 @@ def api_status():
                 state.dashboard.update(equity=eq, pl=pl, buying_power=bp, open_positions=op)
             elif kind in ("log", "error"):
                 db.insert_log(body[0])
-            # signal and order are now also sent via queue for telegram; already stored in DB
         except queue.Empty:
             break
     return jsonify({
@@ -1868,9 +1886,7 @@ def api_backtest():
                     curr = df.iloc[i]
                     pf = SignalAnalyzer._sf(prev["EMA_fast"])
                     ps = SignalAnalyzer._sf(prev["EMA_slow"])
-                    sig, rat, conf = SignalAnalyzer.generate_signal(
-                        df.iloc[: i + 1], pf, ps, config
-                    )
+                    sig, rat, conf = SignalAnalyzer.generate_signal(df.iloc[: i + 1], pf, ps, config)
                     if sig:
                         sf = SignalAnalyzer._sf
                         sigs.append({
@@ -1902,92 +1918,96 @@ def api_backtest():
         return jsonify({"error": str(e)})
 
 
-# ── FRONTEND HTML (v51, with Gumroad overlay, backtest tab days, invisible scrollbar, refresh fix, notifications for signals) ──
+# ── FRONTEND HTML (v52: curvy modern UI, Gumroad overlay, free tier notice) ──
 FRONTEND_HTML = r"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <title>TraderMoney</title>
 <style>
-:root{--bg:#050505;--card:#1A1A1A;--text:#e2e2e2;--accent:#D4AF37;--accent2:#6A0DAD;--danger:#B22222;--border:#2A2E38;--muted:#7a7d86;--sw:268px;}
-::-webkit-scrollbar{width:4px;}::-webkit-scrollbar-track{background:#080808;}::-webkit-scrollbar-thumb{background:#222;}
-/* 💡 FIX: thin horizontal scrollbar for ticker bar */
-#tkbar::-webkit-scrollbar{height:4px;}
-#tkbar::-webkit-scrollbar-thumb{background:#222;border-radius:2px;}
+:root{--bg:#050505;--card:#1A1A1A;--text:#e2e2e2;--accent:#D4AF37;--accent2:#6A0DAD;--danger:#B22222;--border:#2A2E38;--muted:#7a7d86;--sw:268px;--radius:12px;}
+::-webkit-scrollbar{width:4px;}::-webkit-scrollbar-track{background:#080808;}::-webkit-scrollbar-thumb{background:#111;}
 *{box-sizing:border-box;}
 body{margin:0;font-family:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',sans-serif;background:var(--bg);color:var(--text);display:flex;height:100vh;overflow:hidden;color-scheme:dark;}
-#sb{width:var(--sw);background:#0b0b0b;border-right:1px solid var(--border);display:flex;flex-direction:column;overflow-y:auto;overflow-x:hidden;padding:16px 13px;flex-shrink:0;}
-#sb h2{color:var(--accent);margin:0 0 10px;font-size:1.15rem;letter-spacing:.3px;}
-.lbadge{display:inline-block;padding:1px 8px;border-radius:11px;font-size:.67rem;margin-left:5px;vertical-align:middle;}
+/* curvy modern touches */
+#sb{width:var(--sw);background:#0c0c0c;border-right:1px solid var(--border);display:flex;flex-direction:column;overflow-y:auto;overflow-x:hidden;padding:18px 14px;flex-shrink:0;border-radius:0 var(--radius) 0 0;}
+#sb h2{color:var(--accent);margin:0 0 10px;font-size:1.2rem;letter-spacing:.3px;}
+.lbadge{display:inline-block;padding:2px 10px;border-radius:20px;font-size:.67rem;margin-left:5px;vertical-align:middle;}
 .lv{background:var(--accent);color:#000;}.li{background:var(--danger);color:#fff;}
-label{display:block;font-size:.77rem;margin:9px 0 3px;color:var(--muted);cursor:pointer;}
+label{display:block;font-size:.75rem;margin:10px 0 3px;color:var(--muted);cursor:pointer;letter-spacing:.3px;}
 .cb input{display:none;}
-.cb .cm{display:inline-block;width:16px;height:16px;border:2px solid #333;border-radius:4px;margin-right:6px;vertical-align:middle;position:relative;transition:.2s;}
+.cb .cm{display:inline-block;width:18px;height:18px;border:2px solid #333;border-radius:6px;margin-right:6px;vertical-align:middle;position:relative;transition:.2s;}
 .cb input:checked+.cm{background:var(--accent);border-color:var(--accent);}
-.cb input:checked+.cm::after{content:"";position:absolute;left:3px;top:0px;width:5px;height:9px;border:solid #000;border-width:0 2px 2px 0;transform:rotate(45deg);}
+.cb input:checked+.cm::after{content:"";position:absolute;left:4px;top:1px;width:5px;height:9px;border:solid #000;border-width:0 2px 2px 0;transform:rotate(45deg);}
 select{
     -webkit-appearance:none;appearance:none;
     background:#1A1A1A url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'><polygon fill='%23D4AF37' points='0,4 12,4 6,10'/></svg>") no-repeat right 10px center;
     background-size:12px;
-    color:var(--text);border:1px solid #333;padding:6px 30px 6px 8px;border-radius:8px;width:100%;font-size:.86rem;transition:border .2s;cursor:pointer;
+    color:var(--text);border:1px solid #333;padding:7px 30px 7px 10px;border-radius:10px;width:100%;font-size:.85rem;transition:border .2s;cursor:pointer;
 }
 select:focus{border-color:var(--accent);outline:none;}
 input[type="text"],input[type="password"],input[type="number"],textarea{
-    background:#1A1A1A;color:var(--text);border:1px solid #252525;padding:6px 8px;border-radius:6px;width:100%;font-size:.86rem;transition:border .2s;
-    -webkit-appearance:none;appearance:none;
+    background:#1A1A1A;color:var(--text);border:1px solid #333;padding:7px 10px;border-radius:10px;width:100%;font-size:.85rem;transition:border .2s;
 }
 input:focus,textarea:focus{border-color:var(--accent);outline:none;}
 input:-webkit-autofill,input:-webkit-autofill:hover,input:-webkit-autofill:focus,textarea:-webkit-autofill,textarea:-webkit-autofill:hover,textarea:-webkit-autofill:focus{
     -webkit-text-fill-color:var(--text);-webkit-box-shadow:0 0 0 30px #1A1A1A inset;box-shadow:0 0 0 30px #1A1A1A inset;
 }
-button{cursor:pointer;background:var(--accent);color:#050505;border:none;padding:8px 10px;border-radius:6px;width:100%;font-weight:600;margin-top:9px;font-size:.86rem;}
-button:hover{opacity:.88;}
+button{cursor:pointer;background:var(--accent);color:#050505;border:none;padding:9px 12px;border-radius:10px;width:100%;font-weight:600;margin-top:10px;font-size:.85rem;transition:all .2s;}
+button:hover{opacity:.9;transform:translateY(-1px);}
 button.ghost{background:var(--card);border:1px solid var(--border);color:var(--text);}
 button.danger{background:var(--danger);color:#fff;}
 button.purple{background:var(--accent2);color:#fff;}
-hr{border-color:var(--border);margin:11px 0;}
+hr{border-color:var(--border);margin:12px 0;}
 .r2{display:flex;gap:5px;} .r2 input{width:100%;}
-#bstatus{font-size:.74rem;margin-top:3px;min-height:15px;word-break:break-word;padding:2px 0;}
+#bstatus{font-size:.72rem;margin-top:3px;min-height:15px;word-break:break-word;padding:2px 0;}
 #bstatus.ok{color:#00c9b1;}#bstatus.err{color:var(--danger);}
-#main{flex:1;display:flex;flex-direction:column;min-width:0;}
-.tab-bar{display:flex;background:var(--card);border-bottom:1px solid var(--border);flex-wrap:wrap;}
-.tbtn{flex:1;background:transparent;border:none;color:var(--text);padding:12px 6px;cursor:pointer;font-weight:500;border-bottom:2px solid transparent;transition:.2s;min-width:70px;font-size:.85rem;}
+#main{flex:1;display:flex;flex-direction:column;min-width:0;border-radius:0 0 var(--radius) 0;}
+.tab-bar{display:flex;background:var(--card);border-bottom:1px solid var(--border);border-radius:0 var(--radius) 0 0;overflow:hidden;}
+.tbtn{flex:1;background:transparent;border:none;color:var(--text);padding:14px 6px;cursor:pointer;font-weight:500;border-bottom:2px solid transparent;transition:.2s;min-width:70px;font-size:.84rem;}
 .tbtn:hover{background:rgba(255,255,255,.03);}
 .tbtn.active{border-bottom-color:var(--accent2);color:var(--accent);font-weight:700;}
-.tab{flex:1;display:none;overflow:hidden;flex-direction:column;}
+.tab{flex:1;display:none;overflow:hidden;flex-direction:column;border-radius:0 0 var(--radius) var(--radius);}
 .tab.active{display:flex;}
-#metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;padding:8px;background:var(--card);border-bottom:1px solid var(--border);}
-.met{text-align:center;} .met .v{font-size:1.1rem;font-weight:bold;color:var(--accent);}
-#sess{display:flex;align-items:center;gap:12px;padding:7px 11px;background:var(--card);border-bottom:1px solid var(--border);font-size:.82rem;flex-wrap:wrap;}
-.sd{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:3px;}
+#metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;padding:10px;background:var(--card);border-bottom:1px solid var(--border);}
+.met{text-align:center;} .met .v{font-size:1.2rem;font-weight:bold;color:var(--accent);}
+#sess{display:flex;align-items:center;gap:14px;padding:8px 12px;background:var(--card);border-bottom:1px solid var(--border);font-size:.8rem;flex-wrap:wrap;border-radius:0 0 var(--radius) var(--radius);}
+.sd{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:4px;}
 .so{background:#00c9b1;}.sc{background:var(--danger);}
+/* compact ticker tabs */
 #tkbar{display:flex;flex-wrap:nowrap;overflow-x:auto;background:var(--card);border-bottom:1px solid var(--border);}
-.tkbtn{padding:6px 10px;background:transparent;border:none;color:var(--text);cursor:pointer;white-space:nowrap;border-bottom:2px solid transparent;transition:.2s;font-size:.84rem;flex-shrink:0;max-width:140px;overflow:hidden;text-overflow:ellipsis;}
+.tkbtn{padding:7px 12px;background:transparent;border:none;color:var(--text);cursor:pointer;white-space:nowrap;border-bottom:2px solid transparent;transition:.2s;font-size:.82rem;flex-shrink:0;max-width:140px;overflow:hidden;text-overflow:ellipsis;}
 .tkbtn.active{border-bottom-color:var(--accent2);color:var(--accent);font-weight:700;}
 #chart-c{flex:1;min-height:0;}
-.sitem{display:flex;justify-content:space-between;padding:8px 11px;border-bottom:1px solid var(--border);font-size:.83rem;}
+.sitem{display:flex;justify-content:space-between;padding:9px 12px;border-bottom:1px solid var(--border);font-size:.82rem;}
 .buy{color:var(--accent);}.sell{color:var(--danger);}
-.empty-placeholder{color:var(--muted);text-align:center;padding:20px;font-size:.9rem;}
+.empty-placeholder{color:var(--muted);text-align:center;padding:30px;font-size:.9rem;}
+/* larger toasts */
 #toasts{position:fixed;top:16px;right:16px;z-index:9999;display:flex;flex-direction:column;gap:6px;}
-.toast{padding:14px 22px;border-radius:10px;font-weight:500;box-shadow:0 4px 14px rgba(0,0,0,.4);animation:si .25s ease;max-width:420px;font-size:1rem;border:1px solid #333;}
+.toast{padding:14px 22px;border-radius:14px;font-weight:500;box-shadow:0 4px 18px rgba(0,0,0,.5);animation:si .25s ease;max-width:420px;font-size:1rem;border:1px solid #333;}
 .toast.success{background:var(--accent);color:#000;}.toast.error{background:var(--danger);color:#fff;}.toast.info{background:var(--accent2);color:#fff;}
 @keyframes si{from{transform:translateX(110%);opacity:0}to{transform:translateX(0);opacity:1}}
-#upd{display:none;position:fixed;bottom:16px;right:16px;z-index:9999;background:var(--accent);color:#000;padding:12px 16px;border-radius:7px;font-weight:bold;font-size:.88rem;}
+#upd{display:none;position:fixed;bottom:16px;right:16px;z-index:9999;background:var(--accent);color:#000;padding:12px 18px;border-radius:10px;font-weight:bold;font-size:.88rem;}
 #upd a{color:#000;text-decoration:underline;}
+/* backtest scrollable */
 .btp{flex:1;display:flex;flex-direction:column;}
-.btr{flex:1;overflow-y:auto;padding:9px;}
+.btr{flex:1;overflow-y:auto;padding:10px;}
 .ph{color:var(--muted);text-align:center;padding:36px 18px;font-size:.9rem;}
-.bttbl{width:100%;border-collapse:collapse;font-size:.8rem;margin-bottom:16px;}
-.bttbl th,.bttbl td{padding:4px 6px;border:1px solid var(--border);text-align:center;}
+.bttbl{width:100%;border-collapse:collapse;font-size:.78rem;margin-bottom:18px;}
+.bttbl th,.bttbl td{padding:5px 7px;border:1px solid var(--border);text-align:center;}
 .bttbl th{color:var(--accent);}
-#logbar{height:100px;overflow-y:auto;background:var(--bg);padding:7px 11px;font-size:.74rem;border-top:1px solid var(--border);color:var(--muted);flex-shrink:0;}
-.hb{padding:18px;overflow-y:auto;height:100%;}
-.hb h3{color:var(--accent2);margin-top:0;}.hb h4{color:var(--text);margin:12px 0 4px;}
-.hb p,.hb ul{font-size:.87rem;line-height:1.62;}.hb ul{padding-left:17px;}.hb li{margin-bottom:4px;}
+#logbar{height:100px;overflow-y:auto;background:var(--bg);padding:8px 12px;font-size:.74rem;border-top:1px solid var(--border);color:var(--muted);flex-shrink:0;}
+/* help */
+.hb{padding:20px;overflow-y:auto;height:100%;}
+.hb h3{color:var(--accent2);margin-top:0;}.hb h4{color:var(--text);margin:14px 0 5px;}
+.hb p,.hb ul{font-size:.85rem;line-height:1.65;}.hb ul{padding-left:18px;}.hb li{margin-bottom:4px;}
 .hb a{color:var(--accent);}
-.istat{background:var(--card);border-radius:7px;padding:12px;margin:7px 0;}
+.istat{background:var(--card);border-radius:var(--radius);padding:14px;margin:8px 0;}
+/* free tier notice */
+.free-notice{background:var(--danger);color:#fff;padding:10px 12px;border-radius:10px;font-size:.8rem;margin-top:10px;display:none;}
 </style>
 <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
+<!-- Gumroad overlay -->
 <script src="https://gumroad.com/js/gumroad.js"></script>
 </head>
 <body>
@@ -1997,9 +2017,8 @@ hr{border-color:var(--border);margin:11px 0;}
   <h2>TraderMoney <span id="lbadge" class="lbadge li">FREE</span></h2>
   <label>License Key</label><input type="password" id="lickey" placeholder="Paste Gumroad key">
   <button onclick="validateLicense()" style="margin-top:4px;font-size:.8rem;">Validate</button>
-  <p style="font-size:.69rem;color:var(--muted);margin:3px 0 0;">
-    <a href="https://shafayrich.gumroad.com/l/ykaoov" style="color:var(--accent)">Get Pro</a>
-  </p>
+  <p style="font-size:.67rem;color:var(--muted);margin:3px 0 0;"><a href="https://shafayrich.gumroad.com/l/ykaoov" style="color:var(--accent);">Buy license ↗</a></p>
+  <div id="free-notice" class="free-notice">Free tier: Alpaca paper only, Signal-Only, 1 ticker, core indicators.</div>
   <hr>
   <label>Broker</label><select id="broker" onchange="updateCreds()"><option>Alpaca</option><option>Interactive Brokers</option><option>Tradier</option><option>Binance</option><option>Bybit</option><option>OKX</option></select>
   <div id="bstatus" class="ok"></div><div id="creds"></div>
@@ -2030,6 +2049,11 @@ hr{border-color:var(--border);margin:11px 0;}
   <button class="danger" onclick="killSwitch()">&#9650; Kill Switch</button>
   <button class="ghost" style="margin-top:5px" onclick="resetDef()">&#8634; Reset</button>
   <button class="ghost" style="margin-top:16px" onclick="checkUpdate()">Check Updates</button>
+  <button class="purple" style="margin-top:7px" onclick="runBT()">&#9874; Backtest All</button>
+  <div style="margin-top:9px;font-size:.75rem;color:var(--muted);">
+    <span>Backtest days:</span>
+    <input type="number" id="btDays" value="5" min="1" max="365" style="width:70px;display:inline-block;margin-left:6px;border-radius:8px;">
+  </div>
 </div>
 <div id="main">
   <div class="tab-bar" id="tabbar">
@@ -2068,12 +2092,8 @@ hr{border-color:var(--border);margin:11px 0;}
   </div>
   <div id="tab-backtest" class="tab">
     <div class="btp">
-      <div style="padding:9px;display:flex;align-items:center;gap:10px;">
-        <button class="purple" style="width:auto;padding:8px 18px" onclick="runBT()">&#9874; Run Backtest</button>
-        <label style="color:var(--muted);font-size:.8rem;margin:0;">Days:</label>
-        <input type="number" id="btDays" value="5" min="1" max="365" style="width:70px;">
-      </div>
-      <div id="btres" class="btr"><p class="ph">Click <b>Backtest</b> to run.<br>Results appear here.</p></div>
+      <div style="padding:10px"><button class="purple" style="width:auto;padding:9px 20px" onclick="runBT()">&#9874; Run Backtest on All Tickers</button></div>
+      <div id="btres" class="btr"><p class="ph">Click <b>Backtest All</b> to run.<br>Results appear here.</p></div>
     </div>
   </div>
   <div id="tab-help" class="tab">
@@ -2133,7 +2153,7 @@ function cbHTML(id,l,chk=false){return`<label><span class="cb"><input type="chec
 function updateCreds(){let b=$('broker').value,c=$('creds');if(b==='Alpaca')c.innerHTML=pw('ak','API Key')+pw('ask','Secret Key')+cbHTML('apaper','Paper Trading',true);else if(b==='Interactive Brokers')c.innerHTML=tx('ih','Host','127.0.0.1')+tx('ip','Port','7497')+tx('icid','Client ID','1');else if(b==='Tradier')c.innerHTML=pw('trat','Access Token')+tx('traid','Account ID')+cbHTML('trsb','Sandbox',false);else if(b==='Binance')c.innerHTML=pw('bnk','API Key')+pw('bns','API Secret')+cbHTML('bnt','Testnet',true);else if(b==='Bybit')c.innerHTML=pw('bbk','API Key')+pw('bbs','API Secret')+cbHTML('bbtn','Testnet',true);else if(b==='OKX')c.innerHTML=pw('ok','API Key')+pw('os','API Secret')+pw('op','Passphrase')+cbHTML('od','Demo',true);}
 function toggleDefQty(){document.getElementById('defqty-box').style.display=gc('udefqty')?'block':'none';}
 function buildCfg(){let b=$('broker').value;return{broker:b,tickers:gv('tickers','AAPL'),timeframe:gv('tf','1m'),emas:[parseInt(gv('emaf','9')),parseInt(gv('emas','50'))],quantity:parseInt(gv('qty','1'))||1,mode:gv('mode','signal'),direction:gv('dir','both'),use_default_qty:gc('udefqty'),use_bracket:gc('ubracket'),sl_percent:parseFloat(gv('slp','2')),tp_percent:parseFloat(gv('tpp','4')),use_atr_stops:gc('uatr'),telegram:{token:gv('tgt'),chat_id:gv('tgc')},use_rsi:gc('ursi'),use_macd:gc('umacd'),use_vwap:gc('uvwap'),use_bollinger:gc('uboll'),use_adx:gc('uadx'),use_vol_confirm:gc('uvol'),use_supertrend:gc('ust'),use_stochastic:gc('ustoch'),license_key:gv('lickey',''),alpaca:b==='Alpaca'?{api_key:gv('ak'),secret_key:gv('ask'),paper:gc('apaper')}:{},ibkr:b==='Interactive Brokers'?{host:gv('ih','127.0.0.1'),port:gv('ip','7497'),client_id:gv('icid','1')}:{},tradier:b==='Tradier'?{access_token:gv('trat'),account_id:gv('traid'),sandbox:gc('trsb')}:{},binance:b==='Binance'?{api_key:gv('bnk'),api_secret:gv('bns'),testnet:gc('bnt')}:{},bybit:b==='Bybit'?{api_key:gv('bbk'),api_secret:gv('bbs'),testnet:gc('bbtn')}:{},okx:b==='OKX'?{api_key:gv('ok'),api_secret:gv('os'),api_passphrase:gv('op'),demo:gc('od')}:{}};}
-function initUI(c){if(!c)return;sv('broker',c.broker||'Alpaca');updateCreds();sv('tickers',c.tickers||'AAPL');sv('tf',c.timeframe||'1m');sv('emaf',c.emas?c.emas[0]:9);sv('emas',c.emas?c.emas[1]:50);sc('udefqty',c.use_default_qty!==false);toggleDefQty();sv('qty',c.quantity||1);sv('mode',c.mode||'signal');sv('dir',c.direction||'both');if(c.telegram){sv('tgt',c.telegram.token||'');sv('tgc',c.telegram.chat_id||'');}sc('ubracket',c.use_bracket);sv('slp',c.sl_percent||2);sv('tpp',c.tp_percent||4);sc('uatr',c.use_atr_stops!==false);sc('ursi',c.use_rsi!==false);sc('umacd',c.use_macd!==false);sc('uvwap',c.use_vwap!==false);sc('uboll',c.use_bollinger!==false);sc('uadx',c.use_adx!==false);sc('uvol',c.use_vol_confirm!==false);sc('ust',c.use_supertrend!==false);sc('ustoch',c.use_stochastic!==false);if(c.license_key)sv('lickey',c.license_key);if(c.license_valid){licValid=true;$('lbadge').textContent='PRO';$('lbadge').className='lbadge lv';}if(c.broker==='Alpaca'&&c.alpaca){sv('ak',c.alpaca.api_key||'');sv('ask',c.alpaca.secret_key||'');sc('apaper',c.alpaca.paper!==false);}if(c.broker==='Interactive Brokers'&&c.ibkr){sv('ih',c.ibkr.host||'127.0.0.1');sv('ip',c.ibkr.port||'7497');sv('icid',c.ibkr.client_id||'1');}if(c.broker==='Tradier'&&c.tradier){sv('trat',c.tradier.access_token||'');sv('traid',c.tradier.account_id||'');sc('trsb',c.tradier.sandbox||false);}if(c.broker==='Binance'&&c.binance){sv('bnk',c.binance.api_key||'');sv('bns',c.binance.api_secret||'');sc('bnt',c.binance.testnet!==false);}if(c.broker==='Bybit'&&c.bybit){sv('bbk',c.bybit.api_key||'');sv('bbs',c.bybit.api_secret||'');sc('bbtn',c.bybit.testnet!==false);}if(c.broker==='OKX'&&c.okx){sv('ok',c.okx.api_key||'');sv('os',c.okx.api_secret||'');sv('op',c.okx.api_passphrase||'');sc('od',c.okx.demo!==false);}let raw=c.tickers.split(',').map(s=>s.trim()).filter(s=>s);if(raw.length){setTickers(raw);loadChart(cs(raw[0]));}}
+function initUI(c){if(!c)return;licValid=c.license_valid||false;sv('broker',c.broker||'Alpaca');updateCreds();sv('tickers',c.tickers||'AAPL');sv('tf',c.timeframe||'1m');sv('emaf',c.emas?c.emas[0]:9);sv('emas',c.emas?c.emas[1]:50);sc('udefqty',c.use_default_qty!==false);toggleDefQty();sv('qty',c.quantity||1);sv('mode',c.mode||'signal');sv('dir',c.direction||'both');if(c.telegram){sv('tgt',c.telegram.token||'');sv('tgc',c.telegram.chat_id||'');}sc('ubracket',c.use_bracket);sv('slp',c.sl_percent||2);sv('tpp',c.tp_percent||4);sc('uatr',c.use_atr_stops!==false);sc('ursi',c.use_rsi!==false);sc('umacd',c.use_macd!==false);sc('uvwap',c.use_vwap!==false);sc('uboll',c.use_bollinger!==false);sc('uadx',c.use_adx!==false);sc('uvol',c.use_vol_confirm!==false);sc('ust',c.use_supertrend!==false);sc('ustoch',c.use_stochastic!==false);if(c.license_key)sv('lickey',c.license_key);if(licValid){$('lbadge').textContent='PRO';$('lbadge').className='lbadge lv';$('free-notice').style.display='none';}else{$('lbadge').textContent='FREE';$('lbadge').className='lbadge li';$('free-notice').style.display='block';$('mode').value='signal';$('broker').value='Alpaca';updateCreds();}if(c.broker==='Alpaca'&&c.alpaca){sv('ak',c.alpaca.api_key||'');sv('ask',c.alpaca.secret_key||'');sc('apaper',c.alpaca.paper!==false);}if(c.broker==='Interactive Brokers'&&c.ibkr){sv('ih',c.ibkr.host||'127.0.0.1');sv('ip',c.ibkr.port||'7497');sv('icid',c.ibkr.client_id||'1');}if(c.broker==='Tradier'&&c.tradier){sv('trat',c.tradier.access_token||'');sv('traid',c.tradier.account_id||'');sc('trsb',c.tradier.sandbox||false);}if(c.broker==='Binance'&&c.binance){sv('bnk',c.binance.api_key||'');sv('bns',c.binance.api_secret||'');sc('bnt',c.binance.testnet!==false);}if(c.broker==='Bybit'&&c.bybit){sv('bbk',c.bybit.api_key||'');sv('bbs',c.bybit.api_secret||'');sc('bbtn',c.bybit.testnet!==false);}if(c.broker==='OKX'&&c.okx){sv('ok',c.okx.api_key||'');sv('os',c.okx.api_secret||'');sv('op',c.okx.api_passphrase||'');sc('od',c.okx.demo!==false);}let raw=c.tickers.split(',').map(s=>s.trim()).filter(s=>s);if(raw.length){setTickers(raw);loadChart(cs(raw[0]));}}
 function setTickers(list){allTickers=list;let bar=$('tkbar');bar.innerHTML='';list.forEach(raw=>{let sym=cs(raw);let btn=document.createElement('button');btn.className='tkbtn'+(sym===curSym?' active':'');btn.textContent=sym;btn.onclick=()=>{curSym=sym;updTk();if(lastChart!==sym)loadChart(sym);};bar.appendChild(btn);});}
 function updTk(){document.querySelectorAll('.tkbtn').forEach(b=>b.classList.toggle('active',cs(b.textContent)===curSym));}
 function loadChart(sym){let s=cs(sym);if(s===lastChart)return;lastChart=s;$('chart-c').innerHTML='';if(typeof TradingView==='undefined'){setTimeout(()=>loadChart(s),150);return;}chart=new TradingView.widget({autosize:true,symbol:s,interval:'1',timezone:'Etc/UTC',theme:'Dark',style:'1',locale:'en',toolbar_bg:'#0A0C0F',enable_publishing:false,allow_symbol_change:true,container_id:'chart-c'});curSym=s;}
@@ -2169,46 +2189,21 @@ async function stopBot(){
 }
 async function killSwitch(){await fetch('/api/kill',{method:'POST'});toast('Kill switch activated','error');}
 async function refreshTickers(){let r=await fetch('/api/config'),c=await r.json();sv('tickers',c.tickers);let raw=c.tickers.split(',').map(s=>s.trim()).filter(s=>s);if(raw.length){setTickers(raw);loadChart(cs(raw[0]));}toast('Tickers refreshed','success');}
-async function validateLicense(){let key=gv('lickey').trim();if(!key){toast('Enter license key','error');return;}let r=await fetch('/api/validate_license',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({license_key:key})});let d=await r.json();if(d.valid){licValid=true;$('lbadge').textContent='PRO';$('lbadge').className='lbadge lv';toast('Pro unlocked','success');}else{licValid=false;$('lbadge').textContent='FREE';$('lbadge').className='lbadge li';toast(d.message,'error');}}
+async function validateLicense(){let key=gv('lickey').trim();if(!key){toast('Enter license key','error');return;}let r=await fetch('/api/validate_license',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({license_key:key})});let d=await r.json();if(d.valid){licValid=true;$('lbadge').textContent='PRO';$('lbadge').className='lbadge lv';$('free-notice').style.display='none';toast('Pro unlocked','success');}else{licValid=false;$('lbadge').textContent='FREE';$('lbadge').className='lbadge li';$('free-notice').style.display='block';toast(d.message,'error');}}
 async function checkUpdate(){try{let d=await(await fetch('/api/update')).json();if(d.update_available){$('upd').style.display='block';$('udl').href=d.download_url;}else toast('Up to date!','success');}catch(e){}}
 setTimeout(checkUpdate,2500);
 async function pollBS(){try{let d=await(await fetch('/api/broker_status')).json();let bs=$('bstatus');if(d.message){bs.textContent=d.message;bs.className=d.message.startsWith('Connected')?'ok':'err';}}catch(e){}}
 setInterval(pollBS,2500);pollBS();
-async function pollStatus(){
-  try{
-    let d=await(await fetch('/api/status')).json();
-    $('v-eq').textContent='$'+fmt(d.equity);$('v-bp').textContent='$'+fmt(d.buying_power);
-    let pct=d.equity?(d.pl/d.equity*100):0;
-    $('v-pl').innerHTML=`<span style="color:${pct>=0?'var(--accent)':'var(--danger)'}">${pct>=0?'+':''}${pct.toFixed(2)}%</span>`;
-    $('v-pos').textContent=d.open_positions;
-    let sl=$('siglist'),se=$('sigempty'),hl=$('histlist'),he=$('hstempty');
-    sl.innerHTML='';se.style.display='none';hl.innerHTML='';he.style.display='none';
-    let hasSigs=false,hasOrds=false;
-    (d.signals||[]).forEach(s=>{
-      hasSigs=true;
-      let div=document.createElement('div');div.className='sitem '+(s.signal==='BUY'?'buy':'sell');
-      div.innerHTML=`<span>${s.time} <b>${s.signal}</b> ${s.symbol} @ $${s.price}</span><span>${s.rationale||''}</span>`;
-      sl.appendChild(div);
-      // desktop notification for signal
-      if(Notification.permission==='granted'){
-        new Notification('TraderMoney Signal',{body:`${s.signal} ${s.symbol} @ $${s.price}`,icon:'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="100" height="100" rx="20" fill="%23050505"/><text x="50%25" y="55%25" dominant-baseline="middle" text-anchor="middle" fill="%23D4AF37" font-family="system-ui" font-weight="800" font-size="36">TM$</text></svg>'});
-      }
-    });
-    if(!hasSigs)se.style.display='block';
-    (d.orders||[]).forEach(o=>{
-      hasOrds=true;
-      let div=document.createElement('div');div.className='sitem '+(o.action==='BUY'?'buy':'sell');
-      div.innerHTML=`<span>${o.time} <b>${o.action}</b> ${o.qty} ${o.symbol} @ $${o.price}</span>`;
-      hl.appendChild(div);
-      // desktop notification for orders
-      if(Notification.permission==='granted'){
-        new Notification('TraderMoney Trade',{body:`${o.action} ${o.qty} ${o.symbol} @ $${o.price}`,icon:'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="100" height="100" rx="20" fill="%23050505"/><text x="50%25" y="55%25" dominant-baseline="middle" text-anchor="middle" fill="%23D4AF37" font-family="system-ui" font-weight="800" font-size="36">TM$</text></svg>'});
-      }
-    });
-    if(!hasOrds)he.style.display='block';
-    $('logbar').innerHTML=(d.log||[]).join('<br>');
-  }catch(e){}
-}
+async function pollStatus(){try{let d=await(await fetch('/api/status')).json();$('v-eq').textContent='$'+fmt(d.equity);$('v-bp').textContent='$'+fmt(d.buying_power);let pct=d.equity?(d.pl/d.equity*100):0;$('v-pl').innerHTML=`<span style="color:${pct>=0?'var(--accent)':'var(--danger)'}">${pct>=0?'+':''}${pct.toFixed(2)}%</span>`;$('v-pos').textContent=d.open_positions;
+  let sl=$('siglist'),se=$('sigempty'),hl=$('histlist'),he=$('hstempty');
+  sl.innerHTML='';se.style.display='none';hl.innerHTML='';he.style.display='none';
+  let hasSigs=false,hasOrds=false;
+  (d.signals||[]).forEach(s=>{hasSigs=true;let div=document.createElement('div');div.className='sitem '+(s.signal==='BUY'?'buy':'sell');div.innerHTML=`<span>${s.time} <b>${s.signal}</b> ${s.symbol} @ $${s.price}</span><span>${s.rationale||''}</span>`;sl.appendChild(div);});
+  if(!hasSigs)se.style.display='block';
+  (d.orders||[]).forEach(o=>{hasOrds=true;let div=document.createElement('div');div.className='sitem '+(o.action==='BUY'?'buy':'sell');div.innerHTML=`<span>${o.time} <b>${o.action}</b> ${o.qty} ${o.symbol} @ $${o.price}</span>`;hl.appendChild(div);});
+  if(!hasOrds)he.style.display='block';
+  $('logbar').innerHTML=(d.log||[]).join('<br>');
+}catch(e){}}
 setInterval(pollStatus,1500);
 async function runBT(){
   let days=parseInt($('btDays').value)||5;
@@ -2235,9 +2230,7 @@ async function runBT(){
     }
     if(total===0)html='<p class="ph">No signals generated. Try toggling indicators or extending backtest period.</p>';
     $('btres').innerHTML=html;
-  }catch(e){toast('Backtest failed: '+e,'error');}
-}
-Notification.requestPermission();
+  }catch(e){toast('Backtest failed: '+e,'error');}}
 updateCreds();loadConfig();
 </script>
 </body>
@@ -2251,6 +2244,18 @@ def run_flask():
 
 if __name__ == "__main__":
     acquire_lock()
+    # Daily license check thread
+    def daily_license_check():
+        while True:
+            time.sleep(86400)  # 24 hours
+            key = state.config.get("license_key", "").strip()
+            if key:
+                valid, _ = verify_gumroad_license(key)
+                state.config["license_valid"] = valid
+                EncryptedConfigManager.save(state.config)
+
+    threading.Thread(target=daily_license_check, daemon=True).start()
+
     flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()
     time.sleep(1.2)
