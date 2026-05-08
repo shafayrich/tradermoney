@@ -32,8 +32,6 @@
             flex-direction: column;
             align-items: center;
         }
-
-        /* ── subtle grid texture ── */
         body::before {
             content: '';
             position: fixed;
@@ -45,7 +43,6 @@
             pointer-events: none;
             z-index: 0;
         }
-
         .container {
             position: relative;
             z-index: 1;
@@ -57,8 +54,6 @@
             align-items: center;
             text-align: center;
         }
-
-        /* ── nav ── */
         .nav {
             display: flex;
             align-items: center;
@@ -74,8 +69,6 @@
             transition: color 0.25s;
         }
         .nav a:hover { color: var(--text); }
-
-        /* ── hero ── */
         .logo {
             width: 56px;
             height: 56px;
@@ -94,163 +87,85 @@
             color: var(--gold);
             letter-spacing: -0.5px;
         }
-        h1 {
-            font-size: 3.2rem;
-            font-weight: 600;
-            letter-spacing: -1.2px;
-            line-height: 1.1;
-            margin-bottom: 16px;
-            color: #fff;
-        }
-        h1 em {
-            font-style: normal;
-            color: var(--gold);
-        }
-        .subtitle {
-            font-size: 1.05rem;
-            color: var(--muted);
-            max-width: 480px;
-            line-height: 1.55;
-            margin-bottom: 44px;
-            font-weight: 400;
-        }
-
-        /* ── version pill ── */
+        h1 { font-size: 3.2rem; font-weight: 600; letter-spacing: -1.2px; line-height: 1.1; margin-bottom: 16px; color: #fff; }
+        h1 em { font-style: normal; color: var(--gold); }
+        .subtitle { font-size: 1.05rem; color: var(--muted); max-width: 480px; line-height: 1.55; margin-bottom: 44px; font-weight: 400; }
         .version-pill {
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            background: var(--surface);
-            border: 1px solid var(--border);
-            border-radius: 100px;
-            padding: 6px 16px;
-            font-size: 0.78rem;
-            color: var(--muted);
-            margin-bottom: 36px;
+            display: inline-flex; align-items: center; gap: 8px;
+            background: var(--surface); border: 1px solid var(--border); border-radius: 100px;
+            padding: 6px 16px; font-size: 0.78rem; color: var(--muted); margin-bottom: 36px;
         }
-        .version-pill .dot {
-            width: 7px;
-            height: 7px;
-            background: #22c55e;
-            border-radius: 50%;
-            animation: pulse-dot 2s infinite;
-        }
-        @keyframes pulse-dot {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.35; }
-        }
+        .version-pill .dot { width: 7px; height: 7px; background: #22c55e; border-radius: 50%; animation: pulse-dot 2s infinite; }
+        @keyframes pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
         .version-pill strong { color: var(--gold); font-weight: 600; }
-
-        /* ── download buttons ── */
-        .dl-group {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 10px;
-            justify-content: center;
-            margin-bottom: 20px;
-        }
+        .dl-group { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; margin-bottom: 20px; }
         .dl-btn {
-            display: inline-flex;
-            align-items: center;
-            gap: 7px;
-            padding: 11px 22px;
-            border-radius: 100px;
-            font-size: 0.85rem;
-            font-weight: 600;
-            text-decoration: none;
-            transition: all 0.25s;
-            border: 1px solid var(--border);
-            background: var(--surface);
-            color: var(--text);
+            display: inline-flex; align-items: center; gap: 7px;
+            padding: 11px 22px; border-radius: 100px; font-size: 0.85rem; font-weight: 600;
+            text-decoration: none; transition: all 0.25s; border: 1px solid var(--border);
+            background: var(--surface); color: var(--text);
         }
-        .dl-btn:hover {
-            border-color: #333;
-            background: #1a1a1a;
-            transform: translateY(-1px);
-        }
-        .dl-btn.primary {
-            background: var(--gold);
-            color: #0a0a0a;
-            border-color: var(--gold);
-            font-weight: 700;
-        }
-        .dl-btn.primary:hover {
-            background: #c4a02c;
-            border-color: #c4a02c;
-        }
-        .dl-btn .os-icon { font-size: 1rem; }
-
-        /* ── gumroad button ── */
+        .dl-btn:hover { border-color: #333; background: #1a1a1a; transform: translateY(-1px); }
+        .dl-btn.primary { background: var(--gold); color: #0a0a0a; border-color: var(--gold); font-weight: 700; }
+        .dl-btn.primary:hover { background: #c4a02c; border-color: #c4a02c; }
         .gumroad-button {
-            background: var(--gold) !important;
-            color: #0a0a0a !important;
-            font-weight: 700 !important;
-            font-size: 0.9rem !important;
-            padding: 13px 32px !important;
-            border-radius: 100px !important;
-            text-decoration: none !important;
-            display: inline-block !important;
-            letter-spacing: 0.01em !important;
-            transition: all 0.25s !important;
+            background: var(--gold) !important; color: #0a0a0a !important;
+            font-weight: 700 !important; font-size: 0.9rem !important; padding: 13px 32px !important;
+            border-radius: 100px !important; text-decoration: none !important; display: inline-block !important;
+            letter-spacing: 0.01em !important; transition: all 0.25s !important;
         }
-        .gumroad-button:hover {
-            opacity: 0.88;
-            transform: translateY(-1px);
-        }
-
-        /* ── divider ── */
-        .divider {
-            width: 1px;
-            height: 28px;
-            background: var(--border);
-            margin: 0 4px;
-            align-self: center;
-        }
-
-        /* ── feature strip ── */
-        .feature-strip {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 2px;
-            justify-content: center;
-            max-width: 700px;
-            margin-top: 64px;
-        }
+        .gumroad-button:hover { opacity: 0.88; transform: translateY(-1px); }
+        .divider { width: 1px; height: 28px; background: var(--border); margin: 0 4px; align-self: center; }
+        .feature-strip { display: flex; flex-wrap: wrap; gap: 2px; justify-content: center; max-width: 700px; margin-top: 64px; }
         .f-chip {
-            background: var(--surface);
-            border: 1px solid var(--border);
-            border-radius: 100px;
-            padding: 8px 18px;
-            font-size: 0.78rem;
-            color: var(--muted);
-            white-space: nowrap;
+            background: var(--surface); border: 1px solid var(--border); border-radius: 100px;
+            padding: 8px 18px; font-size: 0.78rem; color: var(--muted); white-space: nowrap;
         }
         .f-chip strong { color: var(--text); font-weight: 500; }
-
-        /* ── footer ── */
-        footer {
-            margin-top: 80px;
-            display: flex;
-            flex-wrap: wrap;
-            gap: 28px;
-            justify-content: center;
-            align-items: center;
-            font-size: 0.76rem;
-            color: #444;
-        }
-        footer a {
-            color: #555;
-            text-decoration: none;
-            transition: color 0.25s;
-        }
+        footer { margin-top: 80px; display: flex; flex-wrap: wrap; gap: 28px; justify-content: center; align-items: center; font-size: 0.76rem; color: #444; }
+        footer a { color: #555; text-decoration: none; transition: color 0.25s; }
         footer a:hover { color: var(--muted); }
-        .tiktok-link {
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-        }
+        .tiktok-link { display: inline-flex; align-items: center; gap: 6px; }
         .tiktok-link svg { width: 16px; height: 16px; fill: #555; transition: fill 0.25s; }
         .tiktok-link:hover svg { fill: #888; }
+
+        /* Free vs Pro table */
+        .compare-section {
+            margin-top: 60px; text-align: left; width: 100%; max-width: 700px;
+        }
+        .compare-section h2 {
+            font-size: 1.8rem; color: var(--text); margin-bottom: 25px;
+            text-align: center;
+        }
+        .compare-table {
+            width: 100%; border-collapse: collapse; font-size: 0.9rem;
+            background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow: hidden;
+        }
+        .compare-table th, .compare-table td {
+            padding: 14px 18px; text-align: left; border-bottom: 1px solid var(--border);
+        }
+        .compare-table th {
+            background: var(--surface); color: var(--gold); font-weight: 600; font-size: 1rem;
+        }
+        .compare-table td:first-child { font-weight: 500; }
+        .compare-table .check { color: #22c55e; }
+        .compare-table .cross { color: var(--danger); }
+
+        /* Help section */
+        .help-section {
+            margin-top: 70px; text-align: left; width: 100%; max-width: 700px;
+        }
+        .help-section h2 {
+            font-size: 1.8rem; color: var(--text); margin-bottom: 30px; text-align: center;
+        }
+        .help-card {
+            background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+            padding: 25px; margin-bottom: 18px;
+        }
+        .help-card h3 { color: var(--gold); margin-bottom: 12px; font-size: 1.1rem; }
+        .help-card p, .help-card li { color: var(--muted); font-size: 0.9rem; line-height: 1.6; }
+        .help-card ul { padding-left: 20px; margin: 10px 0; }
+        .help-card code { background: #1a1a1a; padding: 2px 6px; border-radius: 4px; font-size: 0.85rem; }
 
         @media (max-width: 640px) {
             h1 { font-size: 2.2rem; }
@@ -259,12 +174,10 @@
             .dl-group { flex-direction: column; align-items: center; }
         }
     </style>
-    <!-- Gumroad overlay -->
     <script src="https://gumroad.com/js/gumroad.js"></script>
 </head>
 <body>
     <div class="container">
-        <!-- subtle nav -->
         <nav class="nav">
             <a href="https://www.tiktok.com/@tradermoneyofficial" target="_blank" rel="noopener" class="tiktok-link">
                 <svg viewBox="0 0 24 24"><path d="M12.525.02c1.31-.02 2.61-.01 3.91-.02.08 1.53.63 3.09 1.75 4.17 1.12 1.11 2.7 1.62 4.24 1.79v4.03c-1.44-.05-2.89-.35-4.2-.97-.57-.26-1.1-.59-1.62-.93-.01 2.92.01 5.84-.02 8.75-.08 1.4-.54 2.79-1.35 3.94-1.31 1.92-3.58 3.17-5.91 3.21-1.43.08-2.86-.31-4.08-1.03-2.02-1.19-3.44-3.37-3.65-5.71-.02-.5-.03-1-.01-1.49.18-1.9 1.12-3.72 2.58-4.96 1.66-1.44 3.98-2.13 6.15-1.72.02 1.48-.04 2.96-.04 4.44-.99-.32-2.15-.23-3.02.37-.63.41-1.11 1.04-1.36 1.75-.21.51-.15 1.07-.14 1.61.24 1.64 1.82 3.02 3.5 2.87 1.12-.01 2.19-.66 2.77-1.61.19-.33.4-.67.41-1.06.1-1.79.06-3.57.07-5.36.01-4.03-.01-8.05.02-12.07z"/></svg>
@@ -272,38 +185,27 @@
             </a>
         </nav>
 
-        <!-- logo mark -->
         <div class="logo"><span>TM</span></div>
 
-        <!-- hero -->
         <h1>Trade with <em>conviction</em></h1>
         <p class="subtitle">
             An institutional-grade automated trading terminal.
             Multi-broker. AI-powered signals. Zero fluff.
         </p>
 
-        <!-- version -->
         <div class="version-pill">
             <span class="dot"></span>
             <span>Latest <strong id="version-number">v—</strong></span>
         </div>
 
-        <!-- downloads -->
         <div class="dl-group">
-            <a href="https://github.com/shafayrich/tradermoney/releases/latest/download/TraderMoney_macOS_AppleSilicon.tar.gz" class="dl-btn">
-                <span class="os-icon">🍏</span> macOS Silicon
-            </a>
-            <a href="https://github.com/shafayrich/tradermoney/releases/latest/download/TraderMoney_macOS_Intel.tar.gz" class="dl-btn">
-                <span class="os-icon">🖥️</span> macOS Intel
-            </a>
-            <a href="https://github.com/shafayrich/tradermoney/releases/latest/download/TraderMoney_Windows.zip" class="dl-btn">
-                <span class="os-icon">🪟</span> Windows
-            </a>
+            <a href="https://github.com/shafayrich/tradermoney/releases/latest/download/TraderMoney_macOS_AppleSilicon.tar.gz" class="dl-btn">🍏 macOS Silicon</a>
+            <a href="https://github.com/shafayrich/tradermoney/releases/latest/download/TraderMoney_macOS_Intel.tar.gz" class="dl-btn">🖥️ macOS Intel</a>
+            <a href="https://github.com/shafayrich/tradermoney/releases/latest/download/TraderMoney_Windows.zip" class="dl-btn">🪟 Windows</a>
             <span class="divider"></span>
             <a class="gumroad-button" href="https://shafayrich.gumroad.com/l/ykaoov">Get Pro</a>
         </div>
 
-        <!-- minimal feature chips -->
         <div class="feature-strip">
             <span class="f-chip"><strong>6</strong> brokers</span>
             <span class="f-chip"><strong>9</strong> indicators</span>
@@ -314,6 +216,93 @@
             <span class="f-chip"><strong>Telegram</strong> alerts</span>
             <span class="f-chip"><strong>Backtesting</strong></span>
             <span class="f-chip">macOS &amp; <strong>Windows</strong></span>
+        </div>
+
+        <!-- Free vs Pro -->
+        <div class="compare-section">
+            <h2>Free vs Pro</h2>
+            <table class="compare-table">
+                <tr><th>Feature</th><th>Community (Free)</th><th>Pro</th></tr>
+                <tr><td>Auto Trade</td><td><span class="cross">✕</span></td><td><span class="check">✔</span></td></tr>
+                <tr><td>Tickers</td><td>1</td><td><span class="check">Unlimited</span></td></tr>
+                <tr><td>Brokers</td><td>Alpaca (paper only)</td><td><span class="check">All 6 (paper & live)</span></td></tr>
+                <tr><td>Indicators</td><td>RSI, MACD, VWAP, Bollinger</td><td><span class="check">All 9</span></td></tr>
+                <tr><td>ATR Stops</td><td><span class="cross">✕</span></td><td><span class="check">✔</span></td></tr>
+                <tr><td>Bracket Orders</td><td><span class="cross">✕</span></td><td><span class="check">✔</span></td></tr>
+                <tr><td>Short Selling</td><td><span class="cross">✕</span></td><td><span class="check">✔</span></td></tr>
+                <tr><td>Telegram Alerts</td><td><span class="cross">✕</span></td><td><span class="check">✔</span></td></tr>
+                <tr><td>Backtesting</td><td><span class="check">✔</span></td><td><span class="check">✔</span></td></tr>
+                <tr><td>Price</td><td><strong>Free</strong></td><td><strong>$25/month</strong></td></tr>
+            </table>
+        </div>
+
+        <!-- Help section -->
+        <div class="help-section">
+            <h2>Documentation & Help</h2>
+
+            <div class="help-card">
+                <h3>🚀 Getting Started</h3>
+                <ol style="color:var(--muted); padding-left:20px; font-size:0.9rem; line-height:1.8;">
+                    <li>Download the app for your platform.</li>
+                    <li>Launch <strong>TraderMoney</strong>. The free tier allows Signal‑Only mode on Alpaca paper.</li>
+                    <li>Paste your Alpaca API Key & Secret (get them from <a href="https://alpaca.markets" style="color:var(--gold)">alpaca.markets</a>). Enable Paper Trading.</li>
+                    <li>Enter your tickers (e.g., <code>AAPL, TSLA:2, MSFT</code>). Quantities after colon set per‑symbol size.</li>
+                    <li>Click <strong>Start Bot</strong>. Signals will appear in the Signals tab.</li>
+                </ol>
+            </div>
+
+            <div class="help-card">
+                <h3>🔌 Broker Setup</h3>
+                <ul>
+                    <li><strong>Alpaca:</strong> API Key + Secret. Check “Paper Trading” for simulation. Live requires a funded account.</li>
+                    <li><strong>Interactive Brokers:</strong> TWS or IB Gateway must be running with API enabled. Default port: 7497 (paper) / 7496 (live).</li>
+                    <li><strong>Tradier:</strong> Access token from developer.tradier.com. Use Sandbox for testing.</li>
+                    <li><strong>Binance:</strong> API Key + Secret. Testnet available via checkbox.</li>
+                    <li><strong>Bybit:</strong> API Key + Secret. Uses unified account. Testnet supported.</li>
+                    <li><strong>OKX:</strong> API Key + Secret + Passphrase. Demo trading checkbox.</li>
+                </ul>
+                <p>All credentials are encrypted locally with Fernet (safe‑write). No cloud storage.</p>
+            </div>
+
+            <div class="help-card">
+                <h3>📊 Indicators & Confirmation Logic</h3>
+                <p>The engine runs EMA(9,50) crossover and confirms with up to 9 additional filters. Each toggleable indicator adds confidence (0.05–0.08). Only crossed‑above signals with all active filters passing generate a BUY.</p>
+                <ul>
+                    <li><strong>RSI:</strong> Long requires RSI ≥ 30; short requires RSI ≤ 70.</li>
+                    <li><strong>MACD:</strong> Long needs MACD > Signal line; short the opposite.</li>
+                    <li><strong>VWAP:</strong> Price > VWAP for long, &lt; VWAP for short.</li>
+                    <li><strong>Bollinger Bands:</strong> Price above lower band (99%) for long; below upper for short.</li>
+                    <li><strong>ADX:</strong> Must be ≥ 20 to indicate trend strength.</li>
+                    <li><strong>Volume:</strong> Current volume ≥ 1.5× 20‑period average.</li>
+                    <li><strong>SuperTrend:</strong> Trend must be up (1) for long, down (-1) for short.</li>
+                    <li><strong>Stochastic:</strong> %K > %D and %K &lt; 80 for long; %K &lt; %D and %K > 20 for short.</li>
+                </ul>
+            </div>
+
+            <div class="help-card">
+                <h3>🛡️ Risk Management</h3>
+                <ul>
+                    <li><strong>ATR Stops:</strong> Dynamic stop‑loss = 2× ATR, take‑profit = 3× ATR. Adapts to volatility.</li>
+                    <li><strong>Bracket Orders:</strong> Native SL/TP on Alpaca; watchdog thread emulates them on other brokers.</li>
+                    <li><strong>Kill Switch:</strong> Instantly closes all positions and stops the bot.</li>
+                    <li><strong>SL/TP Watchdog:</strong> For non‑Alpaca brokers, a background loop monitors price every 2 seconds and exits at fixed 2%/4% thresholds if bracket isn't supported natively.</li>
+                </ul>
+            </div>
+
+            <div class="help-card">
+                <h3>🧪 Backtesting</h3>
+                <p>Press <strong>Backtest All</strong> (or the button in the Backtest tab) to run historical signal generation on all your tickers. Choose the lookback days. Results show timestamps, indicator values, and confidence scores. Use it to tune your indicator combination before going live.</p>
+            </div>
+
+            <div class="help-card">
+                <h3>💡 Tips & Troubleshooting</h3>
+                <ul>
+                    <li><strong>No signals?</strong> Too many filters enabled. Try toggling SuperTrend or Stochastic off.</li>
+                    <li><strong>Free tier restrictions:</strong> Only 1 ticker, Alpaca paper, signal‑only, core indicators. Upgrade to Pro for full access.</li>
+                    <li><strong>Chart not loading?</strong> Ensure internet connection. The TradingView widget loads from CDN.</li>
+                    <li><strong>License not recognized?</strong> Verify your key at Gumroad. If valid, restart the app.</li>
+                </ul>
+            </div>
         </div>
     </div>
 
@@ -328,12 +317,8 @@
     <script>
         fetch('https://raw.githubusercontent.com/shafayrich/tradermoney/main/version.json')
             .then(r => r.json())
-            .then(data => {
-                document.getElementById('version-number').textContent = 'v' + data.latest_version;
-            })
-            .catch(() => {
-                document.getElementById('version-number').textContent = 'v1.0.52';
-            });
+            .then(data => { document.getElementById('version-number').textContent = 'v' + data.latest_version; })
+            .catch(() => { document.getElementById('version-number').textContent = 'v1.0.52'; });
     </script>
 </body>
 </html>
