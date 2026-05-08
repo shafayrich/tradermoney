@@ -1,8 +1,8 @@
 """
-TraderMoney v1.0.46
+TraderMoney v1.0.47
 ─────────────────────────────────────────────────────────────────────────────
 All 6 brokers fully fixed. Alpaca streaming uses alpaca-py v2.
-Scrollable ticker bar and expanded Help section.
+Scrollable ticker bar, expanded Help section. Emoji‑free professional UI.
 Required packages: see previous version.
 """
 
@@ -28,7 +28,7 @@ import webview
 from flask import Flask, jsonify, request, send_file
 from flask_cors import CORS
 
-APP_VERSION = "1.0.46"
+APP_VERSION = "1.0.47"
 
 # ── Gumroad ─────────────────────────────────────────────────
 GUMMROAD_PRODUCT_ID = "73otoT7rzJukCy-Lt4hhkQ=="
@@ -299,7 +299,7 @@ class BaseBroker:
     def _emit_error(self, msg: str):
         self.last_error = msg
         self.ui_queue.put(("error", msg))
-        db.insert_log(f"❌ [{self.name}] {msg}")
+        db.insert_log(f"[{self.name}] {msg}")
 
     def _emit_log(self, msg: str):
         self.ui_queue.put(("log", msg))
@@ -1593,8 +1593,8 @@ class TradingEngine(threading.Thread):
         self.broker.stream_prices(
             self.symbols, lambda s, p: self.ui_queue.put(("price_update", (s, p)))
         )
-        self.ui_queue.put(("status", f"✅ Running {len(self.symbols)} symbol(s)"))
-        self._telegram(f"🤖 TraderMoney started\n{', '.join(self.symbols)} | {mode}")
+        self.ui_queue.put(("status", f"Running {len(self.symbols)} symbol(s)"))
+        self._telegram(f"TraderMoney started\n{', '.join(self.symbols)} | {mode}")
 
         last_fetch = 0.0
         while self.running:
@@ -1608,7 +1608,7 @@ class TradingEngine(threading.Thread):
                         )
                     )
                 self.ui_queue.put(
-                    ("market", "🟢 Open" if self.broker.get_market_status() else "🔴 Closed")
+                    ("market", "Open" if self.broker.get_market_status() else "Closed")
                 )
                 now = time.time()
                 if now - last_fetch >= 60:
@@ -1649,7 +1649,7 @@ class TradingEngine(threading.Thread):
                             if sig:
                                 self.ui_queue.put(("signal", (sym, sig, price, rationale)))
                                 db.insert_signal(_ts(), sym, sig, price, rationale)
-                                self._telegram(f"📡 <b>{sig}</b> {sym} @ ${price:.2f}")
+                                self._telegram(f"SIGNAL {sig} {sym} @ ${price:.2f}")
                                 if (
                                     mode == "auto"
                                     and self.is_licensed
@@ -1667,7 +1667,7 @@ class TradingEngine(threading.Thread):
                 time.sleep(5)
 
         self.broker.stop_stream()
-        self.ui_queue.put(("status", "⏹️ Bot stopped"))
+        self.ui_queue.put(("status", "Bot stopped"))
 
     def _execute(self, sym, sig, price, latest, use_bracket, use_atr, sl_pct, tp_pct):
         try:
@@ -1692,14 +1692,14 @@ class TradingEngine(threading.Thread):
                     self.positions[sym] = qty
                     self.ui_queue.put(("order", (sym, "BUY", qty, price)))
                     db.insert_trade(_ts(), sym, "BUY", qty, price)
-                    self._telegram(f"✅ BUY {qty} {sym} @ ${price:.2f}")
+                    self._telegram(f"BUY {qty} {sym} @ ${price:.2f}")
             elif sig == "SELL" and self.positions.get(sym, 0) > 0:
                 pq = self.positions[sym]
                 if self.broker.submit_order(sym, pq, "sell"):
                     self.positions[sym] = 0
                     self.ui_queue.put(("order", (sym, "SELL", pq, price)))
                     db.insert_trade(_ts(), sym, "SELL", pq, price)
-                    self._telegram(f"✅ SELL {pq} {sym} @ ${price:.2f}")
+                    self._telegram(f"SELL {pq} {sym} @ ${price:.2f}")
         except Exception as e:
             self.ui_queue.put(("error", f"Execute error {sym}: {e}"))
 
@@ -1748,11 +1748,11 @@ def api_start():
     state.broker_instance = broker_cls(state.config, state.ui_queue)
     if not state.broker_instance.connect():
         err = state.broker_instance.last_error or "Unknown error."
-        state.config["last_broker_message"] = f"❌ {err}"
+        state.config["last_broker_message"] = f"ERROR: {err}"
         EncryptedConfigManager.save(state.config)
         return jsonify({"status": "error", "message": err})
 
-    state.config["last_broker_message"] = "✅ Connected"
+    state.config["last_broker_message"] = "Connected"
     EncryptedConfigManager.save(state.config)
 
     state.engine = TradingEngine(state.ui_queue, state.config, state.broker_instance)
@@ -1921,7 +1921,7 @@ def api_backtest():
         return jsonify({"error": str(e)})
 
 
-# ── FRONTEND HTML (scrollable ticker bar, expanded help) ───
+# ── FRONTEND HTML (emoji‑free, practical icons) ────────────
 FRONTEND_HTML = r"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1964,7 +1964,7 @@ hr{border-color:var(--border);margin:11px 0;}
 #sess{display:flex;align-items:center;gap:12px;padding:7px 11px;background:var(--card);border-bottom:1px solid var(--border);font-size:.82rem;flex-wrap:wrap;}
 .sd{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:3px;}
 .so{background:#00c9b1;}.sc{background:var(--danger);}
-/* ticker tabs – now scrollable with many tickers */
+/* ticker tabs – scrollable */
 #tkbar{display:flex;flex-wrap:nowrap;overflow-x:auto;background:var(--card);border-bottom:1px solid var(--border);}
 .tkbtn{padding:6px 13px;background:transparent;border:none;color:var(--text);cursor:pointer;white-space:nowrap;border-bottom:2px solid transparent;transition:.2s;font-size:.84rem;flex-shrink:0;}
 .tkbtn.active{border-bottom-color:var(--accent2);color:var(--accent);font-weight:700;}
@@ -2005,12 +2005,12 @@ hr{border-color:var(--border);margin:11px 0;}
 </head>
 <body>
 <div id="toasts"></div>
-<div id="upd">🔔 Update available! <a id="udl" href="#" target="_blank">Download</a></div>
+<div id="upd">Update available! <a id="udl" href="#" target="_blank">Download</a></div>
 <div id="sb">
-  <h2>💸 TraderMoney <span id="lbadge" class="lbadge li">FREE</span></h2>
+  <h2>TraderMoney <span id="lbadge" class="lbadge li">FREE</span></h2>
   <label>License Key</label><input type="password" id="lickey" placeholder="Paste Gumroad key">
-  <button onclick="validateLicense()" style="margin-top:4px;font-size:.8rem;">🔑 Validate</button>
-  <p style="font-size:.69rem;color:var(--muted);margin:3px 0 0;"><a href="https://shafayrich.gumroad.com/l/ykaoov" target="_blank" style="color:var(--accent)">Buy license ↗</a></p>
+  <button onclick="validateLicense()" style="margin-top:4px;font-size:.8rem;">Validate</button>
+  <p style="font-size:.69rem;color:var(--muted);margin:3px 0 0;"><a href="https://shafayrich.gumroad.com/l/ykaoov" target="_blank" style="color:var(--accent)">Buy license</a></p>
   <hr>
   <label>Broker</label><select id="broker" onchange="updateCreds()"><option>Alpaca</option><option>Interactive Brokers</option><option>Tradier</option><option>Binance</option><option>Bybit</option><option>OKX</option></select>
   <div id="bstatus" class="ok"></div><div id="creds"></div>
@@ -2032,14 +2032,14 @@ hr{border-color:var(--border);margin:11px 0;}
   <label><input type="checkbox" id="uvol" checked> Volume</label>
   <label><input type="checkbox" id="ust" checked> SuperTrend</label>
   <label><input type="checkbox" id="ustoch" checked> Stochastic</label>
-  <button onclick="saveConfig()">💾 Save</button>
-  <button class="ghost" onclick="refreshTickers()">🔄 Refresh Tickers</button>
-  <button style="background:var(--accent);color:#050505;" onclick="startBot()">▶️ Start Bot</button>
-  <button class="ghost" onclick="stopBot()">⏹️ Stop Bot</button>
-  <button class="danger" onclick="killSwitch()">⚠️ Kill Switch</button>
-  <button class="ghost" style="margin-top:5px" onclick="resetDef()">↺ Reset</button>
-  <button class="ghost" style="margin-top:16px" onclick="checkUpdate()">🔄 Check Updates</button>
-  <button class="purple" style="margin-top:7px" onclick="runBT()">🧪 Backtest All</button>
+  <button onclick="saveConfig()">Save</button>
+  <button class="ghost" onclick="refreshTickers()">Refresh Tickers</button>
+  <button style="background:var(--accent);color:#050505;" onclick="startBot()">&#9654; Start Bot</button>
+  <button class="ghost" onclick="stopBot()">&#9632; Stop Bot</button>
+  <button class="danger" onclick="killSwitch()">&#9650; Kill Switch</button>
+  <button class="ghost" style="margin-top:5px" onclick="resetDef()">&#8634; Reset</button>
+  <button class="ghost" style="margin-top:16px" onclick="checkUpdate()">Check Updates</button>
+  <button class="purple" style="margin-top:7px" onclick="runBT()">&#9874; Backtest All</button>
 </div>
 <div id="main">
   <div class="tab-bar" id="tabbar">
@@ -2053,58 +2053,58 @@ hr{border-color:var(--border);margin:11px 0;}
   <div id="tab-charts" class="tab active">
     <div id="tkbar"></div>
     <div id="metrics">
-      <div class="met"><div class="v" id="v-eq">—</div><div>Equity</div></div>
-      <div class="met"><div class="v" id="v-bp">—</div><div>Buy Power</div></div>
-      <div class="met"><div class="v" id="v-pl">—</div><div>P&amp;L</div></div>
-      <div class="met"><div class="v" id="v-pos">—</div><div>Positions</div></div>
+      <div class="met"><div class="v" id="v-eq">--</div><div>Equity</div></div>
+      <div class="met"><div class="v" id="v-bp">--</div><div>Buy Power</div></div>
+      <div class="met"><div class="v" id="v-pl">--</div><div>P&amp;L</div></div>
+      <div class="met"><div class="v" id="v-pos">--</div><div>Positions</div></div>
     </div>
     <div id="sess">
-      <span style="color:var(--accent)">🌍</span>
+      <span style="color:var(--accent)">Markets</span>
       <span><span class="sd" id="ds"></span>SYD</span>
       <span><span class="sd" id="dt"></span>TKY</span>
       <span><span class="sd" id="dl"></span>LDN</span>
       <span><span class="sd" id="dn"></span>NYC</span>
-      <span><span class="sd so"></span>CRYPTO 24/7</span>
+      <span><span class="sd so"></span>CRYPTO</span>
     </div>
     <div id="chart-c"></div>
   </div>
   <div id="tab-signals" class="tab"><div id="siglist" style="overflow-y:auto;flex:1;"></div></div>
   <div id="tab-history" class="tab"><div id="histlist" style="overflow-y:auto;flex:1;"></div></div>
-  <div id="tab-ema" class="tab"><div class="emgrid" id="emmon">Waiting…</div></div>
-  <div id="tab-backtest" class="tab"><div class="btp"><div style="padding:9px"><button class="purple" style="width:auto;padding:8px 18px" onclick="runBT()">🧪 Run Backtest on All Tickers</button></div><div id="btres" class="btr"><p class="ph">Click <b>🧪 Backtest All</b> to run.<br>Results appear here.</p></div></div></div>
+  <div id="tab-ema" class="tab"><div class="emgrid" id="emmon">Waiting...</div></div>
+  <div id="tab-backtest" class="tab"><div class="btp"><div style="padding:9px"><button class="purple" style="width:auto;padding:8px 18px" onclick="runBT()">&#9874; Run Backtest on All Tickers</button></div><div id="btres" class="btr"><p class="ph">Click <b>Backtest All</b> to run.<br>Results appear here.</p></div></div></div>
   <div id="tab-help" class="tab">
     <div class="hb">
-      <h3>📊 Indicator Win Rate Guide</h3>
+      <h3>Indicator Win Rate Guide</h3>
       <div class="istat">
         <p><b>Pure EMA Crossover (9/50):</b> ~32%</p>
-        <p><b>+ RSI:</b> ~40% &nbsp;|&nbsp; <b>+ MACD:</b> ~45% &nbsp;|&nbsp; <b>+ VWAP:</b> ~48%</p>
-        <p><b>+ Bollinger:</b> ~50% &nbsp;|&nbsp; <b>+ ADX ≥20:</b> ~55%</p>
-        <p><b>+ Volume 1.5×:</b> ~58% &nbsp;|&nbsp; <b>+ SuperTrend:</b> ~62% &nbsp;|&nbsp; <b>+ Stochastic:</b> ~65%</p>
+        <p><b>+ RSI:</b> ~40% | <b>+ MACD:</b> ~45% | <b>+ VWAP:</b> ~48%</p>
+        <p><b>+ Bollinger:</b> ~50% | <b>+ ADX >=20:</b> ~55%</p>
+        <p><b>+ Volume 1.5x:</b> ~58% | <b>+ SuperTrend:</b> ~62% | <b>+ Stochastic:</b> ~65%</p>
         <p><b>ATR stops</b> improve profit factor by ~0.4</p>
       </div>
-      <h4>🏦 Broker Connection Guide</h4>
+      <h4>Broker Connection Guide</h4>
       <ul>
-        <li><b>Alpaca:</b> API Key + Secret from alpaca.markets. Tick "Paper" for paper. Streaming uses <code>alpaca-py</code> v2.</li>
-        <li><b>Interactive Brokers:</b> TWS/Gateway must be running. API enabled. Ports: 7497=TWS paper | 7496=TWS live | 4002=Gateway paper | 4001=Gateway live. Dedicated event‑loop thread.</li>
-        <li><b>Tradier:</b> Access Token + Account ID from developer.tradier.com. Sandbox checkbox. Polls quotes every 5s.</li>
-        <li><b>Binance:</b> API Key + Secret from binance.com. Testnet checkbox. Uses <code>python-binance</code> ≥ 1.0 with Spot client and WebSocket stream.</li>
-        <li><b>Bybit:</b> API Key + Secret from bybit.com. Testnet. Uses <code>pybit</code> v5 (unified_trading). WebSocket ticker stream.</li>
-        <li><b>OKX:</b> Key + Secret + Passphrase from okx.com. Demo checkbox. Uses <code>okx</code> SDK and websocket‑client.</li>
+        <li><b>Alpaca:</b> API Key + Secret from alpaca.markets. Tick &quot;Paper&quot; for paper.</li>
+        <li><b>Interactive Brokers:</b> TWS/Gateway running, API enabled. Ports: 7497=TWS paper | 7496=TWS live | 4002=Gateway paper | 4001=Gateway live.</li>
+        <li><b>Tradier:</b> Access Token + Account ID from developer.tradier.com. Sandbox checkbox.</li>
+        <li><b>Binance:</b> API Key + Secret from binance.com. Testnet checkbox. Uses python-binance >=1.0 with Spot client and WebSocket stream.</li>
+        <li><b>Bybit:</b> API Key + Secret from bybit.com. Testnet. Uses pybit v5 (unified_trading). WebSocket ticker stream.</li>
+        <li><b>OKX:</b> Key + Secret + Passphrase from okx.com. Demo checkbox. Uses okx SDK and websocket-client.</li>
       </ul>
-      <h4>🔑 License</h4>
-      <p>Purchase at <a href="https://shafayrich.gumroad.com/l/ykaoov" target="_blank">Gumroad ↗</a>. Paste key in sidebar → Validate. Pro unlocks Auto Trade, multi‑ticker, and premium indicators.</p>
-      <h4>📡 Telegram</h4>
+      <h4>License</h4>
+      <p>Purchase at <a href="https://shafayrich.gumroad.com/l/ykaoov" target="_blank">Gumroad</a>. Paste key in sidebar > Validate. Pro unlocks Auto Trade, multi-ticker, and premium indicators.</p>
+      <h4>Telegram</h4>
       <p>Create a bot via @BotFather. Paste token and Chat ID for live signals.</p>
-      <h4>⚙️ Indicator Settings Explained</h4>
-      <p><b>RSI (14):</b> Bullish – only buy if RSI ≥ 30; Bearish – only sell if RSI ≤ 70.</p>
+      <h4>Indicator Details</h4>
+      <p><b>RSI (14):</b> Bullish – only buy if RSI >= 30; Bearish – only sell if RSI <= 70.</p>
       <p><b>MACD (12,26,9):</b> Buys only when MACD line > signal; sells when MACD < signal.</p>
       <p><b>VWAP:</b> Buys only when price > VWAP; sells when price < VWAP.</p>
-      <p><b>Bollinger Bands (20,2):</b> Trades only when price is within bands (lower×0.99 to upper×1.01).</p>
-      <p><b>ADX (14):</b> Requires ADX ≥ 20 to confirm a trend exists.</p>
-      <p><b>Volume Confirmation:</b> Current volume ≥ 1.5× the 20‑bar average.</p>
+      <p><b>Bollinger Bands (20,2):</b> Trades only when price is within bands (lower*0.99 to upper*1.01).</p>
+      <p><b>ADX (14):</b> Requires ADX >= 20 to confirm a trend exists.</p>
+      <p><b>Volume Confirmation:</b> Current volume >= 1.5x the 20-bar average.</p>
       <p><b>SuperTrend (10,3):</b> Bullish only when trend = 1; Bearish only when trend = -1.</p>
       <p><b>Stochastic (14,3,3):</b> Bullish when %K > %D and %K < 80; Bearish when %K < %D and %K > 20.</p>
-      <h4>🧪 Backtesting</h4>
+      <h4>Backtesting</h4>
       <p>Runs current indicator settings over last 5 days for all tickers. Signals shown with full indicator values.</p>
     </div>
   </div>
@@ -2142,14 +2142,14 @@ async function startBot(){cfg=buildCfg();let r=await fetch('/api/start',{method:
 async function stopBot(){await fetch('/api/stop',{method:'POST'});toast('Bot stopped','success');}
 async function killSwitch(){await fetch('/api/kill',{method:'POST'});toast('Kill switch activated','error');}
 async function refreshTickers(){let r=await fetch('/api/config'),c=await r.json();sv('tickers',c.tickers);let raw=c.tickers.split(',').map(s=>s.trim()).filter(s=>s);if(raw.length){setTickers(raw);loadChart(cs(raw[0]));}toast('Tickers refreshed','success');}
-async function validateLicense(){let key=gv('lickey').trim();if(!key){toast('Enter license key','error');return;}let r=await fetch('/api/validate_license',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({license_key:key})});let d=await r.json();if(d.valid){licValid=true;$('lbadge').textContent='PRO';$('lbadge').className='lbadge lv';toast('✅ Pro unlocked','success');}else{licValid=false;$('lbadge').textContent='FREE';$('lbadge').className='lbadge li';toast('❌ '+d.message,'error');}}
-async function checkUpdate(){try{let d=await(await fetch('/api/update')).json();if(d.update_available){$('upd').style.display='block';$('udl').href=d.download_url;}else toast('✅ Up to date!','success');}catch(e){}}
+async function validateLicense(){let key=gv('lickey').trim();if(!key){toast('Enter license key','error');return;}let r=await fetch('/api/validate_license',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({license_key:key})});let d=await r.json();if(d.valid){licValid=true;$('lbadge').textContent='PRO';$('lbadge').className='lbadge lv';toast('Pro unlocked','success');}else{licValid=false;$('lbadge').textContent='FREE';$('lbadge').className='lbadge li';toast(d.message,'error');}}
+async function checkUpdate(){try{let d=await(await fetch('/api/update')).json();if(d.update_available){$('upd').style.display='block';$('udl').href=d.download_url;}else toast('Up to date!','success');}catch(e){}}
 setTimeout(checkUpdate,2500);
-async function pollBS(){try{let d=await(await fetch('/api/broker_status')).json();let bs=$('bstatus');if(d.message){bs.textContent=d.message;bs.className=d.message.startsWith('✅')||d.message==='Connected'?'ok':'err';}}catch(e){}}
+async function pollBS(){try{let d=await(await fetch('/api/broker_status')).json();let bs=$('bstatus');if(d.message){bs.textContent=d.message;bs.className=d.message.startsWith('Connected')?'ok':'err';}}catch(e){}}
 setInterval(pollBS,2500);pollBS();
 async function pollStatus(){try{let d=await(await fetch('/api/status')).json();$('v-eq').textContent='$'+fmt(d.equity);$('v-bp').textContent='$'+fmt(d.buying_power);let pct=d.equity?(d.pl/d.equity*100):0;$('v-pl').innerHTML=`<span style="color:${pct>=0?'var(--accent)':'var(--danger)'}">${pct>=0?'+':''}${pct.toFixed(2)}%</span>`;$('v-pos').textContent=d.open_positions;let sl=$('siglist');sl.innerHTML='';(d.signals||[]).forEach(s=>{let div=document.createElement('div');div.className='sitem '+(s.signal==='BUY'?'buy':'sell');div.innerHTML=`<span>${s.time} <b>${s.signal}</b> ${s.symbol} @ $${s.price}</span><span>${s.rationale||''}</span>`;sl.appendChild(div);});let hl=$('histlist');hl.innerHTML='';(d.orders||[]).forEach(o=>{let div=document.createElement('div');div.className='sitem '+(o.action==='BUY'?'buy':'sell');div.innerHTML=`<span>${o.time} <b>${o.action}</b> ${o.qty} ${o.symbol} @ $${o.price}</span>`;hl.appendChild(div);});let em=$('emmon');if(d.ema_values&&Object.keys(d.ema_values).length){em.innerHTML=Object.entries(d.ema_values).map(([sym,v])=>`<div class="emcard"><div class="tk">${sym}</div><div class="ev"><span class="el">Fast </span>${v.fast}</div><div class="ev"><span class="el">Slow </span>${v.slow}</div></div>`).join('');}$('logbar').innerHTML=(d.log||[]).join('<br>');}catch(e){}}
 setInterval(pollStatus,1500);
-async function runBT(){toast('Running backtest…','info');document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.tbtn').forEach(x=>x.classList.remove('active'));$('tab-backtest').classList.add('active');document.querySelector('[data-tab="backtest"]').classList.add('active');try{let r=await fetch('/api/backtest',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({config:buildCfg(),days:5})});let data=await r.json();if(data.error){toast('Backtest error: '+data.error,'error');return;}let html='',total=0;for(let sym in data.results){let info=data.results[sym];html+=`<h4 style="color:var(--accent)">${sym}</h4>`;if(info.error){html+=`<p style="color:var(--danger)">Error: ${info.error}</p>`;continue;}let sigs=info.signals||[];total+=sigs.length;if(!sigs.length){html+='<p style="color:var(--muted)">No signals found.</p>';continue;}html+=`<table class="bttbl"><tr><th>Time</th><th>Sig</th><th>Price</th><th>RSI</th><th>MACD</th><th>MACDsig</th><th>VWAP</th><th>BB L/U</th><th>ADX</th><th>VolR</th><th>Trend</th><th>%K/%D</th><th>Note</th></tr>`;sigs.forEach(s=>{let i=s.indicators;html+=`<tr><td>${s.time.slice(11,19)||s.time.slice(0,19)}</td><td class="${s.signal==='BUY'?'buy':'sell'}">${s.signal}</td><td>$${s.price}</td><td>${i.RSI}</td><td>${i.MACD}</td><td>${i.MACD_signal}</td><td>$${i.VWAP}</td><td>${i.BB_lower}/${i.BB_upper}</td><td>${i.ADX}</td><td>${i.Vol_ratio}×</td><td>${i.Supertrend_trend===1?'🟢 Bull':'🔴 Bear'}</td><td>${i.Stoch_K}/${i.Stoch_D}</td><td style="text-align:left">${s.rationale}</td></tr>`;});html+='</table>';}if(total===0)html='<p class="ph">No signals generated. Try toggling indicators or extending backtest period.</p>';$('btres').innerHTML=html;}catch(e){toast('Backtest failed: '+e,'error');}}
+async function runBT(){toast('Running backtest...','info');document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.tbtn').forEach(x=>x.classList.remove('active'));$('tab-backtest').classList.add('active');document.querySelector('[data-tab="backtest"]').classList.add('active');try{let r=await fetch('/api/backtest',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({config:buildCfg(),days:5})});let data=await r.json();if(data.error){toast('Backtest error: '+data.error,'error');return;}let html='',total=0;for(let sym in data.results){let info=data.results[sym];html+=`<h4 style="color:var(--accent)">${sym}</h4>`;if(info.error){html+=`<p style="color:var(--danger)">Error: ${info.error}</p>`;continue;}let sigs=info.signals||[];total+=sigs.length;if(!sigs.length){html+='<p style="color:var(--muted)">No signals found.</p>';continue;}html+=`<table class="bttbl"><tr><th>Time</th><th>Sig</th><th>Price</th><th>RSI</th><th>MACD</th><th>MACDsig</th><th>VWAP</th><th>BB L/U</th><th>ADX</th><th>VolR</th><th>Trend</th><th>%K/%D</th><th>Note</th></tr>`;sigs.forEach(s=>{let i=s.indicators;html+=`<tr><td>${s.time.slice(11,19)||s.time.slice(0,19)}</td><td class="${s.signal==='BUY'?'buy':'sell'}">${s.signal}</td><td>$${s.price}</td><td>${i.RSI}</td><td>${i.MACD}</td><td>${i.MACD_signal}</td><td>$${i.VWAP}</td><td>${i.BB_lower}/${i.BB_upper}</td><td>${i.ADX}</td><td>${i.Vol_ratio}×</td><td>${i.Supertrend_trend===1?'Bull':'Bear'}</td><td>${i.Stoch_K}/${i.Stoch_D}</td><td style="text-align:left">${s.rationale}</td></tr>`;});html+='</table>';}if(total===0)html='<p class="ph">No signals generated. Try toggling indicators or extending backtest period.</p>';$('btres').innerHTML=html;}catch(e){toast('Backtest failed: '+e,'error');}}
 updateCreds();loadConfig();
 </script>
 </body>
@@ -2168,7 +2168,7 @@ if __name__ == "__main__":
     flask_thread.start()
     time.sleep(1.2)
     window = webview.create_window(
-        "TraderMoney – Solar Eclipse",
+        "TraderMoney",
         "http://127.0.0.1:5050",
         width=1360,
         height=840,
