@@ -28,14 +28,14 @@ from flask_cors import CORS
 APP_VERSION = "1.0.51"
 
 # ── Gumroad ─────────────────────────────────────────────────
-GUMMROAD_PRODUCT_ID = "73otoT7rzJukCy-Lt4hhkQ=="
+GUMROAD_PRODUCT_ID = "73otoT7rzJukCy-Lt4hhkQ=="
 
 
 def verify_gumroad_license(license_key: str) -> Tuple[bool, str]:
     try:
         resp = http_requests.post(
             "https://api.gumroad.com/v2/licenses/verify",
-            data={"product_id": GUMMROAD_PRODUCT_ID, "license_key": license_key},
+            data={"product_id": GUMROAD_PRODUCT_ID, "license_key": license_key},
             timeout=10,
         )
         data = resp.json()
@@ -1911,6 +1911,9 @@ FRONTEND_HTML = r"""<!DOCTYPE html>
 <style>
 :root{--bg:#050505;--card:#1A1A1A;--text:#e2e2e2;--accent:#D4AF37;--accent2:#6A0DAD;--danger:#B22222;--border:#2A2E38;--muted:#7a7d86;--sw:268px;}
 ::-webkit-scrollbar{width:4px;}::-webkit-scrollbar-track{background:#080808;}::-webkit-scrollbar-thumb{background:#222;}
+/* 💡 FIX: thin horizontal scrollbar for ticker bar */
+#tkbar::-webkit-scrollbar{height:4px;}
+#tkbar::-webkit-scrollbar-thumb{background:#222;border-radius:2px;}
 *{box-sizing:border-box;}
 body{margin:0;font-family:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',sans-serif;background:var(--bg);color:var(--text);display:flex;height:100vh;overflow:hidden;color-scheme:dark;}
 #sb{width:var(--sw);background:#0b0b0b;border-right:1px solid var(--border);display:flex;flex-direction:column;overflow-y:auto;overflow-x:hidden;padding:16px 13px;flex-shrink:0;}
