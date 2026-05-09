@@ -1,21 +1,5 @@
 """
-TraderMoney v1.0.58
-─────────────────────────────────────────────────────────────────────────────
-Changes from v1.0.55:
-  • Free-tier restrictions fully enforced on UI (broker, mode, dir, premium
-    indicator checkboxes are disabled/locked when no valid license).
-  • Backend /api/start re-enforces all free-tier constraints before creating
-    the broker instance.
-  • TradingEngine never executes real trades without a valid license.
-  • resetDef() preserves license state, includes empty broker credential
-    sub-objects, and re-applies tier-appropriate UI restrictions.
-  • New AI Chat tab powered by the OpenAI API (gpt-3.5-turbo).
-    Free tier: 5 messages/day. Pro: unlimited.
-  • /api/backtest: pandas import fixed (was missing in function scope).
-─────────────────────────────────────────────────────────────────────────────
-Required pip packages:
-    flask flask-cors pywebview numpy requests cryptography yfinance
-    alpaca-trade-api  ib_insync  python-binance  pybit  okx  websocket-client
+TraderMoney v1.0.59 – License stripped each boot, AI Chat fixed, backtesting resilient.
 """
 
 import asyncio
@@ -39,16 +23,25 @@ import webview
 from flask import Flask, jsonify, request, send_file
 from flask_cors import CORS
 
-APP_VERSION = "1.0.58"
+APP_VERSION = "1.0.59"
 
-# ── OpenAI / AI Chat ────────────────────────────────────────────────────────
-# Replace with your actual OpenAI API key.
-# Get one at https://platform.openai.com/api-keys
+# ── AI Chat ───────────────────────────────────────────────────────────────────
+# Free ChatAnywhere key – replace with your own if needed (no payment required).
+# Get a fresh key at https://api.chatanywhere.tech/v1/oauth/free/render
 CHATANYWHERE_API_KEY = "sk-hUwjVr5dWqvnwBjYeglNUNuiNi4yW2znuaRwauuKryf2XauS"
 FREE_CHAT_DAILY_LIMIT = 5
+
+_CHAT_SYSTEM_PROMPT = (
+    "You are a professional trading assistant for TraderMoney, a desktop algorithmic "
+    "trading terminal. You provide concise, accurate answers about trading strategies, "
+    "technical indicators (EMA, RSI, MACD, VWAP, Bollinger Bands, ADX, SuperTrend, "
+    "Stochastic, ATR), risk management, broker connections, and platform usage. "
+    "Keep responses focused and under 220 words. Use plain text only."
+)
+
 _chat_counter: Dict[str, Any] = {"date": None, "count": 0}
 
-# ── Gumroad ─────────────────────────────────────────────────────────────────
+# ── Gumroad ───────────────────────────────────────────────────────────────────
 GUMROAD_PRODUCT_ID = "73otoT7rzJukCy-Lt4hhkQ=="
 
 
@@ -199,7 +192,7 @@ class DatabaseManager:
 
 db = DatabaseManager()
 
-# ── Encrypted config ─────────────────────────────────────────────────────────
+# ── Encrypted config (license fields are NEVER persisted) ────────────────────
 CONFIG_FILE = os.path.expanduser("~/.tradermoney_config.enc")
 KEY_FILE = os.path.expanduser("~/.tradermoney.key")
 
@@ -223,16 +216,22 @@ class EncryptedConfigManager:
             cipher = _get_fernet()
             if os.path.exists(CONFIG_FILE):
                 with open(CONFIG_FILE, "rb") as f:
-                    return json.loads(cipher.decrypt(f.read()).decode())
+                    data = json.loads(cipher.decrypt(f.read()).decode())
+                # strip license – always start as FREE
+                data.pop("license_key", None)
+                data.pop("license_valid", None)
+                return data
         except Exception:
             pass
         return {}
 
     @staticmethod
     def save(config: dict):
+        # never persist license fields
+        clean = {k: v for k, v in config.items() if k not in ("license_key", "license_valid")}
         try:
             cipher = _get_fernet()
-            plain = json.dumps(config, indent=2).encode()
+            plain = json.dumps(clean, indent=2).encode()
             tmp = CONFIG_FILE + ".tmp"
             with open(tmp, "wb") as f:
                 f.write(cipher.encrypt(plain))
@@ -269,8 +268,6 @@ _DEFAULT_CONFIG: dict = {
     "use_atr_stops": True,
     "direction": "both",
     "use_default_qty": True,
-    "license_key": "",
-    "license_valid": False,
     "last_broker_message": "",
     "alpaca":  {"api_key": "", "secret_key": "", "paper": True},
     "ibkr":   {"host": "", "port": "", "client_id": ""},
@@ -285,10 +282,13 @@ class AppState:
     def __init__(self):
         loaded = EncryptedConfigManager.load()
         self.config = {**_DEFAULT_CONFIG, **loaded} if loaded else dict(_DEFAULT_CONFIG)
-        # Make sure sub-dicts exist
+        # ensure sub‑dicts exist
         for k in ("alpaca", "ibkr", "tradier", "binance", "bybit", "okx"):
-            if k not in self.config:
+            if k not in self.config or not isinstance(self.config[k], dict):
                 self.config[k] = dict(_DEFAULT_CONFIG[k])
+        # license always starts as false (stripped on load)
+        self.config["license_valid"] = False
+        self.config["license_key"] = ""
         self.ui_queue: queue.Queue = queue.Queue()
         self.engine: Optional["TradingEngine"] = None
         self.broker_instance: Optional["BaseBroker"] = None
@@ -364,8 +364,7 @@ class AlpacaBroker(BaseBroker):
         if not secret:
             self._emit_error("Alpaca Secret Key is missing.")
             return False
-        base_url = ("https://paper-api.alpaca.markets" if paper
-                    else "https://api.alpaca.markets")
+        base_url = ("https://paper-api.alpaca.markets" if paper else "https://api.alpaca.markets")
         try:
             import alpaca_trade_api as tradeapi
             self.api = tradeapi.REST(key, secret, base_url, api_version="v2")
@@ -1658,11 +1657,7 @@ def mobile():
 
 @app.route("/api/config", methods=["GET"])
 def api_get_config():
-    key = state.config.get("license_key", "").strip()
-    if key:
-        valid, _ = verify_gumroad_license(key)
-        state.config["license_valid"] = valid
-        EncryptedConfigManager.save(state.config)
+    # Do NOT re-validate on GET – just return current state
     return jsonify(state.config)
 
 
@@ -1670,6 +1665,7 @@ def api_get_config():
 def api_save_config():
     data = request.json or {}
     state.config.update(data)
+    # Strip license before saving
     EncryptedConfigManager.save(state.config)
     return jsonify({"status": "ok", "message": "Configuration saved"})
 
@@ -1680,17 +1676,19 @@ def api_start():
     state.config.update(data)
     EncryptedConfigManager.save(state.config)
 
-    # Re-validate license on start
+    # Re-validate license on start (key might have been entered in this session)
     key = state.config.get("license_key", "").strip()
     if key:
         valid, _ = verify_gumroad_license(key)
         state.config["license_valid"] = valid
-        EncryptedConfigManager.save(state.config)
+        # Do NOT save – license is session-only
+    else:
+        state.config["license_valid"] = False
 
     if state.engine and state.engine.running:
         return jsonify({"status": "error", "message": "Bot already running."})
 
-    # ── Backend free-tier enforcement (cannot be bypassed from the front-end) ──
+    # ── Backend free-tier enforcement (cannot be bypassed) ──
     if not state.config.get("license_valid"):
         state.config["broker"]    = "Alpaca"
         state.config["mode"]      = "signal"
@@ -1703,7 +1701,6 @@ def api_start():
             state.config[k] = False
         first = state.config.get("tickers", "AAPL").split(",")[0].strip()
         state.config["tickers"] = first
-        EncryptedConfigManager.save(state.config)
 
     broker_choice = state.config.get("broker", "Alpaca")
     broker_cls    = BROKER_REGISTRY.get(broker_choice)
@@ -1784,12 +1781,13 @@ def api_validate_license():
         return jsonify({"valid": False, "message": "No license key provided"})
     valid, msg = verify_gumroad_license(key)
     if valid:
-        state.config["license_valid"] = True
         state.config["license_key"]   = key
-        EncryptedConfigManager.save(state.config)
+        state.config["license_valid"] = True
+        # Do NOT persist license – session only
+        return jsonify({"valid": True, "message": "License verified for this session"})
     else:
         state.config["license_valid"] = False
-    return jsonify({"valid": valid, "message": msg})
+        return jsonify({"valid": False, "message": msg})
 
 
 @app.route("/api/update", methods=["GET"])
@@ -1818,7 +1816,7 @@ def api_backtest():
     days   = int(data.get("days", 5))
     try:
         import yfinance as yf
-        import pandas   as pd    # ← fixed: was missing in v1.0.55
+        import pandas   as pd
 
         raw_list = [s.strip() for s in config.get("tickers", "AAPL").split(",") if s.strip()]
         symbols  = list(dict.fromkeys(clean_symbol(e) for e in raw_list))
@@ -1828,10 +1826,14 @@ def api_backtest():
 
         for sym in symbols:
             try:
+                # Try intraday first, fallback to daily if empty
                 df = yf.download(sym, period=f"{days}d", interval=interval,
                                  progress=False, auto_adjust=True)
+                if df is None or df.empty and interval != "1d":
+                    df = yf.download(sym, period=f"{days}d", interval="1d",
+                                     progress=False, auto_adjust=True)
                 if df is None or df.empty:
-                    results[sym] = {"error": "No data returned"}
+                    results[sym] = {"error": "No data returned (possibly delisted or invalid symbol)"}
                     continue
                 if isinstance(df.columns, pd.MultiIndex):
                     df.columns = df.columns.get_level_values(0)
@@ -1876,17 +1878,7 @@ def api_backtest():
         return jsonify({"error": str(e)})
 
 
-# ── AI CHAT ───────────────────────────────────────────────────────────────────
-_CHAT_SYSTEM_PROMPT = (
-    "You are a professional trading assistant for TraderMoney, a desktop algorithmic "
-    "trading terminal. You provide concise, accurate answers about trading strategies, "
-    "technical indicators (EMA, RSI, MACD, VWAP, Bollinger Bands, ADX, SuperTrend, "
-    "Stochastic, ATR), risk management, broker connections, and platform usage. "
-    "Keep responses focused and under 220 words. Use plain text only."
-)
-
-
-# ── AI CHAT (DeepSeek) ───────────────────────────────────────────────────────
+# ── AI CHAT (ChatAnywhere – free, OpenAI‑compatible) ──────────────────────────
 @app.route("/api/chat", methods=["POST"])
 def api_chat():
     global _chat_counter
@@ -1913,21 +1905,21 @@ def api_chat():
         _chat_counter["count"] += 1
 
     # ── API key check ─────────────────────────────────────────────────────
-    if not DEEPSEEK_API_KEY or DEEPSEEK_API_KEY.startswith("sk-YOUR"):
+    if not CHATANYWHERE_API_KEY or CHATANYWHERE_API_KEY.startswith("sk-YOUR"):
         return jsonify({
-            "reply": "DeepSeek API key not configured. Please update DEEPSEEK_API_KEY in app.py."
+            "reply": "ChatAnywhere API key not configured. Please update CHATANYWHERE_API_KEY in app.py. Get a free key at https://api.chatanywhere.tech/v1/oauth/free/render"
         })
 
-    # ── Call DeepSeek (OpenAI‑compatible endpoint) ─────────────────────────
+    # ── Call ChatAnywhere (OpenAI‑compatible) ──────────────────────────────
     try:
         resp = http_requests.post(
             "https://api.chatanywhere.tech/v1/chat/completions",
             headers={
-                "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+                "Authorization": f"Bearer {CHATANYWHERE_API_KEY}",
                 "Content-Type":  "application/json",
             },
             json={
-                "model": "gpt-3.5-turbo",
+                "model": "gpt-3.5-turbo",   # free model provided by ChatAnywhere
                 "messages": [
                     {"role": "system", "content": _CHAT_SYSTEM_PROMPT},
                     {"role": "user",   "content": message},
@@ -1939,8 +1931,8 @@ def api_chat():
         )
         result = resp.json()
         if "error" in result:
-            err_msg = result["error"].get("message", "Unknown DeepSeek error")
-            db.insert_log(f"[AI Chat] DeepSeek error: {err_msg}")
+            err_msg = result["error"].get("message", "Unknown ChatAnywhere error")
+            db.insert_log(f"[AI Chat] ChatAnywhere error: {err_msg}")
             return jsonify({"reply": f"AI error: {err_msg}"})
         reply = result["choices"][0]["message"]["content"].strip()
         return jsonify({"reply": reply})
@@ -2007,7 +1999,7 @@ hr{border-color:var(--border);margin:12px 0;}
 .empty-placeholder{color:var(--muted);text-align:center;padding:30px;font-size:.9rem;}
 #toasts{position:fixed;top:16px;right:16px;z-index:9999;display:flex;flex-direction:column;gap:6px;}
 .toast{padding:14px 22px;border-radius:14px;font-weight:500;box-shadow:0 4px 18px rgba(0,0,0,.5);animation:si .25s ease;max-width:420px;font-size:1rem;border:1px solid #333;}
-.toast.success{background:var(--accent);color:#000;}.toast.error{background:var(--danger);color:#fff;}.toast.info{background:var(--accent);color:#000;}
+.toast.success{background:var(--accent);color:#000;}.toast.error{background:var(--danger);color:#fff;}
 @keyframes si{from{transform:translateX(110%);opacity:0}to{transform:translateX(0);opacity:1}}
 #upd{display:none;position:fixed;bottom:16px;right:16px;z-index:9999;background:var(--accent);color:#000;padding:12px 18px;border-radius:10px;font-weight:bold;font-size:.88rem;}
 #upd a{color:#000;text-decoration:underline;}
@@ -2058,6 +2050,7 @@ hr{border-color:var(--border);margin:12px 0;}
   </p>
   <div id="free-notice" class="free-notice">
     Free tier: Alpaca paper only &bull; Signal-Only &bull; 1 ticker &bull; Core indicators only (RSI, MACD, VWAP, Bollinger). AI Chat: 5 messages/day.
+    <br><b>License NOT saved – re‑enter each session.</b>
   </div>
   <hr>
   <label>Broker</label>
@@ -2192,7 +2185,7 @@ hr{border-color:var(--border);margin:12px 0;}
         <li><b>OKX:</b> Key + Secret + Passphrase from okx.com. Demo checkbox.</li>
       </ul>
       <h4>AI Chat</h4>
-      <p>Add your OpenAI API key to the <code>OPENAI_API_KEY</code> constant at the top of <code>app.py</code>. Free tier: 5 messages/day. Pro: unlimited.</p>
+      <p>Add your ChatAnywhere API key to the <code>CHATANYWHERE_API_KEY</code> constant at the top of <code>app.py</code>. Free tier: 5 messages/day. Pro: unlimited.</p>
       <h4>FAQ</h4>
       <p><b>Why no signals?</b> Too many filters. Try toggling SuperTrend or Stochastic off.</p>
       <p><b>Safe testing?</b> Use Paper Trading + Signal Only mode first.</p>
@@ -2238,10 +2231,9 @@ function gc(id){let e=$(id);return e?e.checked:false;}
 function sv(id,v){let e=$(id);if(e)e.value=v;}
 function sc(id,v){let e=$(id);if(e)e.checked=!!v;}
 
-/* Lock/unlock a custom checkbox (disable input + grey parent label) */
+/* Lock/unlock a custom checkbox */
 function lockCb(id,locked){
-  let el=$(id);
-  if(!el)return;
+  let el=$(id);if(!el)return;
   el.disabled=locked;
   let lbl=el.closest('label');
   if(lbl){lbl.style.opacity=locked?'0.38':'1';lbl.style.pointerEvents=locked?'none':'';}
@@ -2380,14 +2372,16 @@ function buildCfg(){
 /* ── Init UI from config ───────────────────────────────────── */
 function initUI(c){
   if(!c)return;
-  licValid=c.license_valid||false;
+  // License is never loaded from config – always start as FREE
+  licValid=false;
   cfg.alpaca =c.alpaca||{};cfg.ibkr=c.ibkr||{};cfg.tradier=c.tradier||{};
   cfg.binance=c.binance||{};cfg.bybit=c.bybit||{};cfg.okx=c.okx||{};
-  cfg.broker=licValid?(c.broker||'Alpaca'):'Alpaca';
+  cfg.broker='Alpaca';   // free tier locked to Alpaca
 
-  if(licValid){applyProUI();}else{applyFreeTierUI();}
+  // Always apply free tier UI
+  applyFreeTierUI();
 
-  // Common fields (always set)
+  // Common fields from config
   sv('tickers',c.tickers||'AAPL');sv('tf',c.timeframe||'1m');
   sv('emaf',c.emas?c.emas[0]:9);sv('emas',c.emas?c.emas[1]:50);
   sc('udefqty',c.use_default_qty!==false);toggleDefQty();
@@ -2396,25 +2390,12 @@ function initUI(c){
   sv('slp',c.sl_percent||2);sv('tpp',c.tp_percent||4);
   sc('ursi',c.use_rsi!==false);sc('umacd',c.use_macd!==false);
   sc('uvwap',c.use_vwap!==false);sc('uboll',c.use_bollinger!==false);
-  if(c.license_key)sv('lickey',c.license_key);
 
-  if(licValid){
-    // Pro: set full values from config
-    sv('broker',c.broker||'Alpaca');
-    sv('mode',c.mode||'signal');
-    sv('dir',c.direction||'both');
-    sc('ubracket',!!c.use_bracket);
-    sc('uatr',c.use_atr_stops!==false);
-    sc('uadx',c.use_adx!==false);
-    sc('uvol',c.use_vol_confirm!==false);
-    sc('ust',c.use_supertrend!==false);
-    sc('ustoch',c.use_stochastic!==false);
-    updateCreds();
-  } else {
-    // Free: lock to Alpaca and restore creds for Alpaca only
-    sv('broker','Alpaca');cfg.broker='Alpaca';
-    updateCreds();
-  }
+  // NEVER restore license key from config – clear the field
+  sv('lickey','');
+
+  // Load broker creds for Alpaca (free tier)
+  cfg.alpaca=c.alpaca||{}; cfg.broker='Alpaca'; updateCreds();
 
   let raw=(c.tickers||'AAPL').split(',').map(s=>s.trim()).filter(s=>s);
   if(raw.length){setTickers(raw);loadChart(cs(raw[0]));}
@@ -2441,29 +2422,26 @@ function loadChart(sym){
 
 /* ── Config load / save ────────────────────────────────────── */
 async function loadConfig(){
-  try{let r=await fetch('/api/config');cfg=await r.json();initUI(cfg);
-    if(cfg.license_key&&cfg.license_key.trim())validateLicense(true);
-    loadHistory();
-  }catch(e){toast('Config load failed','error');}
+  try{let r=await fetch('/api/config');cfg=await r.json();initUI(cfg);loadHistory();}catch(e){toast('Config load failed','error');}
 }
 function loadHistory(){
   fetch('/api/status').then(r=>r.json()).then(d=>{renderSignals(d.signals);renderOrders(d.orders);}).catch(()=>{});
 }
 
 async function saveConfig(){
-  cfg=buildCfg();
+  cfg=buildCfg();  // includes current license input but backend strips it
   await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg)});
-  toast('Config saved','success');
+  toast('Config saved (license NOT persisted)','success');
 }
 
-/* Default config object – includes empty broker credential sub-objects */
+/* Default config object */
 const DEF={
   broker:'Alpaca',tickers:'AAPL',mode:'signal',direction:'both',
   use_default_qty:true,quantity:1,emas:[9,50],use_bracket:false,
   sl_percent:2,tp_percent:4,timeframe:'1m',telegram:{},
   use_rsi:true,use_macd:true,use_vwap:true,use_bollinger:true,
   use_adx:true,use_vol_confirm:true,use_supertrend:true,use_stochastic:true,
-  use_atr_stops:true,license_key:'',license_valid:false,
+  use_atr_stops:true,
   alpaca:{api_key:'',secret_key:'',paper:true},
   ibkr:{host:'',port:'',client_id:''},
   tradier:{access_token:'',account_id:'',sandbox:false},
@@ -2473,13 +2451,13 @@ const DEF={
 };
 
 function resetDef(){
-  let savedKey=gv('lickey').trim(),savedValid=licValid;
   cfg=JSON.parse(JSON.stringify(DEF));
-  // Preserve license so Pro users aren't logged out
-  if(savedValid){cfg.license_valid=true;cfg.license_key=savedKey;}
-  initUI(cfg);
+  licValid=false;  // reset license state
+  applyFreeTierUI();
+  sv('lickey',''); // clear license input
+  initUI(cfg);  // will apply free tier again and load default settings
   saveConfig();
-  toast('Reset to defaults','success');
+  toast('Reset to factory defaults (license cleared)','success');
 }
 
 /* ── Bot controls ──────────────────────────────────────────── */
@@ -2517,26 +2495,22 @@ async function refreshTickers(){
   toast('Tickers refreshed','success');
 }
 
-/* ── License validation ────────────────────────────────────── */
-async function validateLicense(silent=false){
+/* ── License validation (session only) ─────────────────────── */
+async function validateLicense(){
   let key=gv('lickey').trim();
-  if(!key){if(!silent)toast('Enter a license key','error');return;}
+  if(!key){toast('Enter a license key','error');return;}
   let r=await fetch('/api/validate_license',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({license_key:key})});
   let d=await r.json();
   if(d.valid){
     licValid=true;
     applyProUI();
-    // Restore saved Pro values from cfg
-    sv('mode',cfg.mode||'signal');sv('dir',cfg.direction||'both');
-    sc('ubracket',!!cfg.use_bracket);sc('uatr',cfg.use_atr_stops!==false);
-    sc('uadx',cfg.use_adx!==false);sc('uvol',cfg.use_vol_confirm!==false);
-    sc('ust',cfg.use_supertrend!==false);sc('ustoch',cfg.use_stochastic!==false);
-    updateCreds();
-    if(!silent)toast('Pro unlocked','success');
+    // Since we don't have saved Pro settings, just enable the fields
+    toast('Pro unlocked for this session','success');
+    // Let user configure broker, mode, etc.
   }else{
     licValid=false;
     applyFreeTierUI();
-    if(!silent)toast(d.message,'error');
+    toast(d.message,'error');
   }
 }
 
@@ -2606,7 +2580,7 @@ async function runBT(){
       sigs.forEach(s=>{let i=s.indicators;html+=`<tr><td>${s.time.slice(11,19)||s.time.slice(0,19)}</td><td class="${s.signal==='BUY'?'buy':'sell'}">${s.signal}</td><td>$${s.price}</td><td>${i.RSI}</td><td>${i.MACD}</td><td>${i.MACD_signal}</td><td>$${i.VWAP}</td><td>${i.BB_lower}/${i.BB_upper}</td><td>${i.ADX}</td><td>${i.Vol_ratio}x</td><td>${i.Supertrend_trend===1?'Bull':'Bear'}</td><td>${i.Stoch_K}/${i.Stoch_D}</td><td>${(s.confidence*100).toFixed(0)}%</td></tr>`;});
       html+='</table>';
     }
-    if(total===0)html='<p class="ph">No signals generated. Try toggling indicators or extending the backtest period.</p>';
+    if(total===0)html='<p class="ph">No signals generated.</p>';
     $('btres').innerHTML=html;
   }catch(e){toast('Backtest failed: '+e,'error');}
 }
@@ -2634,10 +2608,8 @@ function addChatMsg(text,isUser){
   sender.className='msender';
   sender.textContent=isUser?'You':'TraderBot';
   let body=document.createElement('div');
-  body.className='mbody';
-  body.textContent=text;
-  wrap.appendChild(sender);
-  wrap.appendChild(body);
+  body.className='mbody'; body.textContent=text;
+  wrap.appendChild(sender); wrap.appendChild(body);
   msgs.appendChild(wrap);
   msgs.scrollTop=msgs.scrollHeight;
   return wrap;
@@ -2650,10 +2622,8 @@ async function sendChat(){
   inputEl.value='';
   addChatMsg(msg,true);
 
-  // Typing indicator
   let typing=document.createElement('div');
-  typing.className='chat-typing';
-  typing.textContent='TraderBot is thinking...';
+  typing.className='chat-typing'; typing.textContent='TraderBot is thinking...';
   $('chat-messages').appendChild(typing);
   $('chat-messages').scrollTop=$('chat-messages').scrollHeight;
 
@@ -2661,11 +2631,7 @@ async function sendChat(){
   sendBtn.disabled=true;
 
   try{
-    let r=await fetch('/api/chat',{
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({message:msg})
-    });
+    let r=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:msg})});
     let d=await r.json();
     typing.remove();
     addChatMsg(d.reply||'No response received.', false);
@@ -2673,7 +2639,6 @@ async function sendChat(){
     typing.remove();
     addChatMsg('Connection error. Please try again.',false);
   }
-
   sendBtn.disabled=false;
   $('chat-messages').scrollTop=$('chat-messages').scrollHeight;
 }
@@ -2708,15 +2673,13 @@ def run_flask():
 if __name__ == "__main__":
     acquire_lock()
 
-    # Daily license re-check (runs in background)
+    # Daily license re-check (background)
     def daily_license_check():
         while True:
             time.sleep(86400)
-            key = state.config.get("license_key", "").strip()
-            if key:
-                valid, _ = verify_gumroad_license(key)
-                state.config["license_valid"] = valid
-                EncryptedConfigManager.save(state.config)
+            # No saved license, so nothing to re-validate.
+            # We don't need to clear it because it's already cleared on boot and not saved.
+            pass
 
     threading.Thread(target=daily_license_check, daemon=True).start()
 
