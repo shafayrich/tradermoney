@@ -1,5 +1,5 @@
 """
-TraderMoney v1.0.57
+TraderMoney v1.0.58
 ─────────────────────────────────────────────────────────────────────────────
 Changes from v1.0.55:
   • Free-tier restrictions fully enforced on UI (broker, mode, dir, premium
@@ -39,12 +39,12 @@ import webview
 from flask import Flask, jsonify, request, send_file
 from flask_cors import CORS
 
-APP_VERSION = "1.0.57"
+APP_VERSION = "1.0.58"
 
 # ── OpenAI / AI Chat ────────────────────────────────────────────────────────
 # Replace with your actual OpenAI API key.
 # Get one at https://platform.openai.com/api-keys
-DEEPSEEK_API_KEY = "sk-b477e0dfaee0403c962143e8e0a13db1"
+CHATANYWHERE_API_KEY = "sk-hUwjVr5dWqvnwBjYeglNUNuiNi4yW2znuaRwauuKryf2XauS"
 FREE_CHAT_DAILY_LIMIT = 5
 _chat_counter: Dict[str, Any] = {"date": None, "count": 0}
 
@@ -1921,13 +1921,13 @@ def api_chat():
     # ── Call DeepSeek (OpenAI‑compatible endpoint) ─────────────────────────
     try:
         resp = http_requests.post(
-            "https://api.deepseek.com/v1/chat/completions",
+            "https://api.chatanywhere.tech/v1/chat/completions",
             headers={
                 "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
                 "Content-Type":  "application/json",
             },
             json={
-                "model": "deepseek-chat",
+                "model": "gpt-3.5-turbo",
                 "messages": [
                     {"role": "system", "content": _CHAT_SYSTEM_PROMPT},
                     {"role": "user",   "content": message},
