@@ -1,6 +1,21 @@
 """
-TraderMoney v1.0.55 – Full paywall, broker isolation, no purple, unified inputs,
-persistent credentials per broker, empty defaults, hidden brokers on free tier.
+TraderMoney v1.0.56
+─────────────────────────────────────────────────────────────────────────────
+Changes from v1.0.55:
+  • Free-tier restrictions fully enforced on UI (broker, mode, dir, premium
+    indicator checkboxes are disabled/locked when no valid license).
+  • Backend /api/start re-enforces all free-tier constraints before creating
+    the broker instance.
+  • TradingEngine never executes real trades without a valid license.
+  • resetDef() preserves license state, includes empty broker credential
+    sub-objects, and re-applies tier-appropriate UI restrictions.
+  • New AI Chat tab powered by the OpenAI API (gpt-3.5-turbo).
+    Free tier: 5 messages/day. Pro: unlimited.
+  • /api/backtest: pandas import fixed (was missing in function scope).
+─────────────────────────────────────────────────────────────────────────────
+Required pip packages:
+    flask flask-cors pywebview numpy requests cryptography yfinance
+    alpaca-trade-api  ib_insync  python-binance  pybit  okx  websocket-client
 """
 
 import asyncio
@@ -24,17 +39,24 @@ import webview
 from flask import Flask, jsonify, request, send_file
 from flask_cors import CORS
 
-APP_VERSION = "1.0.55"
+APP_VERSION = "1.0.56"
 
-# ── Gumroad ─────────────────────────────────────────────────
-GUMMROAD_PRODUCT_ID = "73otoT7rzJukCy-Lt4hhkQ=="
+# ── OpenAI / AI Chat ────────────────────────────────────────────────────────
+# Replace with your actual OpenAI API key.
+# Get one at https://platform.openai.com/api-keys
+OPENAI_API_KEY = "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"
+FREE_CHAT_DAILY_LIMIT = 5
+_chat_counter: Dict[str, Any] = {"date": None, "count": 0}
+
+# ── Gumroad ─────────────────────────────────────────────────────────────────
+GUMROAD_PRODUCT_ID = "73otoT7rzJukCy-Lt4hhkQ=="
 
 
 def verify_gumroad_license(license_key: str) -> Tuple[bool, str]:
     try:
         resp = http_requests.post(
             "https://api.gumroad.com/v2/licenses/verify",
-            data={"product_id": GUMMROAD_PRODUCT_ID, "license_key": license_key},
+            data={"product_id": GUMROAD_PRODUCT_ID, "license_key": license_key},
             timeout=10,
         )
         data = resp.json()
@@ -48,7 +70,7 @@ def verify_gumroad_license(license_key: str) -> Tuple[bool, str]:
         return False, f"Cannot reach license server – {e}"
 
 
-# ── Flask + port lock ───────────────────────────────────────
+# ── Flask + port lock ────────────────────────────────────────────────────────
 app = Flask(__name__)
 CORS(app)
 
@@ -70,7 +92,7 @@ def acquire_lock():
 signal.signal(signal.SIGINT, lambda *_: sys.exit(0))
 signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
 
-# ── Database (logs cleared each session) ───────────────────
+# ── Database ─────────────────────────────────────────────────────────────────
 DB_PATH = os.path.expanduser("~/.tradermoney_data.db")
 
 
@@ -177,14 +199,13 @@ class DatabaseManager:
 
 db = DatabaseManager()
 
-# ── Encrypted config ────────────────────────────────────────
+# ── Encrypted config ─────────────────────────────────────────────────────────
 CONFIG_FILE = os.path.expanduser("~/.tradermoney_config.enc")
 KEY_FILE = os.path.expanduser("~/.tradermoney.key")
 
 
 def _get_fernet():
     from cryptography.fernet import Fernet
-
     if not os.path.exists(KEY_FILE):
         key = Fernet.generate_key()
         with open(KEY_FILE, "wb") as f:
@@ -213,64 +234,67 @@ class EncryptedConfigManager:
             cipher = _get_fernet()
             plain = json.dumps(config, indent=2).encode()
             tmp = CONFIG_FILE + ".tmp"
-            encrypted = cipher.encrypt(plain)
             with open(tmp, "wb") as f:
-                f.write(encrypted)
+                f.write(cipher.encrypt(plain))
             with open(tmp, "rb") as f:
-                cipher.decrypt(f.read())
+                cipher.decrypt(f.read())   # integrity check
             os.replace(tmp, CONFIG_FILE)
         except Exception as e:
             db.insert_log(f"Config save error: {e}")
 
 
-# ── Global state ────────────────────────────────────────────
+# ── Global state ──────────────────────────────────────────────────────────────
 ATR_STOP_MULT = 2.0
 ATR_TP_MULT = 3.0
+
+_DEFAULT_CONFIG: dict = {
+    "broker": "Alpaca",
+    "tickers": "AAPL",
+    "mode": "signal",
+    "quantity": 1,
+    "emas": [9, 50],
+    "use_bracket": False,
+    "sl_percent": 2.0,
+    "tp_percent": 4.0,
+    "timeframe": "1m",
+    "telegram": {},
+    "use_rsi": True,
+    "use_macd": True,
+    "use_vwap": True,
+    "use_bollinger": True,
+    "use_adx": True,
+    "use_vol_confirm": True,
+    "use_supertrend": True,
+    "use_stochastic": True,
+    "use_atr_stops": True,
+    "direction": "both",
+    "use_default_qty": True,
+    "license_key": "",
+    "license_valid": False,
+    "last_broker_message": "",
+    "alpaca":  {"api_key": "", "secret_key": "", "paper": True},
+    "ibkr":   {"host": "", "port": "", "client_id": ""},
+    "tradier": {"access_token": "", "account_id": "", "sandbox": False},
+    "binance": {"api_key": "", "api_secret": "", "testnet": True},
+    "bybit":   {"api_key": "", "api_secret": "", "testnet": True},
+    "okx":    {"api_key": "", "api_secret": "", "api_passphrase": "", "demo": True},
+}
 
 
 class AppState:
     def __init__(self):
-        self.config = EncryptedConfigManager.load() or {
-            "broker": "Alpaca",
-            "tickers": "AAPL",
-            "mode": "signal",
-            "quantity": 1,
-            "emas": [9, 50],
-            "use_bracket": False,
-            "sl_percent": 2.0,
-            "tp_percent": 4.0,
-            "timeframe": "1m",
-            "telegram": {},
-            "use_rsi": True,
-            "use_macd": True,
-            "use_vwap": True,
-            "use_bollinger": True,
-            "use_adx": True,
-            "use_vol_confirm": True,
-            "use_supertrend": True,
-            "use_stochastic": True,
-            "use_atr_stops": True,
-            "direction": "both",
-            "use_default_qty": True,
-            "license_key": "",
-            "license_valid": False,
-            "last_broker_message": "",
-            "alpaca": {"api_key": "", "secret_key": "", "paper": True},
-            "ibkr": {"host": "", "port": "", "client_id": ""},
-            "tradier": {"access_token": "", "account_id": "", "sandbox": False},
-            "binance": {"api_key": "", "api_secret": "", "testnet": True},
-            "bybit": {"api_key": "", "api_secret": "", "testnet": True},
-            "okx": {"api_key": "", "api_secret": "", "api_passphrase": "", "demo": True},
-        }
+        loaded = EncryptedConfigManager.load()
+        self.config = {**_DEFAULT_CONFIG, **loaded} if loaded else dict(_DEFAULT_CONFIG)
+        # Make sure sub-dicts exist
+        for k in ("alpaca", "ibkr", "tradier", "binance", "bybit", "okx"):
+            if k not in self.config:
+                self.config[k] = dict(_DEFAULT_CONFIG[k])
         self.ui_queue: queue.Queue = queue.Queue()
         self.engine: Optional["TradingEngine"] = None
         self.broker_instance: Optional["BaseBroker"] = None
         self.running: bool = False
         self.dashboard: dict = {
-            "equity": 0,
-            "pl": 0,
-            "buying_power": 0,
-            "open_positions": 0,
+            "equity": 0, "pl": 0, "buying_power": 0, "open_positions": 0,
         }
 
 
@@ -285,7 +309,7 @@ def clean_symbol(raw: str) -> str:
     return raw.split(":")[0].strip().upper()
 
 
-# ── Broker registry ─────────────────────────────────────────
+# ── Broker registry ───────────────────────────────────────────────────────────
 BROKER_REGISTRY: Dict[str, Any] = {}
 
 
@@ -310,42 +334,17 @@ class BaseBroker:
         self.ui_queue.put(("log", msg))
         db.insert_log(f"[{self.name}] {msg}")
 
-    def connect(self) -> bool:
-        raise NotImplementedError
-
-    def get_account(self) -> Optional[Dict[str, float]]:
-        raise NotImplementedError
-
-    def submit_order(
-        self,
-        symbol: str,
-        qty,
-        side: str,
-        order_type: str = "market",
-        sl_pct=None,
-        tp_pct=None,
-        sl_price=None,
-        tp_price=None,
-    ) -> bool:
-        raise NotImplementedError
-
-    def close_all_positions(self):
-        raise NotImplementedError
-
-    def get_positions(self) -> Dict[str, Any]:
-        raise NotImplementedError
-
-    def get_market_status(self) -> bool:
-        raise NotImplementedError
-
-    def stream_prices(self, symbols: List[str], callback):
-        raise NotImplementedError
-
-    def stop_stream(self):
-        raise NotImplementedError
+    def connect(self) -> bool:              raise NotImplementedError
+    def get_account(self):                  raise NotImplementedError
+    def submit_order(self, *a, **kw):       raise NotImplementedError
+    def close_all_positions(self):          raise NotImplementedError
+    def get_positions(self):                raise NotImplementedError
+    def get_market_status(self) -> bool:    raise NotImplementedError
+    def stream_prices(self, syms, cb):      raise NotImplementedError
+    def stop_stream(self):                  raise NotImplementedError
 
 
-# ── ALPACA BROKER ───────────────────────────────────────────
+# ── ALPACA ────────────────────────────────────────────────────────────────────
 class AlpacaBroker(BaseBroker):
     name = "Alpaca"
 
@@ -356,16 +355,17 @@ class AlpacaBroker(BaseBroker):
 
     def connect(self) -> bool:
         creds = self.config.get("alpaca", {})
-        key = creds.get("api_key", "").strip()
+        key    = creds.get("api_key",    "").strip()
         secret = creds.get("secret_key", "").strip()
-        paper = creds.get("paper", True)
+        paper  = creds.get("paper", True)
         if not key:
             self._emit_error("Alpaca API Key is missing.")
             return False
         if not secret:
             self._emit_error("Alpaca Secret Key is missing.")
             return False
-        base_url = "https://paper-api.alpaca.markets" if paper else "https://api.alpaca.markets"
+        base_url = ("https://paper-api.alpaca.markets" if paper
+                    else "https://api.alpaca.markets")
         try:
             import alpaca_trade_api as tradeapi
             self.api = tradeapi.REST(key, secret, base_url, api_version="v2")
@@ -381,7 +381,7 @@ class AlpacaBroker(BaseBroker):
         except Exception as e:
             msg = str(e)
             if "403" in msg or "unauthorized" in msg.lower():
-                self._emit_error(f"Alpaca auth failed (invalid key/secret). Paper={paper}. Detail: {msg}")
+                self._emit_error(f"Alpaca auth failed. Paper={paper}. Detail: {msg}")
             else:
                 self._emit_error(f"Alpaca connection error: {msg}")
             return False
@@ -391,13 +391,12 @@ class AlpacaBroker(BaseBroker):
             return None
         try:
             acc = self.api.get_account()
-            positions = self.api.list_positions()
             return {
-                "equity": float(acc.equity),
-                "pl": float(acc.equity) - float(acc.last_equity),
-                "buying_power": float(acc.buying_power),
-                "cash": float(acc.cash),
-                "open_positions": len(positions),
+                "equity":        float(acc.equity),
+                "pl":            float(acc.equity) - float(acc.last_equity),
+                "buying_power":  float(acc.buying_power),
+                "cash":          float(acc.cash),
+                "open_positions": len(self.api.list_positions()),
             }
         except Exception as e:
             self._emit_error(f"get_account: {e}")
@@ -409,22 +408,20 @@ class AlpacaBroker(BaseBroker):
             return False
         try:
             if sl_price is None and sl_pct is None:
-                self.api.submit_order(symbol=symbol, qty=qty, side=side, type="market", time_in_force="day")
+                self.api.submit_order(symbol=symbol, qty=qty, side=side,
+                                      type="market", time_in_force="day")
             else:
-                trade = self.api.get_latest_trade(symbol)
-                price = float(trade.price)
+                price = float(self.api.get_latest_trade(symbol).price)
                 if side == "buy":
-                    stop = round(sl_price if sl_price else price * (1 - sl_pct / 100), 2)
-                    limit = round(tp_price if tp_price else price * (1 + tp_pct / 100), 2)
+                    stop  = round(sl_price if sl_price else price * (1 - sl_pct/100), 2)
+                    limit = round(tp_price if tp_price else price * (1 + tp_pct/100), 2)
                 else:
-                    stop = round(sl_price if sl_price else price * (1 + sl_pct / 100), 2)
-                    limit = round(tp_price if tp_price else price * (1 - tp_pct / 100), 2)
+                    stop  = round(sl_price if sl_price else price * (1 + sl_pct/100), 2)
+                    limit = round(tp_price if tp_price else price * (1 - tp_pct/100), 2)
                 self.api.submit_order(
                     symbol=symbol, qty=qty, side=side,
-                    type="market", time_in_force="gtc",
-                    order_class="bracket",
-                    stop_loss={"stop_price": stop},
-                    take_profit={"limit_price": limit},
+                    type="market", time_in_force="gtc", order_class="bracket",
+                    stop_loss={"stop_price": stop}, take_profit={"limit_price": limit},
                 )
             return True
         except Exception as e:
@@ -464,15 +461,16 @@ class AlpacaBroker(BaseBroker):
             try:
                 from alpaca.data.live import StockDataStream
                 creds = self.config.get("alpaca", {})
-                key = creds.get("api_key")
+                key    = creds.get("api_key")
                 secret = creds.get("secret_key")
-                paper = creds.get("paper", True)
+                paper  = creds.get("paper", True)
 
                 async def on_trade(data):
                     if data.symbol in symbols:
                         callback(data.symbol, data.price)
 
-                stream = StockDataStream(api_key=key, secret_key=secret, feed="iex" if paper else "sip")
+                stream = StockDataStream(api_key=key, secret_key=secret,
+                                         feed="iex" if paper else "sip")
                 stream.subscribe_trades(on_trade, *symbols)
                 while not self._stop_stream:
                     try:
@@ -494,7 +492,7 @@ class AlpacaBroker(BaseBroker):
 register_broker("Alpaca", AlpacaBroker)
 
 
-# ── INTERACTIVE BROKERS ────────────────────────────────────
+# ── INTERACTIVE BROKERS ───────────────────────────────────────────────────────
 class IBKRBroker(BaseBroker):
     name = "Interactive Brokers"
 
@@ -512,27 +510,27 @@ class IBKRBroker(BaseBroker):
 
     def _ensure_loop(self):
         if self._loop is None or not self._loop.is_running():
-            self._ib_thread = threading.Thread(target=self._start_loop, daemon=True, name="IBKRLoop")
+            self._ib_thread = threading.Thread(
+                target=self._start_loop, daemon=True, name="IBKRLoop")
             self._ib_thread.start()
-            time.sleep(0.15)
+            time.sleep(0.2)
 
     def _run_coro(self, coro):
         if self._loop is None:
             raise RuntimeError("IBKR event loop not started")
-        future = asyncio.run_coroutine_threadsafe(coro, self._loop)
-        return future.result(timeout=15)
+        return asyncio.run_coroutine_threadsafe(coro, self._loop).result(timeout=15)
 
     def connect(self) -> bool:
-        creds = self.config.get("ibkr", {})
-        host = creds.get("host", "").strip()
-        port_str = creds.get("port", "").strip()
-        cid_str = creds.get("client_id", "").strip()
+        creds    = self.config.get("ibkr", {})
+        host     = creds.get("host",      "").strip()
+        port_str = creds.get("port",      "").strip()
+        cid_str  = creds.get("client_id", "").strip()
         if not host:
             self._emit_error("IBKR Host is missing.")
             return False
         try:
             port = int(port_str)
-            cid = int(cid_str)
+            cid  = int(cid_str)
         except ValueError:
             self._emit_error("IBKR port and client_id must be integers.")
             return False
@@ -541,27 +539,25 @@ class IBKRBroker(BaseBroker):
         except ImportError:
             self._emit_error("ib_insync not installed.")
             return False
-
         self._ensure_loop()
 
-        async def _do_connect():
+        async def _do():
             ib = IB()
             await ib.connectAsync(host, port, clientId=cid, timeout=10)
             return ib
 
         try:
-            self.ib = self._run_coro(_do_connect())
+            self.ib = self._run_coro(_do())
             if not self.ib.isConnected():
-                self._emit_error(f"IBKR connected but isConnected()=False. Check {host}:{port} – is TWS/Gateway running?")
+                self._emit_error(f"IBKR connected but isConnected()=False. Check {host}:{port}.")
                 return False
             self._emit_log(f"Connected to IBKR at {host}:{port} (clientId={cid})")
             return True
         except ConnectionRefusedError:
             self._emit_error(
                 f"IBKR refused connection at {host}:{port}. "
-                "Is TWS or IB Gateway running? API enabled? "
-                "Ports: 7497=TWS paper | 7496=TWS live | 4002=Gateway paper | 4001=Gateway live"
-            )
+                "Is TWS/Gateway running? API enabled? "
+                "Ports: 7497=TWS paper | 7496=TWS live | 4002=Gateway paper | 4001=Gateway live")
             return False
         except Exception as e:
             self._emit_error(f"IBKR connection error: {e}")
@@ -571,21 +567,13 @@ class IBKRBroker(BaseBroker):
         if not self.ib or not self.ib.isConnected():
             return None
         try:
-            async def _get():
-                return await self.ib.accountSummaryAsync()
-
-            summary = self._run_coro(_get())
-            eq = next((float(v.value) for v in summary if v.tag == "NetLiquidation"), 0.0)
-            pl = next((float(v.value) for v in summary if v.tag == "UnrealizedPnL"), 0.0)
-            bp = next((float(v.value) for v in summary if v.tag == "AvailableFunds"), 0.0)
-            pos = self.ib.positions()
-            return {
-                "equity": eq,
-                "pl": pl,
-                "buying_power": bp,
-                "cash": 0.0,
-                "open_positions": len([p for p in pos if p.position != 0]),
-            }
+            summary = self._run_coro(self.ib.accountSummaryAsync())
+            eq  = next((float(v.value) for v in summary if v.tag == "NetLiquidation"),  0.0)
+            pl  = next((float(v.value) for v in summary if v.tag == "UnrealizedPnL"),   0.0)
+            bp  = next((float(v.value) for v in summary if v.tag == "AvailableFunds"),  0.0)
+            pos = [p for p in self.ib.positions() if p.position != 0]
+            return {"equity": eq, "pl": pl, "buying_power": bp,
+                    "cash": 0.0, "open_positions": len(pos)}
         except Exception as e:
             self._emit_error(f"IBKR get_account: {e}")
             return None
@@ -597,13 +585,10 @@ class IBKRBroker(BaseBroker):
             return False
         try:
             from ib_insync import Stock, MarketOrder
-
             async def _place():
-                contract = Stock(symbol, "SMART", "USD")
-                await self.ib.qualifyContractsAsync(contract)
-                order = MarketOrder("BUY" if side == "buy" else "SELL", qty)
-                self.ib.placeOrder(contract, order)
-
+                c = Stock(symbol, "SMART", "USD")
+                await self.ib.qualifyContractsAsync(c)
+                self.ib.placeOrder(c, MarketOrder("BUY" if side == "buy" else "SELL", qty))
             self._run_coro(_place())
             return True
         except Exception as e:
@@ -614,27 +599,20 @@ class IBKRBroker(BaseBroker):
         if not self.ib or not self.ib.isConnected():
             return
         from ib_insync import MarketOrder
-
-        positions = self.ib.positions()
-        for pos in positions:
+        for pos in self.ib.positions():
             if pos.position == 0:
                 continue
-            direction = "SELL" if pos.position > 0 else "BUY"
-
-            async def _close(contract=pos.contract, n=abs(pos.position), d=direction):
-                self.ib.placeOrder(contract, MarketOrder(d, n))
-
-            self._run_coro(_close())
+            d = "SELL" if pos.position > 0 else "BUY"
+            async def _c(contract=pos.contract, n=abs(pos.position), direction=d):
+                self.ib.placeOrder(contract, MarketOrder(direction, n))
+            self._run_coro(_c())
         self._emit_log("IBKR: all positions closed.")
 
     def get_positions(self):
         if not self.ib or not self.ib.isConnected():
             return {}
-        return {
-            pos.contract.symbol: int(pos.position)
-            for pos in self.ib.positions()
-            if pos.position != 0
-        }
+        return {pos.contract.symbol: int(pos.position)
+                for pos in self.ib.positions() if pos.position != 0}
 
     def get_market_status(self) -> bool:
         return True
@@ -643,23 +621,20 @@ class IBKRBroker(BaseBroker):
         if not self.ib or not self.ib.isConnected():
             return
         self._stop_stream = False
-
-        async def _subscribe():
+        async def _sub():
             from ib_insync import Stock
-
             contracts = [Stock(s, "SMART", "USD") for s in symbols]
             await self.ib.qualifyContractsAsync(*contracts)
-            tickers = [self.ib.reqMktData(c, "", False, False) for c in contracts]
-            sym_map = {c.symbol: s for c, s in zip(contracts, symbols)}
+            tickers  = [self.ib.reqMktData(c, "", False, False) for c in contracts]
+            sym_map  = {c.symbol: s for c, s in zip(contracts, symbols)}
             while not self._stop_stream:
                 await asyncio.sleep(1)
-                for ticker in tickers:
-                    if ticker.last and ticker.last > 0:
-                        sym = sym_map.get(ticker.contract.symbol)
-                        if sym:
-                            callback(sym, ticker.last)
-
-        asyncio.run_coroutine_threadsafe(_subscribe(), self._loop)
+                for t in tickers:
+                    if t.last and t.last > 0:
+                        orig = sym_map.get(t.contract.symbol)
+                        if orig:
+                            callback(orig, t.last)
+        asyncio.run_coroutine_threadsafe(_sub(), self._loop)
 
     def stop_stream(self):
         self._stop_stream = True
@@ -668,26 +643,25 @@ class IBKRBroker(BaseBroker):
 register_broker("Interactive Brokers", IBKRBroker)
 
 
-# ── TRADIER ────────────────────────────────────────────────
+# ── TRADIER ───────────────────────────────────────────────────────────────────
 class TradierBroker(BaseBroker):
     name = "Tradier"
-    LIVE_URL = "https://api.tradier.com/v1"
+    LIVE_URL    = "https://api.tradier.com/v1"
     SANDBOX_URL = "https://sandbox.tradier.com/v1"
 
     def __init__(self, config, ui_queue):
         super().__init__(config, ui_queue)
         self.session = None
-        self.token = None
         self.account_id = None
         self._base = self.LIVE_URL
         self._stop_stream = False
 
     def connect(self) -> bool:
-        creds = self.config.get("tradier", {})
-        self.token = creds.get("access_token", "").strip()
+        creds      = self.config.get("tradier", {})
+        token      = creds.get("access_token", "").strip()
         self.account_id = creds.get("account_id", "").strip()
-        sandbox = creds.get("sandbox", False)
-        if not self.token:
+        sandbox    = creds.get("sandbox", False)
+        if not token:
             self._emit_error("Tradier Access Token is missing.")
             return False
         if not self.account_id:
@@ -695,11 +669,12 @@ class TradierBroker(BaseBroker):
             return False
         self._base = self.SANDBOX_URL if sandbox else self.LIVE_URL
         import requests as req
-
         self.session = req.Session()
-        self.session.headers.update({"Authorization": f"Bearer {self.token}", "Accept": "application/json"})
+        self.session.headers.update(
+            {"Authorization": f"Bearer {token}", "Accept": "application/json"})
         try:
-            r = self.session.get(f"{self._base}/accounts/{self.account_id}/balances", timeout=10)
+            r = self.session.get(
+                f"{self._base}/accounts/{self.account_id}/balances", timeout=10)
             if r.status_code == 401:
                 self._emit_error("Tradier auth failed (HTTP 401). Check your token.")
                 return False
@@ -719,13 +694,17 @@ class TradierBroker(BaseBroker):
         if not self.session:
             return None
         try:
-            r = self.session.get(f"{self._base}/accounts/{self.account_id}/balances", timeout=10)
+            r = self.session.get(
+                f"{self._base}/accounts/{self.account_id}/balances", timeout=10)
             r.raise_for_status()
             bal = r.json().get("balances", {})
-            equity = float(bal.get("total_equity", 0))
-            bp = float(bal.get("equity_buying_power", 0))
-            cash = float(bal.get("total_cash", 0))
-            return {"equity": equity, "pl": 0.0, "buying_power": bp, "cash": cash, "open_positions": 0}
+            return {
+                "equity":        float(bal.get("total_equity",        0)),
+                "pl":            0.0,
+                "buying_power":  float(bal.get("equity_buying_power", 0)),
+                "cash":          float(bal.get("total_cash",          0)),
+                "open_positions": 0,
+            }
         except Exception as e:
             self._emit_error(f"Tradier get_account: {e}")
             return None
@@ -736,16 +715,14 @@ class TradierBroker(BaseBroker):
             self._emit_error("Tradier not connected.")
             return False
         try:
-            payload = {
-                "class": "equity", "symbol": symbol,
-                "side": side, "quantity": str(qty),
-                "type": "market", "duration": "day",
-            }
-            r = self.session.post(f"{self._base}/accounts/{self.account_id}/orders", data=payload, timeout=10)
-            data = r.json()
-            err = data.get("errors", {}).get("error")
+            r = self.session.post(
+                f"{self._base}/accounts/{self.account_id}/orders",
+                data={"class": "equity", "symbol": symbol, "side": side,
+                      "quantity": str(qty), "type": "market", "duration": "day"},
+                timeout=10)
+            err = r.json().get("errors", {}).get("error")
             if r.status_code not in (200, 201) or err:
-                self._emit_error(f"Tradier order rejected: {err or data}")
+                self._emit_error(f"Tradier order rejected: {err or r.text[:200]}")
                 return False
             return True
         except Exception as e:
@@ -756,17 +733,15 @@ class TradierBroker(BaseBroker):
         if not self.session:
             return
         for sym, qty in self.get_positions().items():
-            if qty > 0:
-                self.submit_order(sym, abs(qty), "sell")
-            elif qty < 0:
-                self.submit_order(sym, abs(qty), "buy")
+            self.submit_order(sym, abs(qty), "sell" if qty > 0 else "buy")
         self._emit_log("Tradier: all positions closed.")
 
     def get_positions(self):
         if not self.session:
             return {}
         try:
-            r = self.session.get(f"{self._base}/accounts/{self.account_id}/positions", timeout=10)
+            r   = self.session.get(
+                f"{self._base}/accounts/{self.account_id}/positions", timeout=10)
             r.raise_for_status()
             raw = r.json().get("positions", {}).get("position", [])
             if isinstance(raw, dict):
@@ -784,24 +759,23 @@ class TradierBroker(BaseBroker):
 
     def stream_prices(self, symbols, callback):
         self._stop_stream = False
-
         def poll():
             joined = ",".join(symbols)
             while not self._stop_stream:
                 try:
-                    r = self.session.get(f"{self._base}/markets/quotes", params={"symbols": joined}, timeout=5)
+                    r = self.session.get(f"{self._base}/markets/quotes",
+                                         params={"symbols": joined}, timeout=5)
                     quotes = r.json().get("quotes", {}).get("quote", [])
                     if isinstance(quotes, dict):
                         quotes = [quotes]
                     for q in quotes:
-                        sym = q.get("symbol", "")
+                        sym   = q.get("symbol", "")
                         price = q.get("last") or q.get("bid") or 0.0
                         if sym and price:
                             callback(sym, float(price))
                 except Exception:
                     pass
                 time.sleep(5)
-
         threading.Thread(target=poll, daemon=True).start()
 
     def stop_stream(self):
@@ -811,7 +785,7 @@ class TradierBroker(BaseBroker):
 register_broker("Tradier", TradierBroker)
 
 
-# ── BINANCE ────────────────────────────────────────────────
+# ── BINANCE ───────────────────────────────────────────────────────────────────
 class BinanceBroker(BaseBroker):
     name = "Binance"
 
@@ -819,17 +793,17 @@ class BinanceBroker(BaseBroker):
         super().__init__(config, ui_queue)
         self.client = None
         self._stop_stream = False
-        self._ws_client = None
+        self._ws_client   = None
 
     def _norm(self, symbol: str) -> str:
         s = symbol.replace("/", "").replace("-", "").upper()
         return s if s.endswith("USDT") else s + "USDT"
 
     def connect(self) -> bool:
-        creds = self.config.get("binance", {})
-        api_key = creds.get("api_key", "").strip()
+        creds      = self.config.get("binance", {})
+        api_key    = creds.get("api_key",    "").strip()
         api_secret = creds.get("api_secret", "").strip()
-        testnet = creds.get("testnet", True)
+        testnet    = creds.get("testnet", True)
         if not api_key:
             self._emit_error("Binance API Key is missing.")
             return False
@@ -838,10 +812,7 @@ class BinanceBroker(BaseBroker):
             return False
         try:
             from binance.spot import Spot
-
-            kw = {}
-            if testnet:
-                kw["base_url"] = "https://testnet.binance.vision"
+            kw = {"base_url": "https://testnet.binance.vision"} if testnet else {}
             self.client = Spot(api_key=api_key, api_secret=api_secret, **kw)
             acct = self.client.account()
             if not acct.get("canTrade"):
@@ -864,16 +835,17 @@ class BinanceBroker(BaseBroker):
         if not self.client:
             return None
         try:
-            acct = self.client.account()
-            bals = {b["asset"]: float(b["free"]) + float(b["locked"]) for b in acct["balances"]}
-            usdt = bals.get("USDT", 0.0)
-            btc = bals.get("BTC", 0.0)
+            acct  = self.client.account()
+            bals  = {b["asset"]: float(b["free"]) + float(b["locked"])
+                     for b in acct["balances"]}
+            usdt  = bals.get("USDT", 0.0)
+            btc   = bals.get("BTC",  0.0)
             try:
                 btc_price = float(self.client.ticker_price(symbol="BTCUSDT")["price"])
-            except:
+            except Exception:
                 btc_price = 0.0
-            equity = usdt + btc * btc_price
-            return {"equity": equity, "pl": 0.0, "buying_power": usdt, "cash": usdt, "open_positions": 0}
+            return {"equity": usdt + btc * btc_price, "pl": 0.0,
+                    "buying_power": usdt, "cash": usdt, "open_positions": 0}
         except Exception as e:
             self._emit_error(f"Binance get_account: {e}")
             return None
@@ -884,11 +856,10 @@ class BinanceBroker(BaseBroker):
             self._emit_error("Binance not connected.")
             return False
         try:
-            sym = self._norm(symbol)
             resp = self.client.new_order(
-                symbol=sym, side="BUY" if side == "buy" else "SELL",
-                type="MARKET", quantity=qty,
-            )
+                symbol=self._norm(symbol),
+                side="BUY" if side == "buy" else "SELL",
+                type="MARKET", quantity=qty)
             if resp.get("status") not in ("FILLED", "NEW", "PARTIALLY_FILLED"):
                 self._emit_error(f"Binance order unexpected status: {resp}")
                 return False
@@ -903,8 +874,9 @@ class BinanceBroker(BaseBroker):
         for asset, free in self.get_positions().items():
             if free > 0:
                 try:
-                    self.client.new_order(symbol=asset + "USDT", side="SELL", type="MARKET", quantity=free)
-                except:
+                    self.client.new_order(symbol=asset + "USDT",
+                                          side="SELL", type="MARKET", quantity=free)
+                except Exception:
                     pass
         self._emit_log("Binance: all positions closed.")
 
@@ -913,12 +885,10 @@ class BinanceBroker(BaseBroker):
             return {}
         try:
             acct = self.client.account()
-            return {
-                b["asset"]: float(b["free"])
-                for b in acct["balances"]
-                if float(b["free"]) > 0 and b["asset"] != "USDT"
-            }
-        except:
+            return {b["asset"]: float(b["free"])
+                    for b in acct["balances"]
+                    if float(b["free"]) > 0 and b["asset"] != "USDT"}
+        except Exception:
             return {}
 
     def get_market_status(self) -> bool:
@@ -926,43 +896,35 @@ class BinanceBroker(BaseBroker):
 
     def stream_prices(self, symbols, callback):
         self._stop_stream = False
-
         def run():
             try:
                 from binance.websocket.spot.websocket_stream import SpotWebsocketStreamClient
-
                 sym_map = {self._norm(s).lower(): s for s in symbols}
-
-                def on_message(_, raw):
+                def on_msg(_, raw):
                     try:
-                        data = json.loads(raw) if isinstance(raw, str) else raw
+                        data    = json.loads(raw) if isinstance(raw, str) else raw
                         payload = data.get("data", data)
                         if payload.get("e") == "trade":
                             ws_sym = payload["s"].lower()
-                            price = float(payload["p"])
-                            orig = sym_map.get(ws_sym)
+                            price  = float(payload["p"])
+                            orig   = sym_map.get(ws_sym)
                             if orig:
                                 callback(orig, price)
-                    except:
+                    except Exception:
                         pass
-
                 self._ws_client = SpotWebsocketStreamClient(
                     stream_url=(
                         "wss://testnet.binance.vision"
                         if self.config.get("binance", {}).get("testnet", True)
-                        else "wss://stream.binance.com"
-                    ),
-                    on_message=on_message,
-                )
+                        else "wss://stream.binance.com"),
+                    on_message=on_msg)
                 for s in sym_map:
                     self._ws_client.trade(symbol=s)
-
                 while not self._stop_stream:
                     time.sleep(1)
                 self._ws_client.stop()
             except Exception as e:
                 self._emit_log(f"Binance stream warning: {e}")
-
         threading.Thread(target=run, daemon=True).start()
 
     def stop_stream(self):
@@ -970,20 +932,20 @@ class BinanceBroker(BaseBroker):
         if self._ws_client:
             try:
                 self._ws_client.stop()
-            except:
+            except Exception:
                 pass
 
 
 register_broker("Binance", BinanceBroker)
 
 
-# ── BYBIT ──────────────────────────────────────────────────
+# ── BYBIT ─────────────────────────────────────────────────────────────────────
 class BybitBroker(BaseBroker):
     name = "Bybit"
 
     def __init__(self, config, ui_queue):
         super().__init__(config, ui_queue)
-        self.session = None
+        self.session      = None
         self._stop_stream = False
 
     def _norm(self, symbol: str) -> str:
@@ -991,10 +953,10 @@ class BybitBroker(BaseBroker):
         return s if s.endswith("USDT") else s + "USDT"
 
     def connect(self) -> bool:
-        creds = self.config.get("bybit", {})
-        api_key = creds.get("api_key", "").strip()
+        creds      = self.config.get("bybit", {})
+        api_key    = creds.get("api_key",    "").strip()
         api_secret = creds.get("api_secret", "").strip()
-        testnet = creds.get("testnet", True)
+        testnet    = creds.get("testnet", True)
         if not api_key:
             self._emit_error("Bybit API Key is missing.")
             return False
@@ -1003,16 +965,16 @@ class BybitBroker(BaseBroker):
             return False
         try:
             from pybit.unified_trading import HTTP
-
             self.session = HTTP(api_key=api_key, api_secret=api_secret, testnet=testnet)
             resp = self.session.get_wallet_balance(accountType="UNIFIED")
             if resp.get("retCode", -1) != 0:
-                self._emit_error(f"Bybit auth failed: {resp.get('retMsg')}. Testnet={testnet}")
+                self._emit_error(
+                    f"Bybit auth failed: {resp.get('retMsg')}. Testnet={testnet}")
                 return False
             self._emit_log(f"Connected (testnet={testnet})")
             return True
         except ImportError:
-            self._emit_error("pybit v5 not installed.")
+            self._emit_error("pybit v5 not installed. Run: pip install pybit")
             return False
         except Exception as e:
             self._emit_error(f"Bybit connection error: {e}")
@@ -1022,11 +984,12 @@ class BybitBroker(BaseBroker):
         if not self.session:
             return None
         try:
-            resp = self.session.get_wallet_balance(accountType="UNIFIED")
-            result = resp.get("result", {}).get("list", [{}])[0]
-            equity = float(result.get("totalEquity", 0))
-            avail = float(result.get("totalAvailableBalance", 0))
-            return {"equity": equity, "pl": 0.0, "buying_power": avail, "cash": avail, "open_positions": 0}
+            result = (self.session.get_wallet_balance(accountType="UNIFIED")
+                      .get("result", {}).get("list", [{}])[0])
+            equity = float(result.get("totalEquity",           0))
+            avail  = float(result.get("totalAvailableBalance", 0))
+            return {"equity": equity, "pl": 0.0,
+                    "buying_power": avail, "cash": avail, "open_positions": 0}
         except Exception as e:
             self._emit_error(f"Bybit get_account: {e}")
             return None
@@ -1037,13 +1000,11 @@ class BybitBroker(BaseBroker):
             self._emit_error("Bybit not connected.")
             return False
         try:
-            kwargs = dict(
-                category="spot", symbol=self._norm(symbol),
-                side="Buy" if side == "buy" else "Sell",
-                orderType="Market", qty=str(qty),
-            )
+            kwargs = dict(category="spot", symbol=self._norm(symbol),
+                          side="Buy" if side == "buy" else "Sell",
+                          orderType="Market", qty=str(qty))
             if sl_price:
-                kwargs["stopLoss"] = str(round(sl_price, 4))
+                kwargs["stopLoss"]   = str(round(sl_price, 4))
             if tp_price:
                 kwargs["takeProfit"] = str(round(tp_price, 4))
             resp = self.session.place_order(**kwargs)
@@ -1062,22 +1023,19 @@ class BybitBroker(BaseBroker):
             if eq > 0:
                 self.session.place_order(
                     category="spot", symbol=ccy + "USDT",
-                    side="Sell", orderType="Market", qty=str(eq),
-                )
+                    side="Sell", orderType="Market", qty=str(eq))
         self._emit_log("Bybit: all positions closed.")
 
     def get_positions(self):
         if not self.session:
             return {}
         try:
-            resp = self.session.get_wallet_balance(accountType="UNIFIED")
-            coins = resp.get("result", {}).get("list", [{}])[0].get("coin", [])
-            return {
-                c["coin"]: float(c.get("equity", 0))
-                for c in coins
-                if float(c.get("equity", 0)) > 0 and c["coin"] != "USDT"
-            }
-        except:
+            coins = (self.session.get_wallet_balance(accountType="UNIFIED")
+                     .get("result", {}).get("list", [{}])[0].get("coin", []))
+            return {c["coin"]: float(c.get("equity", 0))
+                    for c in coins
+                    if float(c.get("equity", 0)) > 0 and c["coin"] != "USDT"}
+        except Exception:
             return {}
 
     def get_market_status(self) -> bool:
@@ -1085,37 +1043,30 @@ class BybitBroker(BaseBroker):
 
     def stream_prices(self, symbols, callback):
         self._stop_stream = False
-
         def run():
             try:
                 from pybit.unified_trading import WebSocket
-
                 testnet = self.config.get("bybit", {}).get("testnet", True)
                 sym_map = {self._norm(s): s for s in symbols}
-
                 def handle(msg):
                     try:
-                        data = msg.get("data", {})
+                        data    = msg.get("data", {})
                         if isinstance(data, list):
                             data = data[0] if data else {}
-                        topic = msg.get("topic", "")
-                        raw_sym = topic.split(".")[-1]
-                        orig = sym_map.get(raw_sym)
-                        price = float(data.get("lastPrice", 0))
+                        raw_sym = msg.get("topic", "").split(".")[-1]
+                        orig    = sym_map.get(raw_sym)
+                        price   = float(data.get("lastPrice", 0))
                         if orig and price:
                             callback(orig, price)
-                    except:
+                    except Exception:
                         pass
-
                 ws = WebSocket(testnet=testnet, channel_type="spot")
                 for sym in sym_map:
                     ws.ticker_stream(symbol=sym, callback=handle)
-
                 while not self._stop_stream:
                     time.sleep(1)
             except Exception as e:
                 self._emit_log(f"Bybit stream warning: {e}")
-
         threading.Thread(target=run, daemon=True).start()
 
     def stop_stream(self):
@@ -1125,29 +1076,27 @@ class BybitBroker(BaseBroker):
 register_broker("Bybit", BybitBroker)
 
 
-# ── OKX ────────────────────────────────────────────────────
+# ── OKX ───────────────────────────────────────────────────────────────────────
 class OKXBroker(BaseBroker):
     name = "OKX"
 
     def __init__(self, config, ui_queue):
         super().__init__(config, ui_queue)
         self._account_api = None
-        self._trade_api = None
+        self._trade_api   = None
         self._stop_stream = False
-        self._flag = "0"
+        self._flag        = "0"
 
     def _norm(self, symbol: str) -> str:
         s = symbol.replace("/", "-").replace("_", "-").upper()
-        if "-" not in s:
-            s = s + "-USDT"
-        return s
+        return s if "-" in s else s + "-USDT"
 
     def connect(self) -> bool:
-        creds = self.config.get("okx", {})
-        api_key = creds.get("api_key", "").strip()
-        api_secret = creds.get("api_secret", "").strip()
+        creds      = self.config.get("okx", {})
+        api_key    = creds.get("api_key",        "").strip()
+        api_secret = creds.get("api_secret",     "").strip()
         passphrase = creds.get("api_passphrase", "").strip()
-        demo = creds.get("demo", True)
+        demo       = creds.get("demo", True)
         self._flag = "1" if demo else "0"
         if not api_key:
             self._emit_error("OKX API Key is missing.")
@@ -1160,19 +1109,21 @@ class OKXBroker(BaseBroker):
             return False
         try:
             import okx.Account as AccountAPI
-            import okx.Trade as TradeAPI
-
-            self._account_api = AccountAPI.AccountAPI(api_key, api_secret, passphrase, False, self._flag)
-            self._trade_api = TradeAPI.TradeAPI(api_key, api_secret, passphrase, False, self._flag)
+            import okx.Trade   as TradeAPI
+            self._account_api = AccountAPI.AccountAPI(
+                api_key, api_secret, passphrase, False, self._flag)
+            self._trade_api = TradeAPI.TradeAPI(
+                api_key, api_secret, passphrase, False, self._flag)
             resp = self._account_api.get_account_balance()
             code = str(resp.get("code", "-1"))
             if code != "0":
-                self._emit_error(f"OKX auth failed (code={code}): {resp.get('msg')}. Demo={demo}")
+                self._emit_error(
+                    f"OKX auth failed (code={code}): {resp.get('msg')}. Demo={demo}")
                 return False
             self._emit_log(f"Connected (demo={demo})")
             return True
         except ImportError:
-            self._emit_error("okx package not installed.")
+            self._emit_error("okx package not installed. Run: pip install okx")
             return False
         except Exception as e:
             self._emit_error(f"OKX connection error: {e}")
@@ -1182,11 +1133,13 @@ class OKXBroker(BaseBroker):
         if not self._account_api:
             return None
         try:
-            resp = self._account_api.get_account_balance()
-            details = resp.get("data", [{}])[0].get("details", [])
+            details = (self._account_api.get_account_balance()
+                       .get("data", [{}])[0].get("details", []))
             equity = sum(float(d.get("eq", 0)) for d in details)
-            usdt = next((float(d.get("availBal", 0)) for d in details if d.get("ccy") == "USDT"), 0.0)
-            return {"equity": equity, "pl": 0.0, "buying_power": usdt, "cash": usdt, "open_positions": 0}
+            usdt   = next(
+                (float(d.get("availBal", 0)) for d in details if d.get("ccy") == "USDT"), 0.0)
+            return {"equity": equity, "pl": 0.0,
+                    "buying_power": usdt, "cash": usdt, "open_positions": 0}
         except Exception as e:
             self._emit_error(f"OKX get_account: {e}")
             return None
@@ -1197,11 +1150,10 @@ class OKXBroker(BaseBroker):
             self._emit_error("OKX not connected.")
             return False
         try:
-            resp = self._trade_api.place_order(
+            resp  = self._trade_api.place_order(
                 instId=self._norm(symbol), tdMode="cash",
-                side=side, ordType="market", sz=str(int(qty)),
-            )
-            items = resp.get("data", [{}])
+                side=side, ordType="market", sz=str(int(qty)))
+            items  = resp.get("data", [{}])
             s_code = str(items[0].get("sCode", "-1")) if items else "-1"
             if s_code != "0":
                 s_msg = items[0].get("sMsg", str(resp)) if items else str(resp)
@@ -1219,22 +1171,19 @@ class OKXBroker(BaseBroker):
             if eq > 0:
                 self._trade_api.place_order(
                     instId=f"{ccy}-USDT", tdMode="cash",
-                    side="sell", ordType="market", sz=str(eq),
-                )
+                    side="sell", ordType="market", sz=str(eq))
         self._emit_log("OKX: all positions closed.")
 
     def get_positions(self):
         if not self._account_api:
             return {}
         try:
-            resp = self._account_api.get_account_balance()
-            details = resp.get("data", [{}])[0].get("details", [])
-            return {
-                d["ccy"]: float(d.get("eq", 0))
-                for d in details
-                if float(d.get("eq", 0)) > 0 and d["ccy"] != "USDT"
-            }
-        except:
+            details = (self._account_api.get_account_balance()
+                       .get("data", [{}])[0].get("details", []))
+            return {d["ccy"]: float(d.get("eq", 0))
+                    for d in details
+                    if float(d.get("eq", 0)) > 0 and d["ccy"] != "USDT"}
+        except Exception:
             return {}
 
     def get_market_status(self) -> bool:
@@ -1242,35 +1191,28 @@ class OKXBroker(BaseBroker):
 
     def stream_prices(self, symbols, callback):
         self._stop_stream = False
-
         def run():
             try:
                 import websocket
                 import json as _j
-
                 sym_map = {self._norm(s): s for s in symbols}
-                subs = [{"channel": "tickers", "instId": k} for k in sym_map]
-                url = (
+                subs    = [{"channel": "tickers", "instId": k} for k in sym_map]
+                url     = (
                     "wss://wspap.okx.com:8443/ws/v5/public?brokerId=9999"
                     if self.config.get("okx", {}).get("demo", True)
-                    else "wss://ws.okx.com:8443/ws/v5/public"
-                )
-
+                    else "wss://ws.okx.com:8443/ws/v5/public")
                 def on_msg(ws_app, msg):
                     try:
-                        data = _j.loads(msg)
-                        for item in data.get("data", []):
-                            inst = item.get("instId", "")
+                        for item in _j.loads(msg).get("data", []):
+                            inst  = item.get("instId", "")
                             price = float(item.get("last", 0))
-                            orig = sym_map.get(inst)
+                            orig  = sym_map.get(inst)
                             if orig and price:
                                 callback(orig, price)
-                    except:
+                    except Exception:
                         pass
-
                 def on_open(ws_app):
                     ws_app.send(_j.dumps({"op": "subscribe", "args": subs}))
-
                 ws = websocket.WebSocketApp(url, on_message=on_msg, on_open=on_open)
                 while not self._stop_stream:
                     ws.run_forever()
@@ -1280,7 +1222,6 @@ class OKXBroker(BaseBroker):
                 pass
             except Exception as e:
                 self._emit_log(f"OKX stream warning: {e}")
-
         threading.Thread(target=run, daemon=True).start()
 
     def stop_stream(self):
@@ -1290,21 +1231,18 @@ class OKXBroker(BaseBroker):
 register_broker("OKX", OKXBroker)
 
 
-# ── INDICATOR & SIGNAL ANALYZER ────────────────────────────
+# ── INDICATOR CALCULATOR ──────────────────────────────────────────────────────
 class IndicatorCalculator:
     @staticmethod
     def compute_all(df, ema_fast=9, ema_slow=50):
-        close = np.asarray(df["Close"]).astype(np.float64).ravel()
-        high = np.asarray(df["High"]).astype(np.float64).ravel()
-        low = np.asarray(df["Low"]).astype(np.float64).ravel()
-        volume = (
-            np.asarray(df["Volume"]).astype(np.float64).ravel()
-            if "Volume" in df.columns
-            else np.ones_like(close)
-        )
+        close  = np.asarray(df["Close"]).astype(np.float64).ravel()
+        high   = np.asarray(df["High"]).astype(np.float64).ravel()
+        low    = np.asarray(df["Low"]).astype(np.float64).ravel()
+        volume = (np.asarray(df["Volume"]).astype(np.float64).ravel()
+                  if "Volume" in df.columns else np.ones_like(close))
 
         def ema(data, span):
-            a = 2 / (span + 1)
+            a   = 2 / (span + 1)
             res = np.empty_like(data)
             res[0] = data[0]
             for i in range(1, len(data)):
@@ -1315,75 +1253,75 @@ class IndicatorCalculator:
         df["EMA_slow"] = ema(close, ema_slow)
 
         delta = np.diff(close, prepend=close[0])
-        gain = np.where(delta > 0, delta, 0.0)
-        loss = np.where(delta < 0, -delta, 0.0)
-        ag = np.convolve(gain, np.ones(14) / 14, mode="full")[: len(close)]
-        al = np.convolve(loss, np.ones(14) / 14, mode="full")[: len(close)]
-        rs = np.divide(ag, al, out=np.zeros_like(ag), where=al != 0)
+        gain  = np.where(delta > 0, delta,  0.0)
+        loss  = np.where(delta < 0, -delta, 0.0)
+        ag    = np.convolve(gain, np.ones(14)/14, mode="full")[:len(close)]
+        al    = np.convolve(loss, np.ones(14)/14, mode="full")[:len(close)]
+        rs    = np.divide(ag, al, out=np.zeros_like(ag), where=al != 0)
         df["RSI"] = 100 - (100 / (1 + rs))
 
-        m = ema(close, 12) - ema(close, 26)
+        m          = ema(close, 12) - ema(close, 26)
         df["MACD"] = m
         df["MACD_signal"] = ema(m, 9)
 
-        ma20 = np.convolve(close, np.ones(20) / 20, mode="same")
-        std20 = np.array([np.std(close[max(0, i - 19) : i + 1]) for i in range(len(close))])
+        ma20  = np.convolve(close, np.ones(20)/20, mode="same")
+        std20 = np.array([np.std(close[max(0, i-19):i+1]) for i in range(len(close))])
         df["BB_upper"] = ma20 + 2 * std20
         df["BB_lower"] = ma20 - 2 * std20
 
         cum_vol = np.cumsum(volume)
-        df["VWAP"] = np.divide(
-            np.cumsum(close * volume), cum_vol,
-            out=np.zeros_like(close), where=cum_vol != 0,
-        )
+        df["VWAP"] = np.divide(np.cumsum(close * volume), cum_vol,
+                                out=np.zeros_like(close), where=cum_vol != 0)
 
-        tr = np.maximum(high[1:] - low[1:], np.maximum(np.abs(high[1:] - close[:-1]), np.abs(low[1:] - close[:-1])))
-        tr = np.insert(tr, 0, np.mean(tr[:14]) if len(tr) >= 14 else (tr[0] if len(tr) else 0))
-        atr14 = ema(tr, 14)
-        df["ATR"] = atr14
+        tr = np.maximum(high[1:] - low[1:],
+                        np.maximum(np.abs(high[1:] - close[:-1]),
+                                   np.abs(low[1:]  - close[:-1])))
+        tr = np.insert(tr, 0,
+                       np.mean(tr[:14]) if len(tr) >= 14 else (tr[0] if len(tr) else 0))
+        atr14       = ema(tr, 14)
+        df["ATR"]   = atr14
 
-        up = np.maximum(np.diff(high, prepend=high[0]), 0.0)
-        dn = np.maximum(-np.diff(low, prepend=low[0]), 0.0)
-        pdm = np.where((up > dn) & (up > 0), up, 0.0)
-        mdm = np.where((dn > up) & (dn > 0), dn, 0.0)
-        pdi = 100 * ema(pdm, 14) / (atr14 + 1e-14)
-        mdi = 100 * ema(mdm, 14) / (atr14 + 1e-14)
-        dx = 100 * np.abs(pdi - mdi) / (pdi + mdi + 1e-14)
+        up   = np.maximum( np.diff(high, prepend=high[0]), 0.0)
+        dn   = np.maximum(-np.diff(low,  prepend=low[0]),  0.0)
+        pdm  = np.where((up > dn) & (up > 0), up, 0.0)
+        mdm  = np.where((dn > up) & (dn > 0), dn, 0.0)
+        pdi  = 100 * ema(pdm, 14) / (atr14 + 1e-14)
+        mdi  = 100 * ema(mdm, 14) / (atr14 + 1e-14)
+        dx   = 100 * np.abs(pdi - mdi) / (pdi + mdi + 1e-14)
         df["ADX"] = ema(dx, 14)
 
-        vol_avg = np.convolve(volume, np.ones(20) / 20, mode="same")
-        df["Vol_ratio"] = np.divide(volume, vol_avg, out=np.ones_like(volume), where=vol_avg != 0)
+        vol_avg      = np.convolve(volume, np.ones(20)/20, mode="same")
+        df["Vol_ratio"] = np.divide(volume, vol_avg,
+                                     out=np.ones_like(volume), where=vol_avg != 0)
 
-        st_atr = ema(tr, 10)
-        hl2 = (high + low) / 2.0
-        upper_st = hl2 + 3.0 * st_atr
-        lower_st = hl2 - 3.0 * st_atr
-        st = np.zeros_like(close)
-        trend = np.ones_like(close)
+        st_atr  = ema(tr, 10)
+        hl2     = (high + low) / 2.0
+        upper_s = hl2 + 3.0 * st_atr
+        lower_s = hl2 - 3.0 * st_atr
+        st      = np.zeros_like(close)
+        trend   = np.ones_like(close)
         for i in range(1, len(close)):
-            if close[i] > upper_st[i - 1]:
-                trend[i] = 1
-            elif close[i] < lower_st[i - 1]:
-                trend[i] = -1
+            if   close[i] > upper_s[i-1]: trend[i] = 1
+            elif close[i] < lower_s[i-1]: trend[i] = -1
             else:
-                trend[i] = trend[i - 1]
-                if trend[i] == 1 and lower_st[i] < lower_st[i - 1]:
-                    lower_st[i] = lower_st[i - 1]
-                if trend[i] == -1 and upper_st[i] > upper_st[i - 1]:
-                    upper_st[i] = upper_st[i - 1]
-            st[i] = lower_st[i] if trend[i] == 1 else upper_st[i]
-        df["Supertrend"] = st
+                trend[i] = trend[i-1]
+                if trend[i] == 1  and lower_s[i] < lower_s[i-1]: lower_s[i] = lower_s[i-1]
+                if trend[i] == -1 and upper_s[i] > upper_s[i-1]: upper_s[i] = upper_s[i-1]
+            st[i] = lower_s[i] if trend[i] == 1 else upper_s[i]
+        df["Supertrend"]       = st
         df["Supertrend_trend"] = trend
 
-        K = 14
-        ll = np.array([np.min(low[max(0, i - K + 1) : i + 1]) for i in range(len(close))])
-        hh = np.array([np.max(high[max(0, i - K + 1) : i + 1]) for i in range(len(close))])
-        stk = np.where(hh - ll != 0, 100 * (close - ll) / (hh - ll + 1e-14), 50.0)
+        K  = 14
+        ll = np.array([np.min(low[max(0, i-K+1):i+1])  for i in range(len(close))])
+        hh = np.array([np.max(high[max(0, i-K+1):i+1]) for i in range(len(close))])
+        stk = np.where(hh - ll != 0,
+                       100 * (close - ll) / (hh - ll + 1e-14), 50.0)
         df["Stoch_K"] = stk
-        df["Stoch_D"] = np.convolve(stk, np.ones(3) / 3, mode="same")
+        df["Stoch_D"] = np.convolve(stk, np.ones(3)/3, mode="same")
         return df
 
 
+# ── SIGNAL ANALYZER ───────────────────────────────────────────────────────────
 class SignalAnalyzer:
     ADX_THRESHOLD = 20
     VOL_THRESHOLD = 1.5
@@ -1393,20 +1331,20 @@ class SignalAnalyzer:
         try:
             v = val.item() if hasattr(val, "item") else val
             return float(v)
-        except:
+        except Exception:
             return default
 
     @staticmethod
     def generate_signal(df, prev_fast, prev_slow, config):
         if prev_fast is None or prev_slow is None:
             return None, "", 0.0
-        l = df.iloc[-1]
-        sf = SignalAnalyzer._sf
-        ef = sf(l["EMA_fast"])
-        es = sf(l["EMA_slow"])
+        l   = df.iloc[-1]
+        sf  = SignalAnalyzer._sf
+        ef  = sf(l["EMA_fast"])
+        es  = sf(l["EMA_slow"])
         price = sf(l["Close"])
-        bull = prev_fast <= prev_slow and ef > es
-        bear = prev_fast >= prev_slow and ef < es
+        bull  = prev_fast <= prev_slow and ef > es
+        bear  = prev_fast >= prev_slow and ef < es
         passes, dir_ = False, ""
         if bull:
             passes, dir_ = SignalAnalyzer._confirm(df, config, "bull", price)
@@ -1414,130 +1352,117 @@ class SignalAnalyzer:
             passes, dir_ = SignalAnalyzer._confirm(df, config, "bear", price)
         if not passes:
             return None, "", 0.0
-        conf = 0.5
-        conf += 0.05 if config.get("use_rsi", True) else 0
-        conf += 0.05 if config.get("use_macd", True) else 0
-        conf += 0.05 if config.get("use_vwap", True) else 0
-        conf += 0.05 if config.get("use_bollinger", True) else 0
-        conf += 0.05 if config.get("use_adx", True) else 0
-        conf += 0.06 if config.get("use_vol_confirm", True) else 0
+        conf  = 0.50
+        conf += 0.05 if config.get("use_rsi",        True) else 0
+        conf += 0.05 if config.get("use_macd",       True) else 0
+        conf += 0.05 if config.get("use_vwap",       True) else 0
+        conf += 0.05 if config.get("use_bollinger",  True) else 0
+        conf += 0.05 if config.get("use_adx",        True) else 0
+        conf += 0.06 if config.get("use_vol_confirm",True) else 0
         conf += 0.08 if config.get("use_supertrend", True) else 0
         conf += 0.05 if config.get("use_stochastic", True) else 0
-        conf += 0.04 if config.get("use_atr_stops", True) else 0
-        conf = min(conf, 1.0)
-        sig = "BUY" if dir_ == "bull" else "SELL"
-        return sig, f"{sig} @ ${price:.2f} (confidence: {conf:.2f})", conf
+        conf += 0.04 if config.get("use_atr_stops",  True) else 0
+        conf  = min(conf, 1.0)
+        sig   = "BUY" if dir_ == "bull" else "SELL"
+        return sig, f"{sig} @ ${price:.2f} (conf: {conf:.2f})", conf
 
     @staticmethod
     def _confirm(df, config, direction, price):
-        l = df.iloc[-1]
-        sf = SignalAnalyzer._sf
-        rsi = sf(l.get("RSI", 50), 50)
-        macd = sf(l.get("MACD", 0), 0)
-        msig = sf(l.get("MACD_signal", 0), 0)
-        bbu = sf(l.get("BB_upper", price), price)
-        bbl = sf(l.get("BB_lower", price), price)
-        vwap = sf(l.get("VWAP", price), price)
-        adx = sf(l.get("ADX", 0), 0)
-        vr = sf(l.get("Vol_ratio", 1), 1)
-        stt = sf(l.get("Supertrend_trend", 0), 0)
-        stk = sf(l.get("Stoch_K", 50), 50)
-        std = sf(l.get("Stoch_D", 50), 50)
+        l   = df.iloc[-1]
+        sf  = SignalAnalyzer._sf
+        rsi  = sf(l.get("RSI",            50), 50)
+        macd = sf(l.get("MACD",            0),  0)
+        msig = sf(l.get("MACD_signal",     0),  0)
+        bbu  = sf(l.get("BB_upper",    price), price)
+        bbl  = sf(l.get("BB_lower",    price), price)
+        vwap = sf(l.get("VWAP",        price), price)
+        adx  = sf(l.get("ADX",             0),  0)
+        vr   = sf(l.get("Vol_ratio",        1),  1)
+        stt  = sf(l.get("Supertrend_trend", 0),  0)
+        stk  = sf(l.get("Stoch_K",        50), 50)
+        std  = sf(l.get("Stoch_D",        50), 50)
 
         if direction == "bull":
-            if config.get("use_rsi", True) and rsi < 30:
-                return False, "bull"
-            if config.get("use_macd", True) and macd <= msig:
-                return False, "bull"
-            if config.get("use_vwap", True) and price < vwap:
-                return False, "bull"
-            if config.get("use_bollinger", True) and price < bbl * 0.99:
-                return False, "bull"
-            if config.get("use_supertrend", True) and stt != 1:
-                return False, "bull"
-            if config.get("use_stochastic", True) and (stk < std or stk > 80):
-                return False, "bull"
-            if config.get("use_adx", True) and adx < SignalAnalyzer.ADX_THRESHOLD:
-                return False, "bull"
-            if config.get("use_vol_confirm", True) and vr < SignalAnalyzer.VOL_THRESHOLD:
-                return False, "bull"
+            if config.get("use_rsi",        True) and rsi < 30:             return False, "bull"
+            if config.get("use_macd",       True) and macd <= msig:         return False, "bull"
+            if config.get("use_vwap",       True) and price < vwap:         return False, "bull"
+            if config.get("use_bollinger",  True) and price < bbl * 0.99:   return False, "bull"
+            if config.get("use_supertrend", True) and stt != 1:             return False, "bull"
+            if config.get("use_stochastic", True) and (stk < std or stk > 80): return False, "bull"
+            if config.get("use_adx",        True) and adx < SignalAnalyzer.ADX_THRESHOLD: return False, "bull"
+            if config.get("use_vol_confirm",True) and vr  < SignalAnalyzer.VOL_THRESHOLD: return False, "bull"
         else:
-            if config.get("use_rsi", True) and rsi > 70:
-                return False, "bear"
-            if config.get("use_macd", True) and macd >= msig:
-                return False, "bear"
-            if config.get("use_vwap", True) and price > vwap:
-                return False, "bear"
-            if config.get("use_bollinger", True) and price > bbu * 1.01:
-                return False, "bear"
-            if config.get("use_supertrend", True) and stt != -1:
-                return False, "bear"
-            if config.get("use_stochastic", True) and (stk > std or stk < 20):
-                return False, "bear"
-            if config.get("use_adx", True) and adx < SignalAnalyzer.ADX_THRESHOLD:
-                return False, "bear"
-            if config.get("use_vol_confirm", True) and vr < SignalAnalyzer.VOL_THRESHOLD:
-                return False, "bear"
+            if config.get("use_rsi",        True) and rsi > 70:             return False, "bear"
+            if config.get("use_macd",       True) and macd >= msig:         return False, "bear"
+            if config.get("use_vwap",       True) and price > vwap:         return False, "bear"
+            if config.get("use_bollinger",  True) and price > bbu * 1.01:   return False, "bear"
+            if config.get("use_supertrend", True) and stt != -1:            return False, "bear"
+            if config.get("use_stochastic", True) and (stk > std or stk < 20): return False, "bear"
+            if config.get("use_adx",        True) and adx < SignalAnalyzer.ADX_THRESHOLD: return False, "bear"
+            if config.get("use_vol_confirm",True) and vr  < SignalAnalyzer.VOL_THRESHOLD: return False, "bear"
         return True, direction
 
 
-# ── TRADING ENGINE with free‑tier enforcement ──────────────
+# ── TRADING ENGINE ────────────────────────────────────────────────────────────
 class TradingEngine(threading.Thread):
     def __init__(self, ui_queue, config, broker):
         super().__init__(daemon=True)
-        self.ui_queue = ui_queue
-        self.config = config
-        self.broker = broker
-        self.running = False
-        self.symbols: List[str] = []
-        self.positions: Dict[str, Any] = {}
-        self.prev_ema: Dict[str, Tuple] = {}
-        self.per_ticker_qty: Dict[str, Any] = {}
-        self.is_licensed = config.get("license_valid", False)
-        self.direction = config.get("direction", "both")
+        self.ui_queue     = ui_queue
+        self.config       = config
+        self.broker       = broker
+        self.running      = False
+        self.symbols: List[str]       = []
+        self.positions: Dict[str,Any] = {}
+        self.prev_ema: Dict[str,Tuple]= {}
+        self.per_ticker_qty: Dict[str,Any] = {}
+        self.is_licensed  = config.get("license_valid", False)
+        self.direction    = config.get("direction", "both")
         self.use_default_qty = config.get("use_default_qty", True)
         self._stop_watchdog = threading.Event()
 
-        # enforce free tier
+        # ── Enforce free-tier constraints in the engine constructor ──────────
         if not self.is_licensed:
-            self.config["mode"] = "signal"
-            self.config["broker"] = "Alpaca"
+            self.config["mode"]      = "signal"
+            self.config["broker"]    = "Alpaca"
+            self.config["direction"] = "both"
+            self.direction           = "both"
             if "alpaca" in self.config:
                 self.config["alpaca"]["paper"] = True
             for k in ("use_supertrend", "use_stochastic", "use_adx",
                       "use_vol_confirm", "use_atr_stops", "use_bracket"):
                 self.config[k] = False
-            # limit tickers
-            self.config["tickers"] = self.config.get("tickers", "AAPL").split(",")[0].strip()
-            self.direction = "both"
+            # Clamp to the first ticker only
+            first = self.config.get("tickers", "AAPL").split(",")[0].strip()
+            self.config["tickers"] = first
 
     def _telegram(self, msg):
-        tg = self.config.get("telegram", {})
+        if not self.is_licensed:
+            return       # Telegram disabled on free tier
+        tg    = self.config.get("telegram", {})
         token = tg.get("token")
-        cid = tg.get("chat_id")
+        cid   = tg.get("chat_id")
         if token and cid:
             try:
                 http_requests.post(
                     f"https://api.telegram.org/bot{token}/sendMessage",
                     json={"chat_id": cid, "text": msg, "parse_mode": "HTML"},
-                    timeout=5,
-                )
-            except:
+                    timeout=5)
+            except Exception:
                 pass
 
     def run(self):
-        tickers_str = self.config.get("tickers", "AAPL")
-        default_qty = self.config.get("quantity", 1)
-        raw_list = [s.strip() for s in tickers_str.split(",") if s.strip()]
+        tickers_str  = self.config.get("tickers", "AAPL")
+        default_qty  = self.config.get("quantity", 1)
+        raw_list     = [s.strip() for s in tickers_str.split(",") if s.strip()]
 
         for entry in raw_list:
-            sym = clean_symbol(entry)
+            sym      = clean_symbol(entry)
             has_colon = ":" in entry
             if has_colon:
                 try:
                     qty = float(entry.split(":")[1])
                     qty = int(qty) if qty == int(qty) else qty
-                except:
+                except Exception:
                     qty = default_qty
             else:
                 if not self.use_default_qty:
@@ -1547,26 +1472,29 @@ class TradingEngine(threading.Thread):
                 self.symbols.append(sym)
                 self.per_ticker_qty[sym] = qty
 
-        # free tier limited to 1 ticker
+        # ── Hard cap at 1 ticker for free tier ───────────────────────────────
         if not self.is_licensed and len(self.symbols) > 1:
-            first = self.symbols[0]
+            first       = self.symbols[0]
             self.symbols = [first]
             self.per_ticker_qty = {first: self.per_ticker_qty[first]}
-            self.ui_queue.put(("error", f"Free license: only 1 ticker. Tracking {first} only."))
+            self.ui_queue.put(("error",
+                f"Free tier: only 1 ticker allowed. Tracking {first} only."))
 
         for s in self.symbols:
             self.positions[s] = 0
-            self.prev_ema[s] = (None, None)
+            self.prev_ema[s]  = (None, None)
 
-        mode = "signal" if not self.is_licensed else self.config.get("mode", "signal")
+        # ── Mode is always "signal" on free tier ─────────────────────────────
+        mode       = "signal" if not self.is_licensed else self.config.get("mode", "signal")
         ema_fast, ema_slow = self.config.get("emas", [9, 50])
         use_bracket = self.config.get("use_bracket", False) and self.is_licensed
-        sl_pct = self.config.get("sl_percent", 2.0)
-        tp_pct = self.config.get("tp_percent", 4.0)
-        use_atr = self.config.get("use_atr_stops", True) and self.is_licensed
-        interval = self.config.get("timeframe", "1m")
+        sl_pct      = self.config.get("sl_percent", 2.0)
+        tp_pct      = self.config.get("tp_percent", 4.0)
+        use_atr     = self.config.get("use_atr_stops", True) and self.is_licensed
+        interval    = self.config.get("timeframe", "1m")
 
-        self.broker.stream_prices(self.symbols, lambda s, p: self.ui_queue.put(("price_update", (s, p))))
+        self.broker.stream_prices(self.symbols,
+            lambda s, p: self.ui_queue.put(("price_update", (s, p))))
         self.ui_queue.put(("status", f"Running {len(self.symbols)} symbol(s)"))
         self._telegram(f"TraderMoney started\n{', '.join(self.symbols)} | {mode}")
 
@@ -1578,16 +1506,20 @@ class TradingEngine(threading.Thread):
             try:
                 acc = self.broker.get_account()
                 if acc:
-                    self.ui_queue.put(("account", (acc["equity"], acc["pl"], acc["buying_power"], acc.get("open_positions", 0))))
-                self.ui_queue.put(("market", "Open" if self.broker.get_market_status() else "Closed"))
+                    self.ui_queue.put(
+                        ("account", (acc["equity"], acc["pl"],
+                                     acc["buying_power"], acc.get("open_positions", 0))))
+                self.ui_queue.put(
+                    ("market", "Open" if self.broker.get_market_status() else "Closed"))
                 now = time.time()
                 if now - last_fetch >= 60:
                     last_fetch = now
                     for s in self.symbols:
                         try:
                             import yfinance as yf
-                            import pandas as pd
-                            df = yf.download(s, period="5d", interval=interval, progress=False, auto_adjust=True)
+                            import pandas   as pd
+                            df = yf.download(s, period="5d", interval=interval,
+                                             progress=False, auto_adjust=True)
                             if df is None or df.empty:
                                 continue
                             if isinstance(df.columns, pd.MultiIndex):
@@ -1597,51 +1529,59 @@ class TradingEngine(threading.Thread):
                             self.ui_queue.put(("error", f"Data error {s}: {e}"))
                             continue
                         latest = df.iloc[-1]
-                        sf = SignalAnalyzer._sf
-                        price = sf(latest["Close"])
-                        ef = sf(latest["EMA_fast"])
-                        es = sf(latest["EMA_slow"])
+                        sf     = SignalAnalyzer._sf
+                        price  = sf(latest["Close"])
+                        ef     = sf(latest["EMA_fast"])
+                        es     = sf(latest["EMA_slow"])
                         prev_f, prev_s = self.prev_ema.get(s, (None, None))
                         self.prev_ema[s] = (ef, es)
                         if prev_f is not None:
-                            sig, rationale, conf = SignalAnalyzer.generate_signal(df, prev_f, prev_s, self.config)
+                            sig, rationale, conf = SignalAnalyzer.generate_signal(
+                                df, prev_f, prev_s, self.config)
                             if sig:
                                 self.ui_queue.put(("signal", (s, sig, price, rationale)))
                                 db.insert_signal(_ts(), s, sig, price, rationale)
-                                if mode == "auto" and self.is_licensed and self.broker.get_market_status():
-                                    self._execute(s, sig, price, latest, use_bracket, use_atr, sl_pct, tp_pct, conf)
+                                # ── Auto-trade only if licensed AND mode == auto ──
+                                if (mode == "auto"
+                                        and self.is_licensed
+                                        and self.broker.get_market_status()):
+                                    self._execute(s, sig, price, latest,
+                                                  use_bracket, use_atr, sl_pct, tp_pct, conf)
                 time.sleep(1)
             except Exception:
                 self.ui_queue.put(("error", f"Engine error:\n{traceback.format_exc()}"))
                 time.sleep(5)
+
         self.broker.stop_stream()
         self.ui_queue.put(("status", "Bot stopped"))
 
-    def _execute(self, sym, sig, price, latest, use_bracket, use_atr, sl_pct, tp_pct, conf):
+    def _execute(self, sym, sig, price, latest,
+                 use_bracket, use_atr, sl_pct, tp_pct, conf):
+        # This method is only reached when is_licensed == True
         try:
             qty = self.per_ticker_qty.get(sym, self.config.get("quantity", 1))
-            sf = SignalAnalyzer._sf
-            if self.direction == "long" and sig == "SELL":
-                return
-            if self.direction == "short" and sig == "BUY":
-                return
+            sf  = SignalAnalyzer._sf
+            if self.direction == "long"  and sig == "SELL": return
+            if self.direction == "short" and sig == "BUY":  return
             pos = self.positions.get(sym, 0)
             if sig == "BUY":
                 if pos <= 0:
                     if pos < 0:
                         self.broker.submit_order(sym, abs(pos), "buy")
                         self.positions[sym] = 0
-                    success = False
+                    ok = False
                     if use_bracket and use_atr:
                         atr = sf(latest.get("ATR", price * 0.02), price * 0.02)
-                        success = self.broker.submit_order(sym, qty, "buy",
-                                                           sl_price=price - ATR_STOP_MULT * atr,
-                                                           tp_price=price + ATR_TP_MULT * atr)
+                        ok  = self.broker.submit_order(
+                            sym, qty, "buy",
+                            sl_price=price - ATR_STOP_MULT * atr,
+                            tp_price=price + ATR_TP_MULT  * atr)
                     elif use_bracket:
-                        success = self.broker.submit_order(sym, qty, "buy", sl_pct=sl_pct, tp_pct=tp_pct)
+                        ok = self.broker.submit_order(sym, qty, "buy",
+                                                       sl_pct=sl_pct, tp_pct=tp_pct)
                     else:
-                        success = self.broker.submit_order(sym, qty, "buy")
-                    if success:
+                        ok = self.broker.submit_order(sym, qty, "buy")
+                    if ok:
                         self.positions[sym] = qty
                         self.ui_queue.put(("order", (sym, "BUY", qty, price)))
                         db.insert_trade(_ts(), sym, "BUY", qty, price)
@@ -1651,17 +1591,19 @@ class TradingEngine(threading.Thread):
                     if pos > 0:
                         self.broker.submit_order(sym, pos, "sell")
                         self.positions[sym] = 0
-                    success = False
+                    ok = False
                     if use_bracket and use_atr:
                         atr = sf(latest.get("ATR", price * 0.02), price * 0.02)
-                        success = self.broker.submit_order(sym, qty, "sell",
-                                                           sl_price=price + ATR_STOP_MULT * atr,
-                                                           tp_price=price - ATR_TP_MULT * atr)
+                        ok  = self.broker.submit_order(
+                            sym, qty, "sell",
+                            sl_price=price + ATR_STOP_MULT * atr,
+                            tp_price=price - ATR_TP_MULT  * atr)
                     elif use_bracket:
-                        success = self.broker.submit_order(sym, qty, "sell", sl_pct=sl_pct, tp_pct=tp_pct)
+                        ok = self.broker.submit_order(sym, qty, "sell",
+                                                       sl_pct=sl_pct, tp_pct=tp_pct)
                     else:
-                        success = self.broker.submit_order(sym, qty, "sell")
-                    if success:
+                        ok = self.broker.submit_order(sym, qty, "sell")
+                    if ok:
                         self.positions[sym] = -qty
                         self.ui_queue.put(("order", (sym, "SELL", qty, price)))
                         db.insert_trade(_ts(), sym, "SELL", qty, price)
@@ -1677,21 +1619,22 @@ class TradingEngine(threading.Thread):
                         continue
                     try:
                         import yfinance as yf
-                        ticker = yf.Ticker(sym)
-                        price = ticker.history(period="1d")["Close"].iloc[-1]
-                    except:
+                        price = yf.Ticker(sym).history(period="1d")["Close"].iloc[-1]
+                    except Exception:
                         continue
-                    stop_price = price * (1 - 0.02) if qty > 0 else price * (1 + 0.02)
-                    take_price = price * (1 + 0.04) if qty > 0 else price * (1 - 0.04)
-                    if (qty > 0 and price <= stop_price) or (qty < 0 and price >= stop_price):
-                        self.broker.submit_order(sym, abs(qty), "sell" if qty > 0 else "buy")
+                    stop  = price * (1 - 0.02) if qty > 0 else price * (1 + 0.02)
+                    take  = price * (1 + 0.04) if qty > 0 else price * (1 - 0.04)
+                    if (qty > 0 and price <= stop) or (qty < 0 and price >= stop):
+                        self.broker.submit_order(sym, abs(qty),
+                                                  "sell" if qty > 0 else "buy")
                         self.positions[sym] = 0
                         self._telegram(f"Stop loss triggered {sym} @ ${price:.2f}")
-                    elif (qty > 0 and price >= take_price) or (qty < 0 and price <= take_price):
-                        self.broker.submit_order(sym, abs(qty), "sell" if qty > 0 else "buy")
+                    elif (qty > 0 and price >= take) or (qty < 0 and price <= take):
+                        self.broker.submit_order(sym, abs(qty),
+                                                  "sell" if qty > 0 else "buy")
                         self.positions[sym] = 0
                         self._telegram(f"Take profit triggered {sym} @ ${price:.2f}")
-            except:
+            except Exception:
                 pass
             time.sleep(2)
 
@@ -1702,7 +1645,7 @@ class TradingEngine(threading.Thread):
         self._stop_watchdog.set()
 
 
-# ── FLASK ROUTES ───────────────────────────────────────────
+# ── FLASK ROUTES ──────────────────────────────────────────────────────────────
 @app.route("/")
 def index():
     return FRONTEND_HTML
@@ -1710,7 +1653,7 @@ def index():
 
 @app.route("/mobile")
 def mobile():
-    return send_file("mobile.html") if os.path.exists("mobile.html") else "Not available", 404
+    return send_file("mobile.html") if os.path.exists("mobile.html") else ("Not available", 404)
 
 
 @app.route("/api/config", methods=["GET"])
@@ -1737,6 +1680,7 @@ def api_start():
     state.config.update(data)
     EncryptedConfigManager.save(state.config)
 
+    # Re-validate license on start
     key = state.config.get("license_key", "").strip()
     if key:
         valid, _ = verify_gumroad_license(key)
@@ -1746,34 +1690,39 @@ def api_start():
     if state.engine and state.engine.running:
         return jsonify({"status": "error", "message": "Bot already running."})
 
-    broker_choice = state.config.get("broker", "Alpaca")
+    # ── Backend free-tier enforcement (cannot be bypassed from the front-end) ──
     if not state.config.get("license_valid"):
-        broker_choice = "Alpaca"
-        state.config["mode"] = "signal"
-        state.config["broker"] = "Alpaca"
-        if "alpaca" in state.config:
-            state.config["alpaca"]["paper"] = True
+        state.config["broker"]    = "Alpaca"
+        state.config["mode"]      = "signal"
+        state.config["direction"] = "both"
+        if "alpaca" not in state.config or not isinstance(state.config["alpaca"], dict):
+            state.config["alpaca"] = dict(_DEFAULT_CONFIG["alpaca"])
+        state.config["alpaca"]["paper"] = True
         for k in ("use_supertrend", "use_stochastic", "use_adx",
                   "use_vol_confirm", "use_atr_stops", "use_bracket"):
             state.config[k] = False
-        state.config["tickers"] = state.config.get("tickers", "AAPL").split(",")[0].strip()
+        first = state.config.get("tickers", "AAPL").split(",")[0].strip()
+        state.config["tickers"] = first
         EncryptedConfigManager.save(state.config)
 
-    broker_cls = BROKER_REGISTRY.get(broker_choice)
+    broker_choice = state.config.get("broker", "Alpaca")
+    broker_cls    = BROKER_REGISTRY.get(broker_choice)
     if not broker_cls:
         return jsonify({"status": "error", "message": f"Unknown broker: {broker_choice}"})
+
     state.broker_instance = broker_cls(state.config, state.ui_queue)
     if not state.broker_instance.connect():
         err = state.broker_instance.last_error or "Unknown error."
         state.config["last_broker_message"] = f"ERROR: {err}"
         EncryptedConfigManager.save(state.config)
         return jsonify({"status": "error", "message": err})
+
     state.config["last_broker_message"] = "Connected"
     EncryptedConfigManager.save(state.config)
-    state.engine = TradingEngine(state.ui_queue, state.config, state.broker_instance)
+    state.engine         = TradingEngine(state.ui_queue, state.config, state.broker_instance)
     state.engine.running = True
     state.engine.start()
-    state.running = True
+    state.running        = True
     return jsonify({"status": "ok", "message": f"Bot started ({broker_choice})"})
 
 
@@ -1788,7 +1737,8 @@ def api_stop():
 @app.route("/api/kill", methods=["POST"])
 def api_kill():
     if state.broker_instance:
-        threading.Thread(target=state.broker_instance.close_all_positions, daemon=True).start()
+        threading.Thread(target=state.broker_instance.close_all_positions,
+                         daemon=True).start()
     if state.engine:
         state.engine.stop()
     state.running = False
@@ -1799,24 +1749,25 @@ def api_kill():
 def api_status():
     while not state.ui_queue.empty():
         try:
-            msg = state.ui_queue.get_nowait()
-            kind, body = msg[0], msg[1:]
+            msg  = state.ui_queue.get_nowait()
+            kind = msg[0]
             if kind == "account":
-                eq, pl, bp, op = body[0]
-                state.dashboard.update(equity=eq, pl=pl, buying_power=bp, open_positions=op)
+                eq, pl, bp, op = msg[1]
+                state.dashboard.update(equity=eq, pl=pl, buying_power=bp,
+                                       open_positions=op)
             elif kind in ("log", "error"):
-                db.insert_log(body[0])
+                db.insert_log(msg[1])
         except queue.Empty:
             break
     return jsonify({
-        "running": state.running,
-        "equity": state.dashboard["equity"],
-        "pl": state.dashboard["pl"],
-        "buying_power": state.dashboard["buying_power"],
+        "running":        state.running,
+        "equity":         state.dashboard["equity"],
+        "pl":             state.dashboard["pl"],
+        "buying_power":   state.dashboard["buying_power"],
         "open_positions": state.dashboard["open_positions"],
-        "signals": db.get_recent_signals(50)[::-1],
-        "orders": db.get_recent_trades(50)[::-1],
-        "log": db.get_recent_logs(100),
+        "signals":        db.get_recent_signals(50)[::-1],
+        "orders":         db.get_recent_trades(50)[::-1],
+        "log":            db.get_recent_logs(100),
     })
 
 
@@ -1828,13 +1779,13 @@ def api_broker_status():
 @app.route("/api/validate_license", methods=["POST"])
 def api_validate_license():
     data = request.json or {}
-    key = data.get("license_key", "").strip()
+    key  = data.get("license_key", "").strip()
     if not key:
         return jsonify({"valid": False, "message": "No license key provided"})
     valid, msg = verify_gumroad_license(key)
     if valid:
         state.config["license_valid"] = True
-        state.config["license_key"] = key
+        state.config["license_key"]   = key
         EncryptedConfigManager.save(state.config)
     else:
         state.config["license_valid"] = False
@@ -1848,11 +1799,12 @@ def api_update():
         with urllib.request.urlopen(url, timeout=5) as r:
             data = json.loads(r.read().decode())
         latest = data.get("latest_version", "0.0.0")
-        newer = tuple(map(int, latest.split("."))) > tuple(map(int, APP_VERSION.split(".")))
+        newer  = (tuple(map(int, latest.split("."))) >
+                  tuple(map(int, APP_VERSION.split("."))))
         return jsonify({
-            "current_version": APP_VERSION,
-            "latest_version": latest,
-            "download_url": data.get("download_url", ""),
+            "current_version":  APP_VERSION,
+            "latest_version":   latest,
+            "download_url":     data.get("download_url", ""),
             "update_available": newer,
         })
     except Exception as e:
@@ -1861,64 +1813,148 @@ def api_update():
 
 @app.route("/api/backtest", methods=["POST"])
 def api_backtest():
-    data = request.json or {}
+    data   = request.json or {}
     config = data.get("config", state.config)
-    days = int(data.get("days", 5))
+    days   = int(data.get("days", 5))
     try:
         import yfinance as yf
+        import pandas   as pd    # ← fixed: was missing in v1.0.55
+
         raw_list = [s.strip() for s in config.get("tickers", "AAPL").split(",") if s.strip()]
-        symbols = list(dict.fromkeys(clean_symbol(e) for e in raw_list))
-        ef, es = config.get("emas", [9, 50])
+        symbols  = list(dict.fromkeys(clean_symbol(e) for e in raw_list))
+        ef, es   = config.get("emas", [9, 50])
         interval = config.get("timeframe", "1m")
-        results = {}
+        results  = {}
+
         for sym in symbols:
             try:
-                df = yf.download(sym, period=f"{days}d", interval=interval, progress=False, auto_adjust=True)
+                df = yf.download(sym, period=f"{days}d", interval=interval,
+                                 progress=False, auto_adjust=True)
                 if df is None or df.empty:
                     results[sym] = {"error": "No data returned"}
                     continue
                 if isinstance(df.columns, pd.MultiIndex):
                     df.columns = df.columns.get_level_values(0)
-                df = IndicatorCalculator.compute_all(df, ef, es)
+                df   = IndicatorCalculator.compute_all(df, ef, es)
                 sigs = []
                 for i in range(1, len(df)):
                     prev = df.iloc[i - 1]
                     curr = df.iloc[i]
-                    pf = SignalAnalyzer._sf(prev["EMA_fast"])
-                    ps = SignalAnalyzer._sf(prev["EMA_slow"])
-                    sig, rat, conf = SignalAnalyzer.generate_signal(df.iloc[: i + 1], pf, ps, config)
+                    pf   = SignalAnalyzer._sf(prev["EMA_fast"])
+                    ps   = SignalAnalyzer._sf(prev["EMA_slow"])
+                    sig, rat, conf = SignalAnalyzer.generate_signal(
+                        df.iloc[:i + 1], pf, ps, config)
                     if sig:
                         sf = SignalAnalyzer._sf
                         sigs.append({
-                            "time": str(df.index[i]),
-                            "signal": sig,
-                            "price": round(sf(curr["Close"]), 2),
-                            "rationale": rat,
+                            "time":       str(df.index[i]),
+                            "signal":     sig,
+                            "price":      round(sf(curr["Close"]), 2),
+                            "rationale":  rat,
                             "confidence": conf,
                             "indicators": {
-                                "RSI": round(sf(curr.get("RSI", 50), 50), 1),
-                                "MACD": round(sf(curr.get("MACD", 0), 0), 4),
-                                "MACD_signal": round(sf(curr.get("MACD_signal", 0), 0), 4),
-                                "VWAP": round(sf(curr.get("VWAP", 0), 0), 2),
-                                "BB_upper": round(sf(curr.get("BB_upper", 0), 0), 2),
-                                "BB_lower": round(sf(curr.get("BB_lower", 0), 0), 2),
-                                "ADX": round(sf(curr.get("ADX", 0), 0), 1),
-                                "Vol_ratio": round(sf(curr.get("Vol_ratio", 1), 1), 2),
-                                "Supertrend_trend": int(sf(curr.get("Supertrend_trend", 0), 0)),
-                                "Stoch_K": round(sf(curr.get("Stoch_K", 50), 50), 1),
-                                "Stoch_D": round(sf(curr.get("Stoch_D", 50), 50), 1),
+                                "RSI":             round(sf(curr.get("RSI",            50), 50), 1),
+                                "MACD":            round(sf(curr.get("MACD",            0),  0), 4),
+                                "MACD_signal":     round(sf(curr.get("MACD_signal",     0),  0), 4),
+                                "VWAP":            round(sf(curr.get("VWAP",            0),  0), 2),
+                                "BB_upper":        round(sf(curr.get("BB_upper",        0),  0), 2),
+                                "BB_lower":        round(sf(curr.get("BB_lower",        0),  0), 2),
+                                "ADX":             round(sf(curr.get("ADX",             0),  0), 1),
+                                "Vol_ratio":       round(sf(curr.get("Vol_ratio",       1),  1), 2),
+                                "Supertrend_trend":int(sf(curr.get("Supertrend_trend",  0),  0)),
+                                "Stoch_K":         round(sf(curr.get("Stoch_K",        50), 50), 1),
+                                "Stoch_D":         round(sf(curr.get("Stoch_D",        50), 50), 1),
                             },
                         })
                 results[sym] = {"signals": sigs}
             except Exception as e:
                 results[sym] = {"error": str(e)}
+
         db.insert_backtest(json.dumps({"config": config, "results": results}))
         return jsonify({"results": results})
     except Exception as e:
         return jsonify({"error": str(e)})
 
 
-# ── FRONTEND HTML (v55 – complete) ─────────────────────────
+# ── AI CHAT ───────────────────────────────────────────────────────────────────
+_CHAT_SYSTEM_PROMPT = (
+    "You are a professional trading assistant for TraderMoney, a desktop algorithmic "
+    "trading terminal. You provide concise, accurate answers about trading strategies, "
+    "technical indicators (EMA, RSI, MACD, VWAP, Bollinger Bands, ADX, SuperTrend, "
+    "Stochastic, ATR), risk management, broker connections, and platform usage. "
+    "Keep responses focused and under 220 words. Use plain text only."
+)
+
+
+@app.route("/api/chat", methods=["POST"])
+def api_chat():
+    global _chat_counter
+    data    = request.json or {}
+    message = data.get("message", "").strip()
+    if not message:
+        return jsonify({"reply": "Please type a message."})
+
+    licensed = state.config.get("license_valid", False)
+
+    # ── Daily limit for free tier ─────────────────────────────────────────────
+    if not licensed:
+        today = datetime.now().strftime("%Y-%m-%d")
+        if _chat_counter["date"] != today:
+            _chat_counter["date"]  = today
+            _chat_counter["count"] = 0
+        if _chat_counter["count"] >= FREE_CHAT_DAILY_LIMIT:
+            return jsonify({
+                "reply": (
+                    f"Daily chat limit reached ({FREE_CHAT_DAILY_LIMIT} messages/day on "
+                    "the Free tier). Upgrade to Pro for unlimited AI access."
+                )
+            })
+        _chat_counter["count"] += 1
+
+    # ── API key check ─────────────────────────────────────────────────────────
+    if not OPENAI_API_KEY or OPENAI_API_KEY.startswith("sk-YOUR"):
+        return jsonify({
+            "reply": (
+                "AI Chat is not configured yet. Open app.py and replace the "
+                "OPENAI_API_KEY constant at the top of the file with your real "
+                "OpenAI API key (get one at platform.openai.com/api-keys)."
+            )
+        })
+
+    # ── Call OpenAI ───────────────────────────────────────────────────────────
+    try:
+        resp = http_requests.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {OPENAI_API_KEY}",
+                "Content-Type":  "application/json",
+            },
+            json={
+                "model": "gpt-3.5-turbo",
+                "messages": [
+                    {"role": "system", "content": _CHAT_SYSTEM_PROMPT},
+                    {"role": "user",   "content": message},
+                ],
+                "max_tokens":  350,
+                "temperature": 0.65,
+            },
+            timeout=30,
+        )
+        result = resp.json()
+        if "error" in result:
+            err_msg = result["error"].get("message", "Unknown OpenAI error")
+            db.insert_log(f"[AI Chat] OpenAI error: {err_msg}")
+            return jsonify({"reply": f"AI error: {err_msg}"})
+        reply = result["choices"][0]["message"]["content"].strip()
+        return jsonify({"reply": reply})
+    except http_requests.exceptions.Timeout:
+        return jsonify({"reply": "AI service timed out. Please try again."})
+    except Exception as e:
+        db.insert_log(f"[AI Chat] Exception: {e}")
+        return jsonify({"reply": f"AI service unavailable: {e}"})
+
+
+# ── FRONTEND HTML ─────────────────────────────────────────────────────────────
 FRONTEND_HTML = r"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1929,7 +1965,7 @@ FRONTEND_HTML = r"""<!DOCTYPE html>
 ::-webkit-scrollbar{width:4px;}::-webkit-scrollbar-track{background:#080808;}::-webkit-scrollbar-thumb{background:#111;}
 *{box-sizing:border-box;}
 body{margin:0;font-family:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',sans-serif;background:var(--bg);color:var(--text);display:flex;height:100vh;overflow:hidden;color-scheme:dark;}
-#sb{width:var(--sw);background:#0c0c0c;border-right:1px solid var(--border);display:flex;flex-direction:column;overflow-y:auto;overflow-x:hidden;padding:18px 14px;flex-shrink:0;border-radius:0 var(--radius) 0 0;}
+#sb{width:var(--sw);background:#0c0c0c;border-right:1px solid var(--border);display:flex;flex-direction:column;overflow-y:auto;overflow-x:hidden;padding:18px 14px;flex-shrink:0;}
 #sb h2{color:var(--accent);margin:0 0 10px;font-size:1.2rem;letter-spacing:.3px;}
 .lbadge{display:inline-block;padding:2px 10px;border-radius:20px;font-size:.67rem;margin-left:5px;vertical-align:middle;}
 .lv{background:var(--accent);color:#000;}.li{background:var(--danger);color:#fff;}
@@ -1938,22 +1974,13 @@ label{display:block;font-size:.75rem;margin:10px 0 3px;color:var(--muted);cursor
 .cb .cm{display:inline-block;width:18px;height:18px;border:2px solid #333;border-radius:6px;margin-right:6px;vertical-align:middle;position:relative;transition:.2s;}
 .cb input:checked+.cm{background:var(--accent);border-color:var(--accent);}
 .cb input:checked+.cm::after{content:"";position:absolute;left:4px;top:1px;width:5px;height:9px;border:solid #000;border-width:0 2px 2px 0;transform:rotate(45deg);}
-select{
-    -webkit-appearance:none;appearance:none;
-    background:#1A1A1A url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'><polygon fill='%23D4AF37' points='0,4 12,4 6,10'/></svg>") no-repeat right 10px center;
-    background-size:12px;
-    color:var(--text);border:1px solid #333;padding:7px 30px 7px 10px;border-radius:10px;width:100%;font-size:.85rem;transition:border .2s;cursor:pointer;
-}
+select{-webkit-appearance:none;appearance:none;background:#1A1A1A url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'><polygon fill='%23D4AF37' points='0,4 12,4 6,10'/></svg>") no-repeat right 10px center;background-size:12px;color:var(--text);border:1px solid #333;padding:7px 30px 7px 10px;border-radius:10px;width:100%;font-size:.85rem;transition:border .2s;cursor:pointer;}
 select:focus{border-color:var(--accent);outline:none;}
-select:disabled{opacity:0.6;cursor:not-allowed;}
-input[type="text"],input[type="password"],input[type="number"],textarea{
-    background:#1A1A1A;color:var(--text);border:1px solid #333;padding:7px 10px;border-radius:10px;width:100%;font-size:.85rem;transition:border .2s;
-}
+select:disabled{opacity:.5;cursor:not-allowed;}
+input[type="text"],input[type="password"],input[type="number"],textarea{background:#1A1A1A;color:var(--text);border:1px solid #333;padding:7px 10px;border-radius:10px;width:100%;font-size:.85rem;transition:border .2s;}
 input:focus,textarea:focus{border-color:var(--accent);outline:none;}
-input:-webkit-autofill,input:-webkit-autofill:hover,input:-webkit-autofill:focus,textarea:-webkit-autofill,textarea:-webkit-autofill:hover,textarea:-webkit-autofill:focus{
-    -webkit-text-fill-color:var(--text);-webkit-box-shadow:0 0 0 30px #1A1A1A inset;box-shadow:0 0 0 30px #1A1A1A inset;
-}
-.bt-days-input{width:70px;display:inline-block;margin-left:6px;border-radius:10px;}
+input:-webkit-autofill,input:-webkit-autofill:hover,input:-webkit-autofill:focus{-webkit-text-fill-color:var(--text);-webkit-box-shadow:0 0 0 30px #1A1A1A inset;}
+.bt-days-input{width:70px;display:inline-block;margin-left:6px;}
 button{cursor:pointer;background:var(--accent);color:#050505;border:none;padding:9px 12px;border-radius:10px;width:100%;font-weight:600;margin-top:10px;font-size:.85rem;transition:all .2s;}
 button:hover{opacity:.9;transform:translateY(-1px);}
 button.ghost{background:var(--card);border:1px solid var(--border);color:var(--text);}
@@ -1962,20 +1989,20 @@ hr{border-color:var(--border);margin:12px 0;}
 .r2{display:flex;gap:5px;} .r2 input{width:100%;}
 #bstatus{font-size:.72rem;margin-top:3px;min-height:15px;word-break:break-word;padding:2px 0;}
 #bstatus.ok{color:#00c9b1;}#bstatus.err{color:var(--danger);}
-#main{flex:1;display:flex;flex-direction:column;min-width:0;border-radius:0 0 var(--radius) 0;}
-.tab-bar{display:flex;background:var(--card);border-bottom:1px solid var(--border);border-radius:0 var(--radius) 0 0;overflow:hidden;}
-.tbtn{flex:1;background:transparent;border:none;color:var(--text);padding:14px 6px;cursor:pointer;font-weight:500;border-bottom:2px solid transparent;transition:.2s;min-width:70px;font-size:.84rem;}
+#main{flex:1;display:flex;flex-direction:column;min-width:0;}
+.tab-bar{display:flex;background:var(--card);border-bottom:1px solid var(--border);overflow:hidden;}
+.tbtn{flex:1;background:transparent;border:none;color:var(--text);padding:14px 4px;cursor:pointer;font-weight:500;border-bottom:2px solid transparent;transition:.2s;min-width:60px;font-size:.82rem;}
 .tbtn:hover{background:rgba(255,255,255,.03);}
 .tbtn.active{border-bottom-color:var(--accent);color:var(--accent);font-weight:700;}
-.tab{flex:1;display:none;overflow:hidden;flex-direction:column;border-radius:0 0 var(--radius) var(--radius);}
+.tab{flex:1;display:none;overflow:hidden;flex-direction:column;}
 .tab.active{display:flex;}
 #metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;padding:10px;background:var(--card);border-bottom:1px solid var(--border);}
 .met{text-align:center;} .met .v{font-size:1.2rem;font-weight:bold;color:var(--accent);}
-#sess{display:flex;align-items:center;gap:14px;padding:8px 12px;background:var(--card);border-bottom:1px solid var(--border);font-size:.8rem;flex-wrap:wrap;border-radius:0 0 var(--radius) var(--radius);}
+#sess{display:flex;align-items:center;gap:14px;padding:8px 12px;background:var(--card);border-bottom:1px solid var(--border);font-size:.8rem;flex-wrap:wrap;}
 .sd{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:4px;}
 .so{background:#00c9b1;}.sc{background:var(--danger);}
 #tkbar{display:flex;flex-wrap:nowrap;overflow-x:auto;background:var(--card);border-bottom:1px solid var(--border);}
-.tkbtn{padding:7px 12px;background:transparent;border:none;color:var(--text);cursor:pointer;white-space:nowrap;border-bottom:2px solid transparent;transition:.2s;font-size:.82rem;flex-shrink:0;max-width:140px;overflow:hidden;text-overflow:ellipsis;}
+.tkbtn{padding:7px 12px;background:transparent;border:none;color:var(--text);cursor:pointer;white-space:nowrap;border-bottom:2px solid transparent;transition:.2s;font-size:.82rem;flex-shrink:0;}
 .tkbtn.active{border-bottom-color:var(--accent);color:var(--accent);font-weight:700;}
 #chart-c{flex:1;min-height:0;}
 .sitem{display:flex;justify-content:space-between;padding:9px 12px;border-bottom:1px solid var(--border);font-size:.82rem;}
@@ -1999,43 +2026,78 @@ hr{border-color:var(--border);margin:12px 0;}
 .hb p,.hb ul{font-size:.85rem;line-height:1.65;}.hb ul{padding-left:18px;}.hb li{margin-bottom:4px;}
 .hb a{color:var(--accent);}
 .istat{background:var(--card);border-radius:var(--radius);padding:14px;margin:8px 0;}
-.free-notice{background:var(--danger);color:#fff;padding:10px 12px;border-radius:10px;font-size:.8rem;margin-top:10px;display:none;}
+.free-notice{background:#2a0505;color:#ff9090;border:1px solid var(--danger);padding:9px 11px;border-radius:8px;font-size:.78rem;margin-top:10px;display:none;line-height:1.5;}
+/* ── AI Chat ─────────────────────────────────────────────── */
+#chat-wrap{display:flex;flex-direction:column;height:100%;}
+#chat-topbar{padding:10px 14px;background:var(--card);border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;flex-shrink:0;}
+#chat-topbar span.title{color:var(--accent);font-weight:600;font-size:.92rem;}
+#chat-limit{font-size:.74rem;color:var(--muted);}
+#chat-messages{flex:1;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:10px;}
+.cmsg{max-width:82%;padding:10px 14px;border-radius:14px;font-size:.86rem;line-height:1.55;word-break:break-word;}
+.cmsg.bot{background:#1a1200;border:1px solid #4a3800;color:var(--text);align-self:flex-start;border-radius:4px 14px 14px 14px;}
+.cmsg.user{background:#1e1e1e;border:1px solid #333;color:var(--text);align-self:flex-end;border-radius:14px 4px 14px 14px;}
+.cmsg .msender{font-size:.68rem;color:var(--accent);margin-bottom:4px;font-weight:700;letter-spacing:.4px;}
+.cmsg.user .msender{color:var(--muted);}
+.cmsg .mbody{white-space:pre-wrap;}
+.chat-typing{color:var(--muted);font-size:.8rem;padding:4px 8px;font-style:italic;align-self:flex-start;}
+#chat-input-row{display:flex;gap:8px;padding:12px;border-top:1px solid var(--border);background:var(--card);flex-shrink:0;}
+#chat-input{flex:1;resize:none;height:46px;padding:10px 12px;font-size:.87rem;border-radius:10px;}
+#chat-send{width:auto;margin-top:0;padding:10px 18px;flex-shrink:0;font-size:.87rem;}
 </style>
 <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
-<script src="https://gumroad.com/js/gumroad.js"></script>
 </head>
 <body>
 <div id="toasts"></div>
 <div id="upd">Update available! <a id="udl" href="#" target="_blank">Download</a></div>
+
+<!-- ═══ SIDEBAR ══════════════════════════════════════════════════════════════ -->
 <div id="sb">
   <h2>TraderMoney <span id="lbadge" class="lbadge li">FREE</span></h2>
-  <label>License Key</label><input type="password" id="lickey" placeholder="Paste Gumroad key">
+  <label>License Key</label>
+  <input type="password" id="lickey" placeholder="Paste Gumroad key">
   <button onclick="validateLicense()" style="margin-top:4px;font-size:.8rem;">Validate</button>
-  <p style="font-size:.67rem;color:var(--muted);margin:3px 0 0;"><a href="https://shafayrich.gumroad.com/l/ykaoov" style="color:var(--accent);">Buy license ↗</a></p>
-  <div id="free-notice" class="free-notice">Free tier: Alpaca paper only, Signal-Only, 1 ticker, core indicators.</div>
+  <p style="font-size:.67rem;color:var(--muted);margin:3px 0 0;">
+    <a href="https://shafayrich.gumroad.com/l/ykaoov" style="color:var(--accent)">Buy license ↗</a>
+  </p>
+  <div id="free-notice" class="free-notice">
+    Free tier: Alpaca paper only &bull; Signal-Only &bull; 1 ticker &bull; Core indicators only (RSI, MACD, VWAP, Bollinger). AI Chat: 5 messages/day.
+  </div>
   <hr>
-  <label>Broker</label><select id="broker" onchange="onBrokerChange()"></select>
-  <div id="bstatus" class="ok"></div><div id="creds"></div>
-  <label>Telegram Token</label><input type="password" id="tgt"><label>Telegram Chat ID</label><input id="tgc">
+  <label>Broker</label>
+  <select id="broker" onchange="onBrokerChange()"></select>
+  <div id="bstatus" class="ok"></div>
+  <div id="creds"></div>
+  <label>Telegram Token</label><input type="password" id="tgt">
+  <label>Telegram Chat ID</label><input id="tgc">
   <label>Tickers (e.g. AAPL:5)</label><input id="tickers" value="AAPL">
-  <label>Timeframe</label><select id="tf"><option>1m</option><option>5m</option><option>15m</option><option>30m</option><option>1h</option><option>1d</option></select>
-  <label>EMA periods</label><div class="r2"><input id="emaf" value="9"><input id="emas" value="50"></div>
-  <label><span class="cb"><input type="checkbox" id="udefqty" checked onchange="toggleDefQty()"><span class="cm"></span></span> Use fallback quantity</label>
+  <label>Timeframe</label>
+  <select id="tf">
+    <option>1m</option><option>5m</option><option>15m</option>
+    <option>30m</option><option>1h</option><option>1d</option>
+  </select>
+  <label>EMA periods</label>
+  <div class="r2"><input id="emaf" value="9"><input id="emas" value="50"></div>
+  <label>
+    <span class="cb"><input type="checkbox" id="udefqty" checked onchange="toggleDefQty()">
+    <span class="cm"></span></span> Use fallback quantity
+  </label>
   <div id="defqty-box"><label>Default Qty</label><input id="qty" value="1" type="number"></div>
-  <label>Mode</label><select id="mode"><option value="signal">Signal Only</option><option value="auto">Auto Trade</option></select>
-  <label>Direction</label><select id="dir"><option value="both">Both</option><option value="long">Long Only</option><option value="short">Short Only</option></select>
+  <label>Mode</label>
+  <select id="mode"><option value="signal">Signal Only</option><option value="auto">Auto Trade</option></select>
+  <label>Direction</label>
+  <select id="dir"><option value="both">Both</option><option value="long">Long Only</option><option value="short">Short Only</option></select>
   <label><span class="cb"><input type="checkbox" id="ubracket"><span class="cm"></span></span> Bracket SL/TP</label>
-  <div class="r2"><input id="slp" value="2"><input id="tpp" value="4"></div>
+  <div class="r2"><input id="slp" value="2" placeholder="SL %"><input id="tpp" value="4" placeholder="TP %"></div>
   <label><span class="cb"><input type="checkbox" id="uatr" checked><span class="cm"></span></span> ATR Stops</label>
   <label style="margin-top:12px;font-weight:bold;color:var(--accent)">Indicators</label>
-  <label><span class="cb"><input type="checkbox" id="ursi" checked><span class="cm"></span></span> RSI</label>
-  <label><span class="cb"><input type="checkbox" id="umacd" checked><span class="cm"></span></span> MACD</label>
-  <label><span class="cb"><input type="checkbox" id="uvwap" checked><span class="cm"></span></span> VWAP</label>
-  <label><span class="cb"><input type="checkbox" id="uboll" checked><span class="cm"></span></span> Bollinger</label>
-  <label><span class="cb"><input type="checkbox" id="uadx" checked><span class="cm"></span></span> ADX</label>
-  <label><span class="cb"><input type="checkbox" id="uvol" checked><span class="cm"></span></span> Volume</label>
-  <label><span class="cb"><input type="checkbox" id="ust" checked><span class="cm"></span></span> SuperTrend</label>
-  <label><span class="cb"><input type="checkbox" id="ustoch" checked><span class="cm"></span></span> Stochastic</label>
+  <label><span class="cb"><input type="checkbox" id="ursi"   checked><span class="cm"></span></span> RSI</label>
+  <label><span class="cb"><input type="checkbox" id="umacd"  checked><span class="cm"></span></span> MACD</label>
+  <label><span class="cb"><input type="checkbox" id="uvwap"  checked><span class="cm"></span></span> VWAP</label>
+  <label><span class="cb"><input type="checkbox" id="uboll"  checked><span class="cm"></span></span> Bollinger</label>
+  <label><span class="cb"><input type="checkbox" id="uadx"   checked><span class="cm"></span></span> ADX <span style="font-size:.65rem;color:var(--accent)">[PRO]</span></label>
+  <label><span class="cb"><input type="checkbox" id="uvol"   checked><span class="cm"></span></span> Volume <span style="font-size:.65rem;color:var(--accent)">[PRO]</span></label>
+  <label><span class="cb"><input type="checkbox" id="ust"    checked><span class="cm"></span></span> SuperTrend <span style="font-size:.65rem;color:var(--accent)">[PRO]</span></label>
+  <label><span class="cb"><input type="checkbox" id="ustoch" checked><span class="cm"></span></span> Stochastic <span style="font-size:.65rem;color:var(--accent)">[PRO]</span></label>
   <button onclick="saveConfig()">Save</button>
   <button class="ghost" onclick="refreshTickers()">Refresh Tickers</button>
   <button style="background:var(--accent);color:#050505;" id="startBtn" onclick="startBot()">&#9654; Start Bot</button>
@@ -2045,10 +2107,11 @@ hr{border-color:var(--border);margin:12px 0;}
   <button class="ghost" style="margin-top:16px" onclick="checkUpdate()">Check Updates</button>
   <button class="ghost" style="margin-top:7px" onclick="runBT()">&#9874; Backtest All</button>
   <div style="margin-top:9px;font-size:.75rem;color:var(--muted);">
-    <span>Backtest days:</span>
-    <input type="number" id="btDays" value="5" min="1" max="365" class="bt-days-input">
+    Backtest days: <input type="number" id="btDays" value="5" min="1" max="365" class="bt-days-input">
   </div>
 </div>
+
+<!-- ═══ MAIN ══════════════════════════════════════════════════════════════════ -->
 <div id="main">
   <div class="tab-bar" id="tabbar">
     <button class="tbtn active" data-tab="charts">Charts</button>
@@ -2056,7 +2119,10 @@ hr{border-color:var(--border);margin:12px 0;}
     <button class="tbtn" data-tab="history">History</button>
     <button class="tbtn" data-tab="backtest">Backtest</button>
     <button class="tbtn" data-tab="help">Help</button>
+    <button class="tbtn" data-tab="aichat">AI Chat</button>
   </div>
+
+  <!-- Charts -->
   <div id="tab-charts" class="tab active">
     <div id="tkbar"></div>
     <div id="metrics">
@@ -2076,168 +2142,206 @@ hr{border-color:var(--border);margin:12px 0;}
     </div>
     <div id="chart-c"></div>
   </div>
+
+  <!-- Signals -->
   <div id="tab-signals" class="tab">
     <div id="siglist" style="overflow-y:auto;flex:1;"></div>
     <div id="sigempty" class="empty-placeholder" style="display:none;">No signals yet.</div>
   </div>
+
+  <!-- History -->
   <div id="tab-history" class="tab">
     <div id="histlist" style="overflow-y:auto;flex:1;"></div>
     <div id="hstempty" class="empty-placeholder" style="display:none;">No orders yet.</div>
   </div>
+
+  <!-- Backtest -->
   <div id="tab-backtest" class="tab">
     <div class="btp">
-      <div style="padding:10px"><button class="ghost" style="width:auto;padding:9px 20px" onclick="runBT()">&#9874; Run Backtest on All Tickers</button></div>
-      <div id="btres" class="btr"><p class="ph">Click <b>Backtest All</b> to run.<br>Results appear here.</p></div>
+      <div style="padding:10px">
+        <button class="ghost" style="width:auto;padding:9px 20px" onclick="runBT()">&#9874; Run Backtest on All Tickers</button>
+      </div>
+      <div id="btres" class="btr"><p class="ph">Click <b>Backtest All</b> to run.</p></div>
     </div>
   </div>
+
+  <!-- Help -->
   <div id="tab-help" class="tab">
     <div class="hb">
-      <h3>Indicator &amp; Short Selling Guide</h3>
+      <h3>Indicator &amp; Trading Guide</h3>
       <div class="istat">
         <p><b>Pure EMA Crossover:</b> ~32%</p>
         <p><b>+ RSI:</b> ~40% | <b>+ MACD:</b> ~45% | <b>+ VWAP:</b> ~48%</p>
-        <p><b>+ Bollinger:</b> ~50% | <b>+ ADX >=20:</b> ~55%</p>
+        <p><b>+ Bollinger:</b> ~50% | <b>+ ADX &ge;20:</b> ~55%</p>
         <p><b>+ Volume 1.5x:</b> ~58% | <b>+ SuperTrend:</b> ~62% | <b>+ Stochastic:</b> ~65%</p>
         <p><b>ATR stops</b> improve profit factor by ~0.4</p>
       </div>
       <h4>Short Selling Logic</h4>
-      <table class="bttbl"><tr><th>Indicator</th><th>Long condition</th><th>Short condition</th></tr>
-      <tr><td>RSI</td><td>RSI >= 30</td><td>RSI <= 70</td></tr>
-      <tr><td>MACD</td><td>MACD > signal</td><td>MACD < signal</td></tr>
-      <tr><td>VWAP</td><td>Price > VWAP</td><td>Price < VWAP</td></tr>
-      <tr><td>SuperTrend</td><td>Trend = 1</td><td>Trend = -1</td></tr>
-      <tr><td>Stochastic</td><td>%K > %D, %K<80</td><td>%K < %D, %K>20</td></tr></table>
-      <h4>Confidence Score</h4>
-      <p>Each confirming indicator adds 0.05-0.08 to a base 0.50, max 1.0. Scores appear in signal rationales.</p>
+      <table class="bttbl">
+        <tr><th>Indicator</th><th>Long condition</th><th>Short condition</th></tr>
+        <tr><td>RSI</td><td>RSI &ge; 30</td><td>RSI &le; 70</td></tr>
+        <tr><td>MACD</td><td>MACD &gt; signal</td><td>MACD &lt; signal</td></tr>
+        <tr><td>VWAP</td><td>Price &gt; VWAP</td><td>Price &lt; VWAP</td></tr>
+        <tr><td>SuperTrend</td><td>Trend = 1</td><td>Trend = -1</td></tr>
+        <tr><td>Stochastic</td><td>%K &gt; %D, %K&lt;80</td><td>%K &lt; %D, %K&gt;20</td></tr>
+      </table>
       <h4>Broker Connection Guide</h4>
       <ul>
-        <li><b>Alpaca:</b> API Key + Secret from alpaca.markets. Tick "Paper" for paper trading.</li>
+        <li><b>Alpaca:</b> API Key + Secret from alpaca.markets. Tick Paper for paper trading.</li>
         <li><b>Interactive Brokers:</b> TWS/Gateway running, API enabled. Ports: 7497=TWS paper | 7496=TWS live | 4002=Gateway paper | 4001=Gateway live.</li>
         <li><b>Tradier:</b> Access Token + Account ID from developer.tradier.com. Sandbox checkbox.</li>
         <li><b>Binance:</b> API Key + Secret from binance.com. Testnet checkbox.</li>
-        <li><b>Bybit:</b> API Key + Secret from bybit.com. Testnet. Uses pybit v5.</li>
+        <li><b>Bybit:</b> API Key + Secret from bybit.com. Testnet. Requires pybit v5.</li>
         <li><b>OKX:</b> Key + Secret + Passphrase from okx.com. Demo checkbox.</li>
       </ul>
+      <h4>AI Chat</h4>
+      <p>Add your OpenAI API key to the <code>OPENAI_API_KEY</code> constant at the top of <code>app.py</code>. Free tier: 5 messages/day. Pro: unlimited.</p>
       <h4>FAQ</h4>
-      <p><b>Why no signals?</b> Too many filters enabled. Try toggling SuperTrend or Stochastic off.</p>
-      <p><b>How to test safely?</b> Use Paper Trading with a virtual balance, or Signal Only mode.</p>
-      <p><b>What timeframe is best?</b> 1m-5m for scalping, 15m-1h for swing, 1d for long term.</p>
+      <p><b>Why no signals?</b> Too many filters. Try toggling SuperTrend or Stochastic off.</p>
+      <p><b>Safe testing?</b> Use Paper Trading + Signal Only mode first.</p>
     </div>
   </div>
+
+  <!-- AI Chat -->
+  <div id="tab-aichat" class="tab">
+    <div id="chat-wrap">
+      <div id="chat-topbar">
+        <span class="title">&#129302; AI Trading Assistant</span>
+        <span id="chat-limit"></span>
+      </div>
+      <div id="chat-messages"></div>
+      <div id="chat-input-row">
+        <textarea id="chat-input" placeholder="Ask about indicators, strategies, risk management…"></textarea>
+        <button id="chat-send" onclick="sendChat()">Send</button>
+      </div>
+    </div>
+  </div>
+
   <div id="logbar"></div>
 </div>
+
 <script src="https://s3.tradingview.com/tv.js"></script>
 <script>
 'use strict';
-const $=id=>document.getElementById(id);let cfg={},licValid=false,curSym='',allTickers=[],chart=null,lastChart='';
+const $=id=>document.getElementById(id);
+let cfg={},licValid=false,curSym='',allTickers=[],chart=null,lastChart='';
+let chatInited=false;
+
+/* ── Utilities ─────────────────────────────────────────────── */
 function cs(raw){return raw.split(':')[0].trim().toUpperCase();}
 function fmt(n,d=2){return Number(n).toLocaleString(undefined,{maximumFractionDigits:d});}
-function toast(msg,type='info'){let t=document.createElement('div');t.className='toast '+type;t.textContent=msg;$('toasts').appendChild(t);setTimeout(()=>t.remove(),3800);}
+function toast(msg,type='info'){
+  let t=document.createElement('div');
+  t.className='toast '+type;t.textContent=msg;
+  $('toasts').appendChild(t);
+  setTimeout(()=>t.remove(),3800);
+}
 function gv(id,fb=''){let e=$(id);return e?e.value:fb;}
 function gc(id){let e=$(id);return e?e.checked:false;}
 function sv(id,v){let e=$(id);if(e)e.value=v;}
 function sc(id,v){let e=$(id);if(e)e.checked=!!v;}
-document.querySelectorAll('.tbtn').forEach(b=>{b.addEventListener('click',function(){document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.tbtn').forEach(x=>x.classList.remove('active'));$('tab-'+this.dataset.tab).classList.add('active');this.classList.add('active');if(this.dataset.tab==='charts'&&chart)setTimeout(()=>chart.resize&&chart.resize(),80);});});
+
+/* Lock/unlock a custom checkbox (disable input + grey parent label) */
+function lockCb(id,locked){
+  let el=$(id);
+  if(!el)return;
+  el.disabled=locked;
+  let lbl=el.closest('label');
+  if(lbl){lbl.style.opacity=locked?'0.38':'1';lbl.style.pointerEvents=locked?'none':'';}
+}
+
+/* Apply visual restrictions for the free tier */
+function applyFreeTierUI(){
+  updateBrokerOptions();           // rebuilds to show only Alpaca
+  $('broker').disabled=true;
+  sv('broker','Alpaca');
+  cfg.broker='Alpaca';
+  sv('mode','signal'); $('mode').disabled=true;
+  sv('dir','both');    $('dir').disabled=true;
+  // Lock and uncheck premium items
+  ['ubracket','uatr','uadx','uvol','ust','ustoch'].forEach(id=>{sc(id,false);lockCb(id,true);});
+  $('free-notice').style.display='block';
+  $('lbadge').textContent='FREE'; $('lbadge').className='lbadge li';
+}
+
+/* Unlock everything for Pro users */
+function applyProUI(){
+  updateBrokerOptions();
+  $('broker').disabled=false;
+  $('mode').disabled=false;
+  $('dir').disabled=false;
+  ['ubracket','uatr','uadx','uvol','ust','ustoch'].forEach(id=>lockCb(id,false));
+  $('free-notice').style.display='none';
+  $('lbadge').textContent='PRO'; $('lbadge').className='lbadge lv';
+}
+
+/* ── Tab switching ─────────────────────────────────────────── */
+document.querySelectorAll('.tbtn').forEach(b=>{
+  b.addEventListener('click',function(){
+    document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
+    document.querySelectorAll('.tbtn').forEach(x=>x.classList.remove('active'));
+    $('tab-'+this.dataset.tab).classList.add('active');
+    this.classList.add('active');
+    if(this.dataset.tab==='charts'&&chart)setTimeout(()=>chart.resize&&chart.resize(),80);
+    if(this.dataset.tab==='aichat')initAIChat();
+  });
+});
 Sortable.create($('tabbar'),{animation:120,handle:'.tbtn'});
-function updSess(){let n=new Date(),d=n.getUTCDay(),wk=d===0||d===6,h=n.getUTCHours()+n.getUTCMinutes()/60,o=ok=>ok?'sd so':'sd sc';$('ds').className=o(!wk&&(h>=22||h<5));$('dt').className=o(!wk&&(h>=23||h<6));$('dl').className=o(!wk&&h>=8&&h<16.5);$('dn').className=o(!wk&&h>=13.5&&h<20);$('utc-clock').textContent='UTC: '+n.toISOString().slice(11,19);}
+
+/* ── Sessions clock ────────────────────────────────────────── */
+function updSess(){
+  let n=new Date(),d=n.getUTCDay(),wk=d===0||d===6,h=n.getUTCHours()+n.getUTCMinutes()/60;
+  let o=ok=>ok?'sd so':'sd sc';
+  $('ds').className=o(!wk&&(h>=22||h<5));
+  $('dt').className=o(!wk&&(h>=23||h<6));
+  $('dl').className=o(!wk&&h>=8&&h<16.5);
+  $('dn').className=o(!wk&&h>=13.5&&h<20);
+  $('utc-clock').textContent='UTC: '+n.toISOString().slice(11,19);
+}
 setInterval(updSess,30000);updSess();
-function pw(id,l){return`<label>${l}</label><input type="password" id="${id}">`;}
-function tx(id,l,v=''){return`<label>${l}</label><input id="${id}" value="${v}">`;}
-function cbHTML(id,l,chk=false){return`<label><span class="cb"><input type="checkbox" id="${id}" ${chk?'checked':''}><span class="cm"></span></span> ${l}</label>`;}
-// Save current broker's creds into cfg
+
+/* ── Broker credential HTML builders ───────────────────────── */
+function pw(id,l){return `<label>${l}</label><input type="password" id="${id}">`;}
+function tx(id,l,v=''){return `<label>${l}</label><input id="${id}" value="${v}">`;}
+function cbHTML(id,l,chk=false){return `<label><span class="cb"><input type="checkbox" id="${id}" ${chk?'checked':''}><span class="cm"></span></span> ${l}</label>`;}
+
 function saveCurrentBrokerCreds(){
-  const b = cfg.broker || 'Alpaca';
-  if(b==='Alpaca'){
-    cfg.alpaca = cfg.alpaca || {};
-    cfg.alpaca.api_key = gv('ak','');
-    cfg.alpaca.secret_key = gv('ask','');
-    cfg.alpaca.paper = gc('apaper');
-  } else if(b==='Interactive Brokers'){
-    cfg.ibkr = cfg.ibkr || {};
-    cfg.ibkr.host = gv('ih','');
-    cfg.ibkr.port = gv('ip','');
-    cfg.ibkr.client_id = gv('icid','');
-  } else if(b==='Tradier'){
-    cfg.tradier = cfg.tradier || {};
-    cfg.tradier.access_token = gv('trat','');
-    cfg.tradier.account_id = gv('traid','');
-    cfg.tradier.sandbox = gc('trsb');
-  } else if(b==='Binance'){
-    cfg.binance = cfg.binance || {};
-    cfg.binance.api_key = gv('bnk','');
-    cfg.binance.api_secret = gv('bns','');
-    cfg.binance.testnet = gc('bnt');
-  } else if(b==='Bybit'){
-    cfg.bybit = cfg.bybit || {};
-    cfg.bybit.api_key = gv('bbk','');
-    cfg.bybit.api_secret = gv('bbs','');
-    cfg.bybit.testnet = gc('bbtn');
-  } else if(b==='OKX'){
-    cfg.okx = cfg.okx || {};
-    cfg.okx.api_key = gv('ok','');
-    cfg.okx.api_secret = gv('os','');
-    cfg.okx.api_passphrase = gv('op','');
-    cfg.okx.demo = gc('od');
-  }
+  const b=cfg.broker||'Alpaca';
+  if(b==='Alpaca'){cfg.alpaca=cfg.alpaca||{};cfg.alpaca.api_key=gv('ak','');cfg.alpaca.secret_key=gv('ask','');cfg.alpaca.paper=gc('apaper');}
+  else if(b==='Interactive Brokers'){cfg.ibkr=cfg.ibkr||{};cfg.ibkr.host=gv('ih','');cfg.ibkr.port=gv('ip','');cfg.ibkr.client_id=gv('icid','');}
+  else if(b==='Tradier'){cfg.tradier=cfg.tradier||{};cfg.tradier.access_token=gv('trat','');cfg.tradier.account_id=gv('traid','');cfg.tradier.sandbox=gc('trsb');}
+  else if(b==='Binance'){cfg.binance=cfg.binance||{};cfg.binance.api_key=gv('bnk','');cfg.binance.api_secret=gv('bns','');cfg.binance.testnet=gc('bnt');}
+  else if(b==='Bybit'){cfg.bybit=cfg.bybit||{};cfg.bybit.api_key=gv('bbk','');cfg.bybit.api_secret=gv('bbs','');cfg.bybit.testnet=gc('bbtn');}
+  else if(b==='OKX'){cfg.okx=cfg.okx||{};cfg.okx.api_key=gv('ok','');cfg.okx.api_secret=gv('os','');cfg.okx.api_passphrase=gv('op','');cfg.okx.demo=gc('od');}
 }
+
 function populateCredsFields(){
-  const b = cfg.broker || 'Alpaca';
-  if(b==='Alpaca' && cfg.alpaca){
-    sv('ak', cfg.alpaca.api_key || '');
-    sv('ask', cfg.alpaca.secret_key || '');
-    sc('apaper', cfg.alpaca.paper !== false);
-  } else if(b==='Interactive Brokers' && cfg.ibkr){
-    sv('ih', cfg.ibkr.host || '');
-    sv('ip', cfg.ibkr.port || '');
-    sv('icid', cfg.ibkr.client_id || '');
-  } else if(b==='Tradier' && cfg.tradier){
-    sv('trat', cfg.tradier.access_token || '');
-    sv('traid', cfg.tradier.account_id || '');
-    sc('trsb', cfg.tradier.sandbox === true);
-  } else if(b==='Binance' && cfg.binance){
-    sv('bnk', cfg.binance.api_key || '');
-    sv('bns', cfg.binance.api_secret || '');
-    sc('bnt', cfg.binance.testnet !== false);
-  } else if(b==='Bybit' && cfg.bybit){
-    sv('bbk', cfg.bybit.api_key || '');
-    sv('bbs', cfg.bybit.api_secret || '');
-    sc('bbtn', cfg.bybit.testnet !== false);
-  } else if(b==='OKX' && cfg.okx){
-    sv('ok', cfg.okx.api_key || '');
-    sv('os', cfg.okx.api_secret || '');
-    sv('op', cfg.okx.api_passphrase || '');
-    sc('od', cfg.okx.demo !== false);
-  }
+  const b=cfg.broker||'Alpaca';
+  if(b==='Alpaca'&&cfg.alpaca){sv('ak',cfg.alpaca.api_key||'');sv('ask',cfg.alpaca.secret_key||'');sc('apaper',cfg.alpaca.paper!==false);}
+  else if(b==='Interactive Brokers'&&cfg.ibkr){sv('ih',cfg.ibkr.host||'');sv('ip',cfg.ibkr.port||'');sv('icid',cfg.ibkr.client_id||'');}
+  else if(b==='Tradier'&&cfg.tradier){sv('trat',cfg.tradier.access_token||'');sv('traid',cfg.tradier.account_id||'');sc('trsb',cfg.tradier.sandbox===true);}
+  else if(b==='Binance'&&cfg.binance){sv('bnk',cfg.binance.api_key||'');sv('bns',cfg.binance.api_secret||'');sc('bnt',cfg.binance.testnet!==false);}
+  else if(b==='Bybit'&&cfg.bybit){sv('bbk',cfg.bybit.api_key||'');sv('bbs',cfg.bybit.api_secret||'');sc('bbtn',cfg.bybit.testnet!==false);}
+  else if(b==='OKX'&&cfg.okx){sv('ok',cfg.okx.api_key||'');sv('os',cfg.okx.api_secret||'');sv('op',cfg.okx.api_passphrase||'');sc('od',cfg.okx.demo!==false);}
 }
+
 function updateCreds(){
   saveCurrentBrokerCreds();
-  const b = cfg.broker || 'Alpaca';
-  const c = $('creds');
-  c.innerHTML = '';
-  if(b==='Alpaca'){
-    c.innerHTML = pw('ak','API Key') + pw('ask','Secret Key') + cbHTML('apaper','Paper Trading', true);
-  } else if(b==='Interactive Brokers'){
-    c.innerHTML = tx('ih','Host','') + tx('ip','Port','') + tx('icid','Client ID','');
-  } else if(b==='Tradier'){
-    c.innerHTML = pw('trat','Access Token') + tx('traid','Account ID') + cbHTML('trsb','Sandbox', false);
-  } else if(b==='Binance'){
-    c.innerHTML = pw('bnk','API Key') + pw('bns','API Secret') + cbHTML('bnt','Testnet', true);
-  } else if(b==='Bybit'){
-    c.innerHTML = pw('bbk','API Key') + pw('bbs','API Secret') + cbHTML('bbtn','Testnet', true);
-  } else if(b==='OKX'){
-    c.innerHTML = pw('ok','API Key') + pw('os','API Secret') + pw('op','Passphrase') + cbHTML('od','Demo', true);
-  }
+  const b=cfg.broker||'Alpaca',c=$('creds');
+  c.innerHTML='';
+  if(b==='Alpaca')c.innerHTML=pw('ak','API Key')+pw('ask','Secret Key')+cbHTML('apaper','Paper Trading',true);
+  else if(b==='Interactive Brokers')c.innerHTML=tx('ih','Host','')+tx('ip','Port','')+tx('icid','Client ID','');
+  else if(b==='Tradier')c.innerHTML=pw('trat','Access Token')+tx('traid','Account ID')+cbHTML('trsb','Sandbox',false);
+  else if(b==='Binance')c.innerHTML=pw('bnk','API Key')+pw('bns','API Secret')+cbHTML('bnt','Testnet',true);
+  else if(b==='Bybit')c.innerHTML=pw('bbk','API Key')+pw('bbs','API Secret')+cbHTML('bbtn','Testnet',true);
+  else if(b==='OKX')c.innerHTML=pw('ok','API Key')+pw('os','API Secret')+pw('op','Passphrase')+cbHTML('od','Demo',true);
   populateCredsFields();
 }
+
 function updateBrokerOptions(){
-  const sel = $('broker');
-  const current = sel.value || 'Alpaca';
-  sel.innerHTML = '';
-  const addOpt = (val, label) => {
-    const o = document.createElement('option');
-    o.value = val; o.textContent = label;
-    sel.appendChild(o);
-  };
+  const sel=$('broker'),current=cfg.broker||'Alpaca';
+  sel.innerHTML='';
+  const addOpt=(v,l)=>{const o=document.createElement('option');o.value=v;o.textContent=l;sel.appendChild(o);};
   addOpt('Alpaca','Alpaca');
   if(licValid){
     addOpt('Interactive Brokers','Interactive Brokers');
@@ -2246,148 +2350,246 @@ function updateBrokerOptions(){
     addOpt('Bybit','Bybit');
     addOpt('OKX','OKX');
   }
-  sel.value = licValid ? current : 'Alpaca';
+  sel.value=licValid?current:'Alpaca';
 }
+
 function onBrokerChange(){
-  const newBroker = $('broker').value;
-  cfg.broker = newBroker;
+  cfg.broker=$('broker').value;
   updateCreds();
 }
-function toggleDefQty(){document.getElementById('defqty-box').style.display=gc('udefqty')?'block':'none';}
+
+function toggleDefQty(){$('defqty-box').style.display=gc('udefqty')?'block':'none';}
+
+/* ── Build config payload ──────────────────────────────────── */
 function buildCfg(){
   saveCurrentBrokerCreds();
-  let b = cfg.broker || 'Alpaca';
-  return {
-    broker: b,
-    tickers: gv('tickers','AAPL'),
-    timeframe: gv('tf','1m'),
-    emas: [parseInt(gv('emaf','9')), parseInt(gv('emas','50'))],
-    quantity: parseInt(gv('qty','1'))||1,
-    mode: gv('mode','signal'),
-    direction: gv('dir','both'),
-    use_default_qty: gc('udefqty'),
-    use_bracket: gc('ubracket'),
-    sl_percent: parseFloat(gv('slp','2')),
-    tp_percent: parseFloat(gv('tpp','4')),
-    use_atr_stops: gc('uatr'),
-    telegram: {token: gv('tgt'), chat_id: gv('tgc')},
-    use_rsi: gc('ursi'), use_macd: gc('umacd'), use_vwap: gc('uvwap'),
-    use_bollinger: gc('uboll'), use_adx: gc('uadx'), use_vol_confirm: gc('uvol'),
-    use_supertrend: gc('ust'), use_stochastic: gc('ustoch'),
-    license_key: gv('lickey',''),
-    alpaca: cfg.alpaca || {},
-    ibkr: cfg.ibkr || {},
-    tradier: cfg.tradier || {},
-    binance: cfg.binance || {},
-    bybit: cfg.bybit || {},
-    okx: cfg.okx || {},
+  return{
+    broker:cfg.broker||'Alpaca',tickers:gv('tickers','AAPL'),timeframe:gv('tf','1m'),
+    emas:[parseInt(gv('emaf','9')),parseInt(gv('emas','50'))],
+    quantity:parseInt(gv('qty','1'))||1,mode:gv('mode','signal'),
+    direction:gv('dir','both'),use_default_qty:gc('udefqty'),
+    use_bracket:gc('ubracket'),sl_percent:parseFloat(gv('slp','2')),
+    tp_percent:parseFloat(gv('tpp','4')),use_atr_stops:gc('uatr'),
+    telegram:{token:gv('tgt'),chat_id:gv('tgc')},
+    use_rsi:gc('ursi'),use_macd:gc('umacd'),use_vwap:gc('uvwap'),
+    use_bollinger:gc('uboll'),use_adx:gc('uadx'),use_vol_confirm:gc('uvol'),
+    use_supertrend:gc('ust'),use_stochastic:gc('ustoch'),
+    license_key:gv('lickey',''),
+    alpaca:cfg.alpaca||{},ibkr:cfg.ibkr||{},tradier:cfg.tradier||{},
+    binance:cfg.binance||{},bybit:cfg.bybit||{},okx:cfg.okx||{},
   };
 }
+
+/* ── Init UI from config ───────────────────────────────────── */
 function initUI(c){
-  if(!c) return;
-  licValid = c.license_valid || false;
+  if(!c)return;
+  licValid=c.license_valid||false;
+  cfg.alpaca =c.alpaca||{};cfg.ibkr=c.ibkr||{};cfg.tradier=c.tradier||{};
+  cfg.binance=c.binance||{};cfg.bybit=c.bybit||{};cfg.okx=c.okx||{};
+  cfg.broker=licValid?(c.broker||'Alpaca'):'Alpaca';
+
+  if(licValid){applyProUI();}else{applyFreeTierUI();}
+
+  // Common fields (always set)
+  sv('tickers',c.tickers||'AAPL');sv('tf',c.timeframe||'1m');
+  sv('emaf',c.emas?c.emas[0]:9);sv('emas',c.emas?c.emas[1]:50);
+  sc('udefqty',c.use_default_qty!==false);toggleDefQty();
+  sv('qty',c.quantity||1);
+  if(c.telegram){sv('tgt',c.telegram.token||'');sv('tgc',c.telegram.chat_id||'');}
+  sv('slp',c.sl_percent||2);sv('tpp',c.tp_percent||4);
+  sc('ursi',c.use_rsi!==false);sc('umacd',c.use_macd!==false);
+  sc('uvwap',c.use_vwap!==false);sc('uboll',c.use_bollinger!==false);
+  if(c.license_key)sv('lickey',c.license_key);
+
   if(licValid){
-    $('lbadge').textContent='PRO'; $('lbadge').className='lbadge lv';
-    $('free-notice').style.display='none';
+    // Pro: set full values from config
+    sv('broker',c.broker||'Alpaca');
+    sv('mode',c.mode||'signal');
+    sv('dir',c.direction||'both');
+    sc('ubracket',!!c.use_bracket);
+    sc('uatr',c.use_atr_stops!==false);
+    sc('uadx',c.use_adx!==false);
+    sc('uvol',c.use_vol_confirm!==false);
+    sc('ust',c.use_supertrend!==false);
+    sc('ustoch',c.use_stochastic!==false);
+    updateCreds();
   } else {
-    $('lbadge').textContent='FREE'; $('lbadge').className='lbadge li';
-    $('free-notice').style.display='block';
+    // Free: lock to Alpaca and restore creds for Alpaca only
+    sv('broker','Alpaca');cfg.broker='Alpaca';
+    updateCreds();
   }
-  updateBrokerOptions();
-  sv('broker', licValid ? (c.broker||'Alpaca') : 'Alpaca');
-  cfg.broker = licValid ? (c.broker||'Alpaca') : 'Alpaca';
-  updateCreds();
-  sv('tickers', c.tickers||'AAPL');
-  sv('tf', c.timeframe||'1m');
-  sv('emaf', c.emas?c.emas[0]:9);
-  sv('emas', c.emas?c.emas[1]:50);
-  sc('udefqty', c.use_default_qty!==false);
-  toggleDefQty();
-  sv('qty', c.quantity||1);
-  sv('mode', licValid ? (c.mode||'signal') : 'signal');
-  $('mode').disabled = !licValid;
-  sv('dir', licValid ? (c.direction||'both') : 'both');
-  $('dir').disabled = !licValid;
-  $('broker').disabled = !licValid;
-  if(c.telegram){ sv('tgt', c.telegram.token||''); sv('tgc', c.telegram.chat_id||''); }
-  sc('ubracket', c.use_bracket);
-  sv('slp', c.sl_percent||2);
-  sv('tpp', c.tp_percent||4);
-  sc('uatr', c.use_atr_stops!==false);
-  sc('ursi', c.use_rsi!==false);
-  sc('umacd', c.use_macd!==false);
-  sc('uvwap', c.use_vwap!==false);
-  sc('uboll', c.use_bollinger!==false);
-  sc('uadx', c.use_adx!==false);
-  sc('uvol', c.use_vol_confirm!==false);
-  sc('ust', c.use_supertrend!==false);
-  sc('ustoch', c.use_stochastic!==false);
-  if(c.license_key) sv('lickey', c.license_key);
-  cfg.alpaca = c.alpaca || {};
-  cfg.ibkr = c.ibkr || {};
-  cfg.tradier = c.tradier || {};
-  cfg.binance = c.binance || {};
-  cfg.bybit = c.bybit || {};
-  cfg.okx = c.okx || {};
-  updateCreds();
-  let raw = (c.tickers||'AAPL').split(',').map(s=>s.trim()).filter(s=>s);
-  if(raw.length){ setTickers(raw); loadChart(cs(raw[0])); }
+
+  let raw=(c.tickers||'AAPL').split(',').map(s=>s.trim()).filter(s=>s);
+  if(raw.length){setTickers(raw);loadChart(cs(raw[0]));}
 }
-function setTickers(list){allTickers=list;let bar=$('tkbar');bar.innerHTML='';list.forEach(raw=>{let sym=cs(raw);let btn=document.createElement('button');btn.className='tkbtn'+(sym===curSym?' active':'');btn.textContent=sym;btn.onclick=()=>{curSym=sym;updTk();if(lastChart!==sym)loadChart(sym);};bar.appendChild(btn);});}
+
+/* ── Ticker tabs + TradingView ─────────────────────────────── */
+function setTickers(list){
+  allTickers=list;let bar=$('tkbar');bar.innerHTML='';
+  list.forEach(raw=>{
+    let sym=cs(raw),btn=document.createElement('button');
+    btn.className='tkbtn'+(sym===curSym?' active':'');btn.textContent=sym;
+    btn.onclick=()=>{curSym=sym;updTk();if(lastChart!==sym)loadChart(sym);};
+    bar.appendChild(btn);
+  });
+}
 function updTk(){document.querySelectorAll('.tkbtn').forEach(b=>b.classList.toggle('active',cs(b.textContent)===curSym));}
-function loadChart(sym){let s=cs(sym);if(s===lastChart)return;lastChart=s;$('chart-c').innerHTML='';if(typeof TradingView==='undefined'){setTimeout(()=>loadChart(s),150);return;}chart=new TradingView.widget({autosize:true,symbol:s,interval:'1',timezone:'Etc/UTC',theme:'Dark',style:'1',locale:'en',toolbar_bg:'#0A0C0F',enable_publishing:false,allow_symbol_change:true,container_id:'chart-c'});curSym=s;}
-async function loadConfig(){try{let r=await fetch('/api/config');cfg=await r.json();initUI(cfg);if(cfg.license_key&&cfg.license_key.trim())validateLicense();loadHistory();}catch(e){toast('Config load failed','error');}}
-function loadHistory(){fetch('/api/status').then(r=>r.json()).then(d=>{
-  let sl=$('siglist'),se=$('sigempty'),hl=$('histlist'),he=$('hstempty');
-  sl.innerHTML='';se.style.display='none';hl.innerHTML='';he.style.display='none';
-  let hasSigs=false,hasOrds=false;
-  (d.signals||[]).forEach(s=>{hasSigs=true;let div=document.createElement('div');div.className='sitem '+(s.signal==='BUY'?'buy':'sell');div.innerHTML=`<span>${s.time} <b>${s.signal}</b> ${s.symbol} @ $${s.price}</span><span>${s.rationale||''}</span>`;sl.appendChild(div);});
-  if(!hasSigs)se.style.display='block';
-  (d.orders||[]).forEach(o=>{hasOrds=true;let div=document.createElement('div');div.className='sitem '+(o.action==='BUY'?'buy':'sell');div.innerHTML=`<span>${o.time} <b>${o.action}</b> ${o.qty} ${o.symbol} @ $${o.price}</span>`;hl.appendChild(div);});
-  if(!hasOrds)he.style.display='block';
-}).catch(()=>{});}
-async function saveConfig(){cfg=buildCfg();await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg)});toast('Config saved','success');}
-const DEF={broker:'Alpaca',tickers:'AAPL',mode:'signal',direction:'both',use_default_qty:true,quantity:1,emas:[9,50],use_bracket:false,sl_percent:2,tp_percent:4,timeframe:'1m',telegram:{},use_rsi:true,use_macd:true,use_vwap:true,use_bollinger:true,use_adx:true,use_vol_confirm:true,use_supertrend:true,use_stochastic:true,use_atr_stops:true,license_key:'',license_valid:false};
-function resetDef(){cfg=JSON.parse(JSON.stringify(DEF));initUI(cfg);saveConfig();toast('Reset to defaults','success');}
+function loadChart(sym){
+  let s=cs(sym);if(s===lastChart)return;lastChart=s;
+  $('chart-c').innerHTML='';
+  if(typeof TradingView==='undefined'){setTimeout(()=>loadChart(s),150);return;}
+  chart=new TradingView.widget({autosize:true,symbol:s,interval:'1',timezone:'Etc/UTC',theme:'Dark',style:'1',locale:'en',toolbar_bg:'#0A0C0F',enable_publishing:false,allow_symbol_change:true,container_id:'chart-c'});
+  curSym=s;
+}
+
+/* ── Config load / save ────────────────────────────────────── */
+async function loadConfig(){
+  try{let r=await fetch('/api/config');cfg=await r.json();initUI(cfg);
+    if(cfg.license_key&&cfg.license_key.trim())validateLicense(true);
+    loadHistory();
+  }catch(e){toast('Config load failed','error');}
+}
+function loadHistory(){
+  fetch('/api/status').then(r=>r.json()).then(d=>{renderSignals(d.signals);renderOrders(d.orders);}).catch(()=>{});
+}
+
+async function saveConfig(){
+  cfg=buildCfg();
+  await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg)});
+  toast('Config saved','success');
+}
+
+/* Default config object – includes empty broker credential sub-objects */
+const DEF={
+  broker:'Alpaca',tickers:'AAPL',mode:'signal',direction:'both',
+  use_default_qty:true,quantity:1,emas:[9,50],use_bracket:false,
+  sl_percent:2,tp_percent:4,timeframe:'1m',telegram:{},
+  use_rsi:true,use_macd:true,use_vwap:true,use_bollinger:true,
+  use_adx:true,use_vol_confirm:true,use_supertrend:true,use_stochastic:true,
+  use_atr_stops:true,license_key:'',license_valid:false,
+  alpaca:{api_key:'',secret_key:'',paper:true},
+  ibkr:{host:'',port:'',client_id:''},
+  tradier:{access_token:'',account_id:'',sandbox:false},
+  binance:{api_key:'',api_secret:'',testnet:true},
+  bybit:{api_key:'',api_secret:'',testnet:true},
+  okx:{api_key:'',api_secret:'',api_passphrase:'',demo:true}
+};
+
+function resetDef(){
+  let savedKey=gv('lickey').trim(),savedValid=licValid;
+  cfg=JSON.parse(JSON.stringify(DEF));
+  // Preserve license so Pro users aren't logged out
+  if(savedValid){cfg.license_valid=true;cfg.license_key=savedKey;}
+  initUI(cfg);
+  saveConfig();
+  toast('Reset to defaults','success');
+}
+
+/* ── Bot controls ──────────────────────────────────────────── */
 async function startBot(){
   let btn=$('startBtn');
-  btn.textContent='Starting...'; btn.disabled=true;
+  btn.textContent='Starting...';btn.disabled=true;
   cfg=buildCfg();
+  // Front-end safety: enforce free-tier fields before sending
+  if(!licValid){
+    cfg.broker='Alpaca';cfg.mode='signal';cfg.direction='both';
+    if(cfg.alpaca)cfg.alpaca.paper=true;
+    ['use_supertrend','use_stochastic','use_adx','use_vol_confirm','use_atr_stops','use_bracket']
+      .forEach(k=>cfg[k]=false);
+    let tickers=cfg.tickers.split(',');
+    cfg.tickers=tickers[0].trim();
+  }
   let r=await fetch('/api/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg)});
   let d=await r.json();
-  btn.textContent='\u25B6 Start Bot'; btn.disabled=false;
+  btn.textContent='\u25B6 Start Bot';btn.disabled=false;
   toast(d.message,d.status==='ok'?'success':'error');
   if(d.status!=='ok'){$('bstatus').textContent=d.message;$('bstatus').className='err';}
 }
 async function stopBot(){
-  let btn=$('stopBtn');
-  btn.textContent='Stopping...'; btn.disabled=true;
+  let btn=$('stopBtn');btn.textContent='Stopping...';btn.disabled=true;
   await fetch('/api/stop',{method:'POST'});
-  btn.textContent='\u25A0 Stop Bot'; btn.disabled=false;
+  btn.textContent='\u25A0 Stop Bot';btn.disabled=false;
   toast('Bot stopped','success');
 }
 async function killSwitch(){await fetch('/api/kill',{method:'POST'});toast('Kill switch activated','error');}
-async function refreshTickers(){let r=await fetch('/api/config'),c=await r.json();sv('tickers',c.tickers);let raw=c.tickers.split(',').map(s=>s.trim()).filter(s=>s);if(raw.length){setTickers(raw);loadChart(cs(raw[0]));}toast('Tickers refreshed','success');}
-async function validateLicense(){let key=gv('lickey').trim();if(!key){toast('Enter license key','error');return;}let r=await fetch('/api/validate_license',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({license_key:key})});let d=await r.json();if(d.valid){licValid=true;$('lbadge').textContent='PRO';$('lbadge').className='lbadge lv';$('free-notice').style.display='none';toast('Pro unlocked','success');}else{licValid=false;$('lbadge').textContent='FREE';$('lbadge').className='lbadge li';$('free-notice').style.display='block';toast(d.message,'error');}}
-async function checkUpdate(){try{let d=await(await fetch('/api/update')).json();if(d.update_available){$('upd').style.display='block';$('udl').href=d.download_url;}else toast('Up to date!','success');}catch(e){}}
+async function refreshTickers(){
+  let r=await fetch('/api/config'),c=await r.json();
+  sv('tickers',c.tickers);
+  let raw=c.tickers.split(',').map(s=>s.trim()).filter(s=>s);
+  if(raw.length){setTickers(raw);loadChart(cs(raw[0]));}
+  toast('Tickers refreshed','success');
+}
+
+/* ── License validation ────────────────────────────────────── */
+async function validateLicense(silent=false){
+  let key=gv('lickey').trim();
+  if(!key){if(!silent)toast('Enter a license key','error');return;}
+  let r=await fetch('/api/validate_license',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({license_key:key})});
+  let d=await r.json();
+  if(d.valid){
+    licValid=true;
+    applyProUI();
+    // Restore saved Pro values from cfg
+    sv('mode',cfg.mode||'signal');sv('dir',cfg.direction||'both');
+    sc('ubracket',!!cfg.use_bracket);sc('uatr',cfg.use_atr_stops!==false);
+    sc('uadx',cfg.use_adx!==false);sc('uvol',cfg.use_vol_confirm!==false);
+    sc('ust',cfg.use_supertrend!==false);sc('ustoch',cfg.use_stochastic!==false);
+    updateCreds();
+    if(!silent)toast('Pro unlocked','success');
+  }else{
+    licValid=false;
+    applyFreeTierUI();
+    if(!silent)toast(d.message,'error');
+  }
+}
+
+/* ── Update check ──────────────────────────────────────────── */
+async function checkUpdate(){
+  try{let d=await(await fetch('/api/update')).json();if(d.update_available){$('upd').style.display='block';$('udl').href=d.download_url;}else toast('Up to date!','success');}catch(e){}
+}
 setTimeout(checkUpdate,2500);
-async function pollBS(){try{let d=await(await fetch('/api/broker_status')).json();let bs=$('bstatus');if(d.message){bs.textContent=d.message;bs.className=d.message.startsWith('Connected')?'ok':'err';}}catch(e){}}
+
+/* ── Broker status polling ─────────────────────────────────── */
+async function pollBS(){
+  try{let d=await(await fetch('/api/broker_status')).json();let bs=$('bstatus');if(d.message){bs.textContent=d.message;bs.className=d.message.startsWith('Connected')?'ok':'err';}}catch(e){}
+}
 setInterval(pollBS,2500);pollBS();
-async function pollStatus(){try{let d=await(await fetch('/api/status')).json();$('v-eq').textContent='$'+fmt(d.equity);$('v-bp').textContent='$'+fmt(d.buying_power);let pct=d.equity?(d.pl/d.equity*100):0;$('v-pl').innerHTML=`<span style="color:${pct>=0?'var(--accent)':'var(--danger)'}">${pct>=0?'+':''}${pct.toFixed(2)}%</span>`;$('v-pos').textContent=d.open_positions;
-  let sl=$('siglist'),se=$('sigempty'),hl=$('histlist'),he=$('hstempty');
-  sl.innerHTML='';se.style.display='none';hl.innerHTML='';he.style.display='none';
-  let hasSigs=false,hasOrds=false;
-  (d.signals||[]).forEach(s=>{hasSigs=true;let div=document.createElement('div');div.className='sitem '+(s.signal==='BUY'?'buy':'sell');div.innerHTML=`<span>${s.time} <b>${s.signal}</b> ${s.symbol} @ $${s.price}</span><span>${s.rationale||''}</span>`;sl.appendChild(div);});
-  if(!hasSigs)se.style.display='block';
-  (d.orders||[]).forEach(o=>{hasOrds=true;let div=document.createElement('div');div.className='sitem '+(o.action==='BUY'?'buy':'sell');div.innerHTML=`<span>${o.time} <b>${o.action}</b> ${o.qty} ${o.symbol} @ $${o.price}</span>`;hl.appendChild(div);});
-  if(!hasOrds)he.style.display='block';
-  $('logbar').innerHTML=(d.log||[]).join('<br>');
-}catch(e){}}
+
+/* ── Main status polling ───────────────────────────────────── */
+function renderSignals(sigs){
+  let sl=$('siglist'),se=$('sigempty');
+  sl.innerHTML='';se.style.display='none';
+  let has=false;
+  (sigs||[]).forEach(s=>{has=true;let div=document.createElement('div');div.className='sitem '+(s.signal==='BUY'?'buy':'sell');div.innerHTML=`<span>${s.time} <b>${s.signal}</b> ${s.symbol} @ $${s.price}</span><span>${s.rationale||''}</span>`;sl.appendChild(div);});
+  if(!has)se.style.display='block';
+}
+function renderOrders(ords){
+  let hl=$('histlist'),he=$('hstempty');
+  hl.innerHTML='';he.style.display='none';
+  let has=false;
+  (ords||[]).forEach(o=>{has=true;let div=document.createElement('div');div.className='sitem '+(o.action==='BUY'?'buy':'sell');div.innerHTML=`<span>${o.time} <b>${o.action}</b> ${o.qty} ${o.symbol} @ $${o.price}</span>`;hl.appendChild(div);});
+  if(!has)he.style.display='block';
+}
+async function pollStatus(){
+  try{
+    let d=await(await fetch('/api/status')).json();
+    $('v-eq').textContent='$'+fmt(d.equity);
+    $('v-bp').textContent='$'+fmt(d.buying_power);
+    let pct=d.equity?(d.pl/d.equity*100):0;
+    $('v-pl').innerHTML=`<span style="color:${pct>=0?'var(--accent)':'var(--danger)'}">${pct>=0?'+':''}${pct.toFixed(2)}%</span>`;
+    $('v-pos').textContent=d.open_positions;
+    renderSignals(d.signals);
+    renderOrders(d.orders);
+    $('logbar').innerHTML=(d.log||[]).join('<br>');
+  }catch(e){}
+}
 setInterval(pollStatus,1500);
+
+/* ── Backtest ──────────────────────────────────────────────── */
 async function runBT(){
   let days=parseInt($('btDays').value)||5;
   toast('Running backtest ('+days+' days)...','info');
-  $('btres').innerHTML='<p class="ph">Loading backtest...</p>';
+  $('btres').innerHTML='<p class="ph">Loading...</p>';
   document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
   document.querySelectorAll('.tbtn').forEach(x=>x.classList.remove('active'));
   $('tab-backtest').classList.add('active');
@@ -2403,27 +2605,113 @@ async function runBT(){
       if(info.error){html+=`<p style="color:var(--danger)">Error: ${info.error}</p>`;continue;}
       let sigs=info.signals||[];total+=sigs.length;
       if(!sigs.length){html+='<p style="color:var(--muted)">No signals found.</p>';continue;}
-      html+=`<table class="bttbl"><tr><th>Time</th><th>Sig</th><th>Price</th><th>RSI</th><th>MACD</th><th>MACDsig</th><th>VWAP</th><th>BB L/U</th><th>ADX</th><th>VolR</th><th>Trend</th><th>%K/%D</th><th>Confidence</th></tr>`;
-      sigs.forEach(s=>{let i=s.indicators;html+=`<tr><td>${s.time.slice(11,19)||s.time.slice(0,19)}</td><td class="${s.signal==='BUY'?'buy':'sell'}">${s.signal}</td><td>$${s.price}</td><td>${i.RSI}</td><td>${i.MACD}</td><td>${i.MACD_signal}</td><td>$${i.VWAP}</td><td>${i.BB_lower}/${i.BB_upper}</td><td>${i.ADX}</td><td>${i.Vol_ratio}×</td><td>${i.Supertrend_trend===1?'Bull':'Bear'}</td><td>${i.Stoch_K}/${i.Stoch_D}</td><td>${(s.confidence*100).toFixed(0)}%</td></tr>`;});
+      html+=`<table class="bttbl"><tr><th>Time</th><th>Sig</th><th>Price</th><th>RSI</th><th>MACD</th><th>MACDsig</th><th>VWAP</th><th>BB L/U</th><th>ADX</th><th>VolR</th><th>Trend</th><th>%K/%D</th><th>Conf</th></tr>`;
+      sigs.forEach(s=>{let i=s.indicators;html+=`<tr><td>${s.time.slice(11,19)||s.time.slice(0,19)}</td><td class="${s.signal==='BUY'?'buy':'sell'}">${s.signal}</td><td>$${s.price}</td><td>${i.RSI}</td><td>${i.MACD}</td><td>${i.MACD_signal}</td><td>$${i.VWAP}</td><td>${i.BB_lower}/${i.BB_upper}</td><td>${i.ADX}</td><td>${i.Vol_ratio}x</td><td>${i.Supertrend_trend===1?'Bull':'Bear'}</td><td>${i.Stoch_K}/${i.Stoch_D}</td><td>${(s.confidence*100).toFixed(0)}%</td></tr>`;});
       html+='</table>';
     }
-    if(total===0)html='<p class="ph">No signals generated. Try toggling indicators or extending backtest period.</p>';
+    if(total===0)html='<p class="ph">No signals generated. Try toggling indicators or extending the backtest period.</p>';
     $('btres').innerHTML=html;
-  }catch(e){toast('Backtest failed: '+e,'error');}}
-updateBrokerOptions();updateCreds();loadConfig();
+  }catch(e){toast('Backtest failed: '+e,'error');}
+}
+
+/* ── AI Chat ───────────────────────────────────────────────── */
+function initAIChat(){
+  if(chatInited)return;
+  chatInited=true;
+  addChatMsg("Hello! I'm TraderBot, your AI trading assistant. Ask me about indicators, strategies, risk management, or how to use TraderMoney.",false);
+  updateChatLimitInfo();
+}
+
+function updateChatLimitInfo(){
+  let el=$('chat-limit');
+  if(!el)return;
+  if(licValid){el.textContent='Pro – unlimited messages';}
+  else{el.textContent=`Free: up to ${5} messages/day`;}
+}
+
+function addChatMsg(text,isUser){
+  let msgs=$('chat-messages');
+  let wrap=document.createElement('div');
+  wrap.className='cmsg '+(isUser?'user':'bot');
+  let sender=document.createElement('div');
+  sender.className='msender';
+  sender.textContent=isUser?'You':'TraderBot';
+  let body=document.createElement('div');
+  body.className='mbody';
+  body.textContent=text;
+  wrap.appendChild(sender);
+  wrap.appendChild(body);
+  msgs.appendChild(wrap);
+  msgs.scrollTop=msgs.scrollHeight;
+  return wrap;
+}
+
+async function sendChat(){
+  let inputEl=$('chat-input');
+  let msg=inputEl.value.trim();
+  if(!msg)return;
+  inputEl.value='';
+  addChatMsg(msg,true);
+
+  // Typing indicator
+  let typing=document.createElement('div');
+  typing.className='chat-typing';
+  typing.textContent='TraderBot is thinking...';
+  $('chat-messages').appendChild(typing);
+  $('chat-messages').scrollTop=$('chat-messages').scrollHeight;
+
+  let sendBtn=$('chat-send');
+  sendBtn.disabled=true;
+
+  try{
+    let r=await fetch('/api/chat',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({message:msg})
+    });
+    let d=await r.json();
+    typing.remove();
+    addChatMsg(d.reply||'No response received.', false);
+  }catch(e){
+    typing.remove();
+    addChatMsg('Connection error. Please try again.',false);
+  }
+
+  sendBtn.disabled=false;
+  $('chat-messages').scrollTop=$('chat-messages').scrollHeight;
+}
+
+// Enter to send, Shift+Enter for newline
+(function(){
+  let interval=setInterval(()=>{
+    let el=$('chat-input');
+    if(!el)return;
+    clearInterval(interval);
+    el.addEventListener('keydown',function(e){
+      if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendChat();}
+    });
+  },300);
+})();
+
+/* ── Boot ──────────────────────────────────────────────────── */
+updateBrokerOptions();
+updateCreds();
+loadConfig();
 </script>
 </body>
 </html>
 """
 
 
+# ── Entry point ───────────────────────────────────────────────────────────────
 def run_flask():
     app.run(host="0.0.0.0", port=5050, debug=False, use_reloader=False)
 
 
 if __name__ == "__main__":
     acquire_lock()
-    # Daily license check
+
+    # Daily license re-check (runs in background)
     def daily_license_check():
         while True:
             time.sleep(86400)
@@ -2438,5 +2726,11 @@ if __name__ == "__main__":
     flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()
     time.sleep(1.2)
-    window = webview.create_window("TraderMoney", "http://127.0.0.1:5050", width=1360, height=840, min_size=(940, 660))
+
+    window = webview.create_window(
+        "TraderMoney",
+        "http://127.0.0.1:5050",
+        width=1400, height=860,
+        min_size=(960, 680),
+    )
     webview.start()
