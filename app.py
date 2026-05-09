@@ -1,5 +1,6 @@
 """
-TraderMoney v1.0.54 – UI paywall locks, uniform input styling, backtest scroll fix.
+TraderMoney v1.0.55 – Full paywall, broker isolation, no purple, unified inputs,
+persistent credentials per broker, empty defaults, hidden brokers on free tier.
 """
 
 import asyncio
@@ -23,7 +24,7 @@ import webview
 from flask import Flask, jsonify, request, send_file
 from flask_cors import CORS
 
-APP_VERSION = "1.0.54"
+APP_VERSION = "1.0.55"
 
 # ── Gumroad ─────────────────────────────────────────────────
 GUMMROAD_PRODUCT_ID = "73otoT7rzJukCy-Lt4hhkQ=="
@@ -254,6 +255,12 @@ class AppState:
             "license_key": "",
             "license_valid": False,
             "last_broker_message": "",
+            "alpaca": {"api_key": "", "secret_key": "", "paper": True},
+            "ibkr": {"host": "", "port": "", "client_id": ""},
+            "tradier": {"access_token": "", "account_id": "", "sandbox": False},
+            "binance": {"api_key": "", "api_secret": "", "testnet": True},
+            "bybit": {"api_key": "", "api_secret": "", "testnet": True},
+            "okx": {"api_key": "", "api_secret": "", "api_passphrase": "", "demo": True},
         }
         self.ui_queue: queue.Queue = queue.Queue()
         self.engine: Optional["TradingEngine"] = None
@@ -518,8 +525,8 @@ class IBKRBroker(BaseBroker):
     def connect(self) -> bool:
         creds = self.config.get("ibkr", {})
         host = creds.get("host", "").strip()
-        port_str = creds.get("port", "7497")
-        cid_str = creds.get("client_id", "1")
+        port_str = creds.get("port", "").strip()
+        cid_str = creds.get("client_id", "").strip()
         if not host:
             self._emit_error("IBKR Host is missing.")
             return False
@@ -1911,18 +1918,17 @@ def api_backtest():
         return jsonify({"error": str(e)})
 
 
-# ── FRONTEND HTML (v53: unified inputs, UI paywall locks, backtest scroll fix) ──
+# ── FRONTEND HTML (v55 – complete) ─────────────────────────
 FRONTEND_HTML = r"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <title>TraderMoney</title>
 <style>
-:root{--bg:#050505;--card:#1A1A1A;--text:#e2e2e2;--accent:#D4AF37;--accent2:#6A0DAD;--danger:#B22222;--border:#2A2E38;--muted:#7a7d86;--sw:268px;--radius:12px;}
+:root{--bg:#050505;--card:#1A1A1A;--text:#e2e2e2;--accent:#D4AF37;--danger:#B22222;--border:#2A2E38;--muted:#7a7d86;--sw:268px;--radius:12px;}
 ::-webkit-scrollbar{width:4px;}::-webkit-scrollbar-track{background:#080808;}::-webkit-scrollbar-thumb{background:#111;}
 *{box-sizing:border-box;}
 body{margin:0;font-family:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',sans-serif;background:var(--bg);color:var(--text);display:flex;height:100vh;overflow:hidden;color-scheme:dark;}
-/* curvy modern touches */
 #sb{width:var(--sw);background:#0c0c0c;border-right:1px solid var(--border);display:flex;flex-direction:column;overflow-y:auto;overflow-x:hidden;padding:18px 14px;flex-shrink:0;border-radius:0 var(--radius) 0 0;}
 #sb h2{color:var(--accent);margin:0 0 10px;font-size:1.2rem;letter-spacing:.3px;}
 .lbadge{display:inline-block;padding:2px 10px;border-radius:20px;font-size:.67rem;margin-left:5px;vertical-align:middle;}
@@ -1940,7 +1946,6 @@ select{
 }
 select:focus{border-color:var(--accent);outline:none;}
 select:disabled{opacity:0.6;cursor:not-allowed;}
-/* unified inputs */
 input[type="text"],input[type="password"],input[type="number"],textarea{
     background:#1A1A1A;color:var(--text);border:1px solid #333;padding:7px 10px;border-radius:10px;width:100%;font-size:.85rem;transition:border .2s;
 }
@@ -1948,15 +1953,11 @@ input:focus,textarea:focus{border-color:var(--accent);outline:none;}
 input:-webkit-autofill,input:-webkit-autofill:hover,input:-webkit-autofill:focus,textarea:-webkit-autofill,textarea:-webkit-autofill:hover,textarea:-webkit-autofill:focus{
     -webkit-text-fill-color:var(--text);-webkit-box-shadow:0 0 0 30px #1A1A1A inset;box-shadow:0 0 0 30px #1A1A1A inset;
 }
-/* backtest days input in sidebar – same style */
-.bt-days-input{
-    width:70px;display:inline-block;margin-left:6px;border-radius:10px;
-}
+.bt-days-input{width:70px;display:inline-block;margin-left:6px;border-radius:10px;}
 button{cursor:pointer;background:var(--accent);color:#050505;border:none;padding:9px 12px;border-radius:10px;width:100%;font-weight:600;margin-top:10px;font-size:.85rem;transition:all .2s;}
 button:hover{opacity:.9;transform:translateY(-1px);}
 button.ghost{background:var(--card);border:1px solid var(--border);color:var(--text);}
 button.danger{background:var(--danger);color:#fff;}
-button.purple{background:var(--accent2);color:#fff;}
 hr{border-color:var(--border);margin:12px 0;}
 .r2{display:flex;gap:5px;} .r2 input{width:100%;}
 #bstatus{font-size:.72rem;margin-top:3px;min-height:15px;word-break:break-word;padding:2px 0;}
@@ -1965,7 +1966,7 @@ hr{border-color:var(--border);margin:12px 0;}
 .tab-bar{display:flex;background:var(--card);border-bottom:1px solid var(--border);border-radius:0 var(--radius) 0 0;overflow:hidden;}
 .tbtn{flex:1;background:transparent;border:none;color:var(--text);padding:14px 6px;cursor:pointer;font-weight:500;border-bottom:2px solid transparent;transition:.2s;min-width:70px;font-size:.84rem;}
 .tbtn:hover{background:rgba(255,255,255,.03);}
-.tbtn.active{border-bottom-color:var(--accent2);color:var(--accent);font-weight:700;}
+.tbtn.active{border-bottom-color:var(--accent);color:var(--accent);font-weight:700;}
 .tab{flex:1;display:none;overflow:hidden;flex-direction:column;border-radius:0 0 var(--radius) var(--radius);}
 .tab.active{display:flex;}
 #metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;padding:10px;background:var(--card);border-bottom:1px solid var(--border);}
@@ -1973,22 +1974,19 @@ hr{border-color:var(--border);margin:12px 0;}
 #sess{display:flex;align-items:center;gap:14px;padding:8px 12px;background:var(--card);border-bottom:1px solid var(--border);font-size:.8rem;flex-wrap:wrap;border-radius:0 0 var(--radius) var(--radius);}
 .sd{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:4px;}
 .so{background:#00c9b1;}.sc{background:var(--danger);}
-/* compact ticker tabs */
 #tkbar{display:flex;flex-wrap:nowrap;overflow-x:auto;background:var(--card);border-bottom:1px solid var(--border);}
 .tkbtn{padding:7px 12px;background:transparent;border:none;color:var(--text);cursor:pointer;white-space:nowrap;border-bottom:2px solid transparent;transition:.2s;font-size:.82rem;flex-shrink:0;max-width:140px;overflow:hidden;text-overflow:ellipsis;}
-.tkbtn.active{border-bottom-color:var(--accent2);color:var(--accent);font-weight:700;}
+.tkbtn.active{border-bottom-color:var(--accent);color:var(--accent);font-weight:700;}
 #chart-c{flex:1;min-height:0;}
 .sitem{display:flex;justify-content:space-between;padding:9px 12px;border-bottom:1px solid var(--border);font-size:.82rem;}
 .buy{color:var(--accent);}.sell{color:var(--danger);}
 .empty-placeholder{color:var(--muted);text-align:center;padding:30px;font-size:.9rem;}
-/* larger toasts */
 #toasts{position:fixed;top:16px;right:16px;z-index:9999;display:flex;flex-direction:column;gap:6px;}
 .toast{padding:14px 22px;border-radius:14px;font-weight:500;box-shadow:0 4px 18px rgba(0,0,0,.5);animation:si .25s ease;max-width:420px;font-size:1rem;border:1px solid #333;}
-.toast.success{background:var(--accent);color:#000;}.toast.error{background:var(--danger);color:#fff;}.toast.info{background:var(--accent2);color:#fff;}
+.toast.success{background:var(--accent);color:#000;}.toast.error{background:var(--danger);color:#fff;}.toast.info{background:var(--accent);color:#000;}
 @keyframes si{from{transform:translateX(110%);opacity:0}to{transform:translateX(0);opacity:1}}
 #upd{display:none;position:fixed;bottom:16px;right:16px;z-index:9999;background:var(--accent);color:#000;padding:12px 18px;border-radius:10px;font-weight:bold;font-size:.88rem;}
 #upd a{color:#000;text-decoration:underline;}
-/* backtest scrollable */
 .btp{flex:1;display:flex;flex-direction:column;}
 .btr{flex:1;overflow-y:auto;overflow-x:auto;padding:10px;}
 .ph{color:var(--muted);text-align:center;padding:36px 18px;font-size:.9rem;}
@@ -1996,17 +1994,14 @@ hr{border-color:var(--border);margin:12px 0;}
 .bttbl th,.bttbl td{padding:5px 7px;border:1px solid var(--border);text-align:center;}
 .bttbl th{color:var(--accent);}
 #logbar{height:100px;overflow-y:auto;background:var(--bg);padding:8px 12px;font-size:.74rem;border-top:1px solid var(--border);color:var(--muted);flex-shrink:0;}
-/* help */
 .hb{padding:20px;overflow-y:auto;height:100%;}
-.hb h3{color:var(--accent2);margin-top:0;}.hb h4{color:var(--text);margin:14px 0 5px;}
+.hb h3{color:var(--accent);margin-top:0;}.hb h4{color:var(--text);margin:14px 0 5px;}
 .hb p,.hb ul{font-size:.85rem;line-height:1.65;}.hb ul{padding-left:18px;}.hb li{margin-bottom:4px;}
 .hb a{color:var(--accent);}
 .istat{background:var(--card);border-radius:var(--radius);padding:14px;margin:8px 0;}
-/* free tier notice */
 .free-notice{background:var(--danger);color:#fff;padding:10px 12px;border-radius:10px;font-size:.8rem;margin-top:10px;display:none;}
 </style>
 <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
-<!-- Gumroad overlay -->
 <script src="https://gumroad.com/js/gumroad.js"></script>
 </head>
 <body>
@@ -2019,7 +2014,7 @@ hr{border-color:var(--border);margin:12px 0;}
   <p style="font-size:.67rem;color:var(--muted);margin:3px 0 0;"><a href="https://shafayrich.gumroad.com/l/ykaoov" style="color:var(--accent);">Buy license ↗</a></p>
   <div id="free-notice" class="free-notice">Free tier: Alpaca paper only, Signal-Only, 1 ticker, core indicators.</div>
   <hr>
-  <label>Broker</label><select id="broker" onchange="updateCreds()"><option>Alpaca</option><option>Interactive Brokers</option><option>Tradier</option><option>Binance</option><option>Bybit</option><option>OKX</option></select>
+  <label>Broker</label><select id="broker" onchange="onBrokerChange()"></select>
   <div id="bstatus" class="ok"></div><div id="creds"></div>
   <label>Telegram Token</label><input type="password" id="tgt"><label>Telegram Chat ID</label><input id="tgc">
   <label>Tickers (e.g. AAPL:5)</label><input id="tickers" value="AAPL">
@@ -2048,7 +2043,7 @@ hr{border-color:var(--border);margin:12px 0;}
   <button class="danger" onclick="killSwitch()">&#9650; Kill Switch</button>
   <button class="ghost" style="margin-top:5px" onclick="resetDef()">&#8634; Reset</button>
   <button class="ghost" style="margin-top:16px" onclick="checkUpdate()">Check Updates</button>
-  <button class="purple" style="margin-top:7px" onclick="runBT()">&#9874; Backtest All</button>
+  <button class="ghost" style="margin-top:7px" onclick="runBT()">&#9874; Backtest All</button>
   <div style="margin-top:9px;font-size:.75rem;color:var(--muted);">
     <span>Backtest days:</span>
     <input type="number" id="btDays" value="5" min="1" max="365" class="bt-days-input">
@@ -2062,7 +2057,6 @@ hr{border-color:var(--border);margin:12px 0;}
     <button class="tbtn" data-tab="backtest">Backtest</button>
     <button class="tbtn" data-tab="help">Help</button>
   </div>
-  <!-- … [rest of tabs exactly as in v1.0.52] … -->
   <div id="tab-charts" class="tab active">
     <div id="tkbar"></div>
     <div id="metrics">
@@ -2092,7 +2086,7 @@ hr{border-color:var(--border);margin:12px 0;}
   </div>
   <div id="tab-backtest" class="tab">
     <div class="btp">
-      <div style="padding:10px"><button class="purple" style="width:auto;padding:9px 20px" onclick="runBT()">&#9874; Run Backtest on All Tickers</button></div>
+      <div style="padding:10px"><button class="ghost" style="width:auto;padding:9px 20px" onclick="runBT()">&#9874; Run Backtest on All Tickers</button></div>
       <div id="btres" class="btr"><p class="ph">Click <b>Backtest All</b> to run.<br>Results appear here.</p></div>
     </div>
   </div>
@@ -2150,32 +2144,194 @@ setInterval(updSess,30000);updSess();
 function pw(id,l){return`<label>${l}</label><input type="password" id="${id}">`;}
 function tx(id,l,v=''){return`<label>${l}</label><input id="${id}" value="${v}">`;}
 function cbHTML(id,l,chk=false){return`<label><span class="cb"><input type="checkbox" id="${id}" ${chk?'checked':''}><span class="cm"></span></span> ${l}</label>`;}
-function updateCreds(){let b=$('broker').value,c=$('creds');if(b==='Alpaca')c.innerHTML=pw('ak','API Key')+pw('ask','Secret Key')+cbHTML('apaper','Paper Trading',true);else if(b==='Interactive Brokers')c.innerHTML=tx('ih','Host','127.0.0.1')+tx('ip','Port','7497')+tx('icid','Client ID','1');else if(b==='Tradier')c.innerHTML=pw('trat','Access Token')+tx('traid','Account ID')+cbHTML('trsb','Sandbox',false);else if(b==='Binance')c.innerHTML=pw('bnk','API Key')+pw('bns','API Secret')+cbHTML('bnt','Testnet',true);else if(b==='Bybit')c.innerHTML=pw('bbk','API Key')+pw('bbs','API Secret')+cbHTML('bbtn','Testnet',true);else if(b==='OKX')c.innerHTML=pw('ok','API Key')+pw('os','API Secret')+pw('op','Passphrase')+cbHTML('od','Demo',true);}
+// Save current broker's creds into cfg
+function saveCurrentBrokerCreds(){
+  const b = cfg.broker || 'Alpaca';
+  if(b==='Alpaca'){
+    cfg.alpaca = cfg.alpaca || {};
+    cfg.alpaca.api_key = gv('ak','');
+    cfg.alpaca.secret_key = gv('ask','');
+    cfg.alpaca.paper = gc('apaper');
+  } else if(b==='Interactive Brokers'){
+    cfg.ibkr = cfg.ibkr || {};
+    cfg.ibkr.host = gv('ih','');
+    cfg.ibkr.port = gv('ip','');
+    cfg.ibkr.client_id = gv('icid','');
+  } else if(b==='Tradier'){
+    cfg.tradier = cfg.tradier || {};
+    cfg.tradier.access_token = gv('trat','');
+    cfg.tradier.account_id = gv('traid','');
+    cfg.tradier.sandbox = gc('trsb');
+  } else if(b==='Binance'){
+    cfg.binance = cfg.binance || {};
+    cfg.binance.api_key = gv('bnk','');
+    cfg.binance.api_secret = gv('bns','');
+    cfg.binance.testnet = gc('bnt');
+  } else if(b==='Bybit'){
+    cfg.bybit = cfg.bybit || {};
+    cfg.bybit.api_key = gv('bbk','');
+    cfg.bybit.api_secret = gv('bbs','');
+    cfg.bybit.testnet = gc('bbtn');
+  } else if(b==='OKX'){
+    cfg.okx = cfg.okx || {};
+    cfg.okx.api_key = gv('ok','');
+    cfg.okx.api_secret = gv('os','');
+    cfg.okx.api_passphrase = gv('op','');
+    cfg.okx.demo = gc('od');
+  }
+}
+function populateCredsFields(){
+  const b = cfg.broker || 'Alpaca';
+  if(b==='Alpaca' && cfg.alpaca){
+    sv('ak', cfg.alpaca.api_key || '');
+    sv('ask', cfg.alpaca.secret_key || '');
+    sc('apaper', cfg.alpaca.paper !== false);
+  } else if(b==='Interactive Brokers' && cfg.ibkr){
+    sv('ih', cfg.ibkr.host || '');
+    sv('ip', cfg.ibkr.port || '');
+    sv('icid', cfg.ibkr.client_id || '');
+  } else if(b==='Tradier' && cfg.tradier){
+    sv('trat', cfg.tradier.access_token || '');
+    sv('traid', cfg.tradier.account_id || '');
+    sc('trsb', cfg.tradier.sandbox === true);
+  } else if(b==='Binance' && cfg.binance){
+    sv('bnk', cfg.binance.api_key || '');
+    sv('bns', cfg.binance.api_secret || '');
+    sc('bnt', cfg.binance.testnet !== false);
+  } else if(b==='Bybit' && cfg.bybit){
+    sv('bbk', cfg.bybit.api_key || '');
+    sv('bbs', cfg.bybit.api_secret || '');
+    sc('bbtn', cfg.bybit.testnet !== false);
+  } else if(b==='OKX' && cfg.okx){
+    sv('ok', cfg.okx.api_key || '');
+    sv('os', cfg.okx.api_secret || '');
+    sv('op', cfg.okx.api_passphrase || '');
+    sc('od', cfg.okx.demo !== false);
+  }
+}
+function updateCreds(){
+  saveCurrentBrokerCreds();
+  const b = cfg.broker || 'Alpaca';
+  const c = $('creds');
+  c.innerHTML = '';
+  if(b==='Alpaca'){
+    c.innerHTML = pw('ak','API Key') + pw('ask','Secret Key') + cbHTML('apaper','Paper Trading', true);
+  } else if(b==='Interactive Brokers'){
+    c.innerHTML = tx('ih','Host','') + tx('ip','Port','') + tx('icid','Client ID','');
+  } else if(b==='Tradier'){
+    c.innerHTML = pw('trat','Access Token') + tx('traid','Account ID') + cbHTML('trsb','Sandbox', false);
+  } else if(b==='Binance'){
+    c.innerHTML = pw('bnk','API Key') + pw('bns','API Secret') + cbHTML('bnt','Testnet', true);
+  } else if(b==='Bybit'){
+    c.innerHTML = pw('bbk','API Key') + pw('bbs','API Secret') + cbHTML('bbtn','Testnet', true);
+  } else if(b==='OKX'){
+    c.innerHTML = pw('ok','API Key') + pw('os','API Secret') + pw('op','Passphrase') + cbHTML('od','Demo', true);
+  }
+  populateCredsFields();
+}
+function updateBrokerOptions(){
+  const sel = $('broker');
+  const current = sel.value || 'Alpaca';
+  sel.innerHTML = '';
+  const addOpt = (val, label) => {
+    const o = document.createElement('option');
+    o.value = val; o.textContent = label;
+    sel.appendChild(o);
+  };
+  addOpt('Alpaca','Alpaca');
+  if(licValid){
+    addOpt('Interactive Brokers','Interactive Brokers');
+    addOpt('Tradier','Tradier');
+    addOpt('Binance','Binance');
+    addOpt('Bybit','Bybit');
+    addOpt('OKX','OKX');
+  }
+  sel.value = licValid ? current : 'Alpaca';
+}
+function onBrokerChange(){
+  const newBroker = $('broker').value;
+  cfg.broker = newBroker;
+  updateCreds();
+}
 function toggleDefQty(){document.getElementById('defqty-box').style.display=gc('udefqty')?'block':'none';}
-function buildCfg(){let b=$('broker').value;return{broker:b,tickers:gv('tickers','AAPL'),timeframe:gv('tf','1m'),emas:[parseInt(gv('emaf','9')),parseInt(gv('emas','50'))],quantity:parseInt(gv('qty','1'))||1,mode:gv('mode','signal'),direction:gv('dir','both'),use_default_qty:gc('udefqty'),use_bracket:gc('ubracket'),sl_percent:parseFloat(gv('slp','2')),tp_percent:parseFloat(gv('tpp','4')),use_atr_stops:gc('uatr'),telegram:{token:gv('tgt'),chat_id:gv('tgc')},use_rsi:gc('ursi'),use_macd:gc('umacd'),use_vwap:gc('uvwap'),use_bollinger:gc('uboll'),use_adx:gc('uadx'),use_vol_confirm:gc('uvol'),use_supertrend:gc('ust'),use_stochastic:gc('ustoch'),license_key:gv('lickey',''),alpaca:b==='Alpaca'?{api_key:gv('ak'),secret_key:gv('ask'),paper:gc('apaper')}:{},ibkr:b==='Interactive Brokers'?{host:gv('ih','127.0.0.1'),port:gv('ip','7497'),client_id:gv('icid','1')}:{},tradier:b==='Tradier'?{access_token:gv('trat'),account_id:gv('traid'),sandbox:gc('trsb')}:{},binance:b==='Binance'?{api_key:gv('bnk'),api_secret:gv('bns'),testnet:gc('bnt')}:{},bybit:b==='Bybit'?{api_key:gv('bbk'),api_secret:gv('bbs'),testnet:gc('bbtn')}:{},okx:b==='OKX'?{api_key:gv('ok'),api_secret:gv('os'),api_passphrase:gv('op'),demo:gc('od')}:{}};}
-function initUI(c){if(!c)return;licValid=c.license_valid||false;sv('broker',c.broker||'Alpaca');updateCreds();sv('tickers',c.tickers||'AAPL');sv('tf',c.timeframe||'1m');sv('emaf',c.emas?c.emas[0]:9);sv('emas',c.emas?c.emas[1]:50);sc('udefqty',c.use_default_qty!==false);toggleDefQty();sv('qty',c.quantity||1);sv('mode',c.mode||'signal');sv('dir',c.direction||'both');if(c.telegram){sv('tgt',c.telegram.token||'');sv('tgc',c.telegram.chat_id||'');}sc('ubracket',c.use_bracket);sv('slp',c.sl_percent||2);sv('tpp',c.tp_percent||4);sc('uatr',c.use_atr_stops!==false);sc('ursi',c.use_rsi!==false);sc('umacd',c.use_macd!==false);sc('uvwap',c.use_vwap!==false);sc('uboll',c.use_bollinger!==false);sc('uadx',c.use_adx!==false);sc('uvol',c.use_vol_confirm!==false);sc('ust',c.use_supertrend!==false);sc('ustoch',c.use_stochastic!==false);if(c.license_key)sv('lickey',c.license_key);
-  // enforce UI locks based on license
+function buildCfg(){
+  saveCurrentBrokerCreds();
+  let b = cfg.broker || 'Alpaca';
+  return {
+    broker: b,
+    tickers: gv('tickers','AAPL'),
+    timeframe: gv('tf','1m'),
+    emas: [parseInt(gv('emaf','9')), parseInt(gv('emas','50'))],
+    quantity: parseInt(gv('qty','1'))||1,
+    mode: gv('mode','signal'),
+    direction: gv('dir','both'),
+    use_default_qty: gc('udefqty'),
+    use_bracket: gc('ubracket'),
+    sl_percent: parseFloat(gv('slp','2')),
+    tp_percent: parseFloat(gv('tpp','4')),
+    use_atr_stops: gc('uatr'),
+    telegram: {token: gv('tgt'), chat_id: gv('tgc')},
+    use_rsi: gc('ursi'), use_macd: gc('umacd'), use_vwap: gc('uvwap'),
+    use_bollinger: gc('uboll'), use_adx: gc('uadx'), use_vol_confirm: gc('uvol'),
+    use_supertrend: gc('ust'), use_stochastic: gc('ustoch'),
+    license_key: gv('lickey',''),
+    alpaca: cfg.alpaca || {},
+    ibkr: cfg.ibkr || {},
+    tradier: cfg.tradier || {},
+    binance: cfg.binance || {},
+    bybit: cfg.bybit || {},
+    okx: cfg.okx || {},
+  };
+}
+function initUI(c){
+  if(!c) return;
+  licValid = c.license_valid || false;
   if(licValid){
     $('lbadge').textContent='PRO'; $('lbadge').className='lbadge lv';
     $('free-notice').style.display='none';
-    $('broker').disabled = false;
-    $('mode').disabled = false;
-    $('dir').disabled = false;
   } else {
     $('lbadge').textContent='FREE'; $('lbadge').className='lbadge li';
     $('free-notice').style.display='block';
-    $('broker').value='Alpaca'; $('broker').disabled = true;
-    $('mode').value='signal'; $('mode').disabled = true;
-    $('dir').value='both'; $('dir').disabled = true;
-    updateCreds();
   }
-  if(c.broker==='Alpaca'&&c.alpaca){sv('ak',c.alpaca.api_key||'');sv('ask',c.alpaca.secret_key||'');sc('apaper',c.alpaca.paper!==false);}
-  if(c.broker==='Interactive Brokers'&&c.ibkr){sv('ih',c.ibkr.host||'127.0.0.1');sv('ip',c.ibkr.port||'7497');sv('icid',c.ibkr.client_id||'1');}
-  if(c.broker==='Tradier'&&c.tradier){sv('trat',c.tradier.access_token||'');sv('traid',c.tradier.account_id||'');sc('trsb',c.tradier.sandbox||false);}
-  if(c.broker==='Binance'&&c.binance){sv('bnk',c.binance.api_key||'');sv('bns',c.binance.api_secret||'');sc('bnt',c.binance.testnet!==false);}
-  if(c.broker==='Bybit'&&c.bybit){sv('bbk',c.bybit.api_key||'');sv('bbs',c.bybit.api_secret||'');sc('bbtn',c.bybit.testnet!==false);}
-  if(c.broker==='OKX'&&c.okx){sv('ok',c.okx.api_key||'');sv('os',c.okx.api_secret||'');sv('op',c.okx.api_passphrase||'');sc('od',c.okx.demo!==false);}
-  let raw=c.tickers.split(',').map(s=>s.trim()).filter(s=>s);if(raw.length){setTickers(raw);loadChart(cs(raw[0]));}
+  updateBrokerOptions();
+  sv('broker', licValid ? (c.broker||'Alpaca') : 'Alpaca');
+  cfg.broker = licValid ? (c.broker||'Alpaca') : 'Alpaca';
+  updateCreds();
+  sv('tickers', c.tickers||'AAPL');
+  sv('tf', c.timeframe||'1m');
+  sv('emaf', c.emas?c.emas[0]:9);
+  sv('emas', c.emas?c.emas[1]:50);
+  sc('udefqty', c.use_default_qty!==false);
+  toggleDefQty();
+  sv('qty', c.quantity||1);
+  sv('mode', licValid ? (c.mode||'signal') : 'signal');
+  $('mode').disabled = !licValid;
+  sv('dir', licValid ? (c.direction||'both') : 'both');
+  $('dir').disabled = !licValid;
+  $('broker').disabled = !licValid;
+  if(c.telegram){ sv('tgt', c.telegram.token||''); sv('tgc', c.telegram.chat_id||''); }
+  sc('ubracket', c.use_bracket);
+  sv('slp', c.sl_percent||2);
+  sv('tpp', c.tp_percent||4);
+  sc('uatr', c.use_atr_stops!==false);
+  sc('ursi', c.use_rsi!==false);
+  sc('umacd', c.use_macd!==false);
+  sc('uvwap', c.use_vwap!==false);
+  sc('uboll', c.use_bollinger!==false);
+  sc('uadx', c.use_adx!==false);
+  sc('uvol', c.use_vol_confirm!==false);
+  sc('ust', c.use_supertrend!==false);
+  sc('ustoch', c.use_stochastic!==false);
+  if(c.license_key) sv('lickey', c.license_key);
+  cfg.alpaca = c.alpaca || {};
+  cfg.ibkr = c.ibkr || {};
+  cfg.tradier = c.tradier || {};
+  cfg.binance = c.binance || {};
+  cfg.bybit = c.bybit || {};
+  cfg.okx = c.okx || {};
+  updateCreds();
+  let raw = (c.tickers||'AAPL').split(',').map(s=>s.trim()).filter(s=>s);
+  if(raw.length){ setTickers(raw); loadChart(cs(raw[0])); }
 }
 function setTickers(list){allTickers=list;let bar=$('tkbar');bar.innerHTML='';list.forEach(raw=>{let sym=cs(raw);let btn=document.createElement('button');btn.className='tkbtn'+(sym===curSym?' active':'');btn.textContent=sym;btn.onclick=()=>{curSym=sym;updTk();if(lastChart!==sym)loadChart(sym);};bar.appendChild(btn);});}
 function updTk(){document.querySelectorAll('.tkbtn').forEach(b=>b.classList.toggle('active',cs(b.textContent)===curSym));}
@@ -2254,7 +2410,7 @@ async function runBT(){
     if(total===0)html='<p class="ph">No signals generated. Try toggling indicators or extending backtest period.</p>';
     $('btres').innerHTML=html;
   }catch(e){toast('Backtest failed: '+e,'error');}}
-updateCreds();loadConfig();
+updateBrokerOptions();updateCreds();loadConfig();
 </script>
 </body>
 </html>
@@ -2267,10 +2423,10 @@ def run_flask():
 
 if __name__ == "__main__":
     acquire_lock()
-    # Daily license check thread
+    # Daily license check
     def daily_license_check():
         while True:
-            time.sleep(86400)  # 24 hours
+            time.sleep(86400)
             key = state.config.get("license_key", "").strip()
             if key:
                 valid, _ = verify_gumroad_license(key)
