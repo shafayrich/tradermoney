@@ -1,5 +1,5 @@
 """
-TraderMoney v1.0.53 – UI paywall locks, uniform input styling, backtest scroll fix.
+TraderMoney v1.0.54 – UI paywall locks, uniform input styling, backtest scroll fix.
 """
 
 import asyncio
@@ -13,9 +13,8 @@ import sys
 import threading
 import time
 import traceback
-import atexit
 import urllib.request
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -24,7 +23,7 @@ import webview
 from flask import Flask, jsonify, request, send_file
 from flask_cors import CORS
 
-APP_VERSION = "1.0.53"
+APP_VERSION = "1.0.54"
 
 # ── Gumroad ─────────────────────────────────────────────────
 GUMMROAD_PRODUCT_ID = "73otoT7rzJukCy-Lt4hhkQ=="
