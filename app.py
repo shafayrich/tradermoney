@@ -1,5 +1,5 @@
 """
-TraderMoney v1.0.56
+TraderMoney v1.0.57
 ─────────────────────────────────────────────────────────────────────────────
 Changes from v1.0.55:
   • Free-tier restrictions fully enforced on UI (broker, mode, dir, premium
@@ -39,12 +39,12 @@ import webview
 from flask import Flask, jsonify, request, send_file
 from flask_cors import CORS
 
-APP_VERSION = "1.0.56"
+APP_VERSION = "1.0.57"
 
 # ── OpenAI / AI Chat ────────────────────────────────────────────────────────
 # Replace with your actual OpenAI API key.
 # Get one at https://platform.openai.com/api-keys
-OPENAI_API_KEY = "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"
+DEEPSEEK_API_KEY = "sk-b477e0dfaee0403c962143e8e0a13db1"
 FREE_CHAT_DAILY_LIMIT = 5
 _chat_counter: Dict[str, Any] = {"date": None, "count": 0}
 
@@ -1886,6 +1886,7 @@ _CHAT_SYSTEM_PROMPT = (
 )
 
 
+# ── AI CHAT (DeepSeek) ───────────────────────────────────────────────────────
 @app.route("/api/chat", methods=["POST"])
 def api_chat():
     global _chat_counter
@@ -1896,7 +1897,7 @@ def api_chat():
 
     licensed = state.config.get("license_valid", False)
 
-    # ── Daily limit for free tier ─────────────────────────────────────────────
+    # ── Daily limit for free tier ─────────────────────────────────────────
     if not licensed:
         today = datetime.now().strftime("%Y-%m-%d")
         if _chat_counter["date"] != today:
@@ -1911,26 +1912,22 @@ def api_chat():
             })
         _chat_counter["count"] += 1
 
-    # ── API key check ─────────────────────────────────────────────────────────
-    if not OPENAI_API_KEY or OPENAI_API_KEY.startswith("sk-YOUR"):
+    # ── API key check ─────────────────────────────────────────────────────
+    if not DEEPSEEK_API_KEY or DEEPSEEK_API_KEY.startswith("sk-YOUR"):
         return jsonify({
-            "reply": (
-                "AI Chat is not configured yet. Open app.py and replace the "
-                "OPENAI_API_KEY constant at the top of the file with your real "
-                "OpenAI API key (get one at platform.openai.com/api-keys)."
-            )
+            "reply": "DeepSeek API key not configured. Please update DEEPSEEK_API_KEY in app.py."
         })
 
-    # ── Call OpenAI ───────────────────────────────────────────────────────────
+    # ── Call DeepSeek (OpenAI‑compatible endpoint) ─────────────────────────
     try:
         resp = http_requests.post(
-            "https://api.openai.com/v1/chat/completions",
+            "https://api.deepseek.com/v1/chat/completions",
             headers={
-                "Authorization": f"Bearer {OPENAI_API_KEY}",
+                "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
                 "Content-Type":  "application/json",
             },
             json={
-                "model": "gpt-3.5-turbo",
+                "model": "deepseek-chat",
                 "messages": [
                     {"role": "system", "content": _CHAT_SYSTEM_PROMPT},
                     {"role": "user",   "content": message},
@@ -1942,8 +1939,8 @@ def api_chat():
         )
         result = resp.json()
         if "error" in result:
-            err_msg = result["error"].get("message", "Unknown OpenAI error")
-            db.insert_log(f"[AI Chat] OpenAI error: {err_msg}")
+            err_msg = result["error"].get("message", "Unknown DeepSeek error")
+            db.insert_log(f"[AI Chat] DeepSeek error: {err_msg}")
             return jsonify({"reply": f"AI error: {err_msg}"})
         reply = result["choices"][0]["message"]["content"].strip()
         return jsonify({"reply": reply})
