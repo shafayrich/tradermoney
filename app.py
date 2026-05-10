@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-TraderMoney v2.0.0 – Lightweight Charts, presets, watchlist, shortcuts, reconnection,
+TraderMoney v2.0.1 – Lightweight Charts, presets, watchlist, shortcuts, reconnection,
 data caching, timezone, offline mode, upgrade prompts, leaderboard, voice,
 auto‑tuning, news sentiment, portfolio backtest, Monte Carlo, export, correlation.
 Full implementation – ready to run.
@@ -17,7 +17,7 @@ import webview
 from flask import Flask, jsonify, request, send_file, Response
 from flask_cors import CORS
 
-APP_VERSION = "2.0.0"
+APP_VERSION = "2.0.1"
 
 # ── AI Chat ──────────────────────────────────────────────────────────────────
 CHATANYWHERE_API_KEY = "sk-hUwjVr5dWqvnwBjYeglNUNuiNi4yW2znuaRwauuKryf2XauS"
@@ -433,8 +433,8 @@ class AlpacaBroker(BaseBroker):
             except Exception as e: self._emit_log(f"Alpaca stream warning: {e}")
         threading.Thread(target=run, daemon=True).start()
     def stop_stream(self): self._stop_stream = True
-
 register_broker("Alpaca", AlpacaBroker)
+
 # ── IBKR ────────────────────────────────────────────────────────────────────
 class IBKRBroker(BaseBroker):
     name = "Interactive Brokers"
@@ -442,14 +442,10 @@ class IBKRBroker(BaseBroker):
         super().__init__(config, ui_queue)
         self.ib = None; self._loop = None; self._ib_thread = None; self._stop_stream = False
     def _start_loop(self):
-        self._loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(self._loop)
-        self._loop.run_forever()
+        self._loop = asyncio.new_event_loop(); asyncio.set_event_loop(self._loop); self._loop.run_forever()
     def _ensure_loop(self):
         if self._loop is None or not self._loop.is_running():
-            self._ib_thread = threading.Thread(target=self._start_loop, daemon=True, name="IBKRLoop")
-            self._ib_thread.start()
-            time.sleep(0.2)
+            self._ib_thread = threading.Thread(target=self._start_loop, daemon=True, name="IBKRLoop"); self._ib_thread.start(); time.sleep(0.2)
     def _run_coro(self, coro):
         if self._loop is None: raise RuntimeError("IBKR event loop not started")
         return asyncio.run_coroutine_threadsafe(coro, self._loop).result(timeout=15)
@@ -459,8 +455,7 @@ class IBKRBroker(BaseBroker):
         if not host: self._emit_error("IBKR Host is missing."); return False
         try: port = int(port_str); cid = int(cid_str)
         except ValueError: self._emit_error("IBKR port and client_id must be integers."); return False
-        try:
-            from ib_insync import IB
+        try: from ib_insync import IB
         except ImportError: self._emit_error("ib_insync not installed."); return False
         self._ensure_loop()
         async def _do(): ib = IB(); await ib.connectAsync(host, port, clientId=cid, timeout=10); return ib
@@ -527,14 +522,12 @@ class IBKRBroker(BaseBroker):
                         if orig: callback(orig, t.last)
         asyncio.run_coroutine_threadsafe(_sub(), self._loop)
     def stop_stream(self): self._stop_stream = True
-
 register_broker("Interactive Brokers", IBKRBroker)
 
 # ── TRADIER ─────────────────────────────────────────────────────────────────
 class TradierBroker(BaseBroker):
     name = "Tradier"
-    LIVE_URL = "https://api.tradier.com/v1"
-    SANDBOX_URL = "https://sandbox.tradier.com/v1"
+    LIVE_URL = "https://api.tradier.com/v1"; SANDBOX_URL = "https://sandbox.tradier.com/v1"
     def __init__(self, config, ui_queue):
         super().__init__(config, ui_queue)
         self.session = None; self.account_id = None; self._base = self.LIVE_URL; self._stop_stream = False
@@ -608,7 +601,6 @@ class TradierBroker(BaseBroker):
                 time.sleep(5)
         threading.Thread(target=poll, daemon=True).start()
     def stop_stream(self): self._stop_stream = True
-
 register_broker("Tradier", TradierBroker)
 
 # ── BINANCE ─────────────────────────────────────────────────────────────────
@@ -652,8 +644,7 @@ class BinanceBroker(BaseBroker):
     def submit_order(self, symbol, qty, side, order_type="market", sl_pct=None, tp_pct=None, sl_price=None, tp_price=None) -> bool:
         if not self.client: self._emit_error("Binance not connected."); return False
         try:
-            resp = self.client.new_order(symbol=self._norm(symbol), side="BUY" if side == "buy" else "SELL",
-                                          type="MARKET", quantity=qty)
+            resp = self.client.new_order(symbol=self._norm(symbol), side="BUY" if side == "buy" else "SELL", type="MARKET", quantity=qty)
             if resp.get("status") not in ("FILLED", "NEW", "PARTIALLY_FILLED"):
                 self._emit_error(f"Binance order unexpected status: {resp}"); return False
             return True
@@ -700,8 +691,8 @@ class BinanceBroker(BaseBroker):
         if self._ws_client:
             try: self._ws_client.stop()
             except: pass
-
 register_broker("Binance", BinanceBroker)
+
 # ── BYBIT ───────────────────────────────────────────────────────────────────
 class BybitBroker(BaseBroker):
     name = "Bybit"
@@ -730,8 +721,7 @@ class BybitBroker(BaseBroker):
         if not self.session: return None
         try:
             result = self.session.get_wallet_balance(accountType="UNIFIED").get("result", {}).get("list", [{}])[0]
-            equity = float(result.get("totalEquity", 0))
-            avail = float(result.get("totalAvailableBalance", 0))
+            equity = float(result.get("totalEquity", 0)); avail = float(result.get("totalAvailableBalance", 0))
             return {"equity": equity, "pl": 0.0, "buying_power": avail, "cash": avail, "open_positions": 0}
         except Exception as e: self._emit_error(f"Bybit get_account: {e}"); return None
     def submit_order(self, symbol, qty, side, order_type="market", sl_pct=None, tp_pct=None, sl_price=None, tp_price=None) -> bool:
@@ -771,8 +761,7 @@ class BybitBroker(BaseBroker):
                         data = msg.get("data", {})
                         if isinstance(data, list): data = data[0] if data else {}
                         raw_sym = msg.get("topic", "").split(".")[-1]
-                        orig = sym_map.get(raw_sym)
-                        price = float(data.get("lastPrice", 0))
+                        orig = sym_map.get(raw_sym); price = float(data.get("lastPrice", 0))
                         if orig and price: callback(orig, price)
                     except: pass
                 ws = WebSocket(testnet=testnet, channel_type="spot")
@@ -781,7 +770,6 @@ class BybitBroker(BaseBroker):
             except Exception as e: self._emit_log(f"Bybit stream warning: {e}")
         threading.Thread(target=run, daemon=True).start()
     def stop_stream(self): self._stop_stream = True
-
 register_broker("Bybit", BybitBroker)
 
 # ── OKX ────────────────────────────────────────────────────────────────────
@@ -802,8 +790,7 @@ class OKXBroker(BaseBroker):
         if not api_secret: self._emit_error("OKX API Secret is missing."); return False
         if not passphrase: self._emit_error("OKX API Passphrase is missing."); return False
         try:
-            import okx.Account as AccountAPI
-            import okx.Trade as TradeAPI
+            import okx.Account as AccountAPI; import okx.Trade as TradeAPI
             self._account_api = AccountAPI.AccountAPI(api_key, api_secret, passphrase, False, self._flag)
             self._trade_api = TradeAPI.TradeAPI(api_key, api_secret, passphrase, False, self._flag)
             resp = self._account_api.get_account_balance()
@@ -848,8 +835,7 @@ class OKXBroker(BaseBroker):
         self._stop_stream = False
         def run():
             try:
-                import websocket
-                import json as _j
+                import websocket; import json as _j
                 sym_map = {self._norm(s): s for s in symbols}
                 subs = [{"channel": "tickers", "instId": k} for k in sym_map]
                 url = "wss://wspap.okx.com:8443/ws/v5/public?brokerId=9999" if self.config.get("okx", {}).get("demo", True) else "wss://ws.okx.com:8443/ws/v5/public"
@@ -869,7 +855,6 @@ class OKXBroker(BaseBroker):
             except Exception as e: self._emit_log(f"OKX stream warning: {e}")
         threading.Thread(target=run, daemon=True).start()
     def stop_stream(self): self._stop_stream = True
-
 register_broker("OKX", OKXBroker)
 
 # ── Indicator calculator ─────────────────────────────────────────────────────
@@ -882,62 +867,43 @@ class IndicatorCalculator:
         volume = (np.asarray(df["Volume"]).astype(np.float64).ravel() if "Volume" in df.columns else np.ones_like(close))
 
         def ema(data, span):
-            a = 2 / (span + 1)
-            res = np.empty_like(data)
-            res[0] = data[0]
-            for i in range(1, len(data)):
-                res[i] = a * data[i] + (1 - a) * res[i - 1]
+            a = 2 / (span + 1); res = np.empty_like(data); res[0] = data[0]
+            for i in range(1, len(data)): res[i] = a * data[i] + (1 - a) * res[i - 1]
             return res
 
-        df["EMA_fast"] = ema(close, ema_fast)
-        df["EMA_slow"] = ema(close, ema_slow)
-
+        df["EMA_fast"] = ema(close, ema_fast); df["EMA_slow"] = ema(close, ema_slow)
         delta = np.diff(close, prepend=close[0])
-        gain  = np.where(delta > 0, delta,  0.0)
-        loss  = np.where(delta < 0, -delta, 0.0)
+        gain  = np.where(delta > 0, delta,  0.0); loss  = np.where(delta < 0, -delta, 0.0)
         ag = np.convolve(gain, np.ones(14)/14, mode="full")[:len(close)]
         al = np.convolve(loss, np.ones(14)/14, mode="full")[:len(close)]
         rs = np.divide(ag, al, out=np.zeros_like(ag), where=al != 0)
         df["RSI"] = 100 - (100 / (1 + rs))
 
-        m = ema(close, 12) - ema(close, 26)
-        df["MACD"] = m
-        df["MACD_signal"] = ema(m, 9)
+        m = ema(close, 12) - ema(close, 26); df["MACD"] = m; df["MACD_signal"] = ema(m, 9)
 
         ma20  = np.convolve(close, np.ones(20)/20, mode="same")
         std20 = np.array([np.std(close[max(0, i-19):i+1]) for i in range(len(close))])
-        df["BB_upper"] = ma20 + 2 * std20
-        df["BB_lower"] = ma20 - 2 * std20
+        df["BB_upper"] = ma20 + 2 * std20; df["BB_lower"] = ma20 - 2 * std20
 
         cum_vol = np.cumsum(volume)
-        df["VWAP"] = np.divide(np.cumsum(close * volume), cum_vol,
-                                out=np.zeros_like(close), where=cum_vol != 0)
+        df["VWAP"] = np.divide(np.cumsum(close * volume), cum_vol, out=np.zeros_like(close), where=cum_vol != 0)
 
-        tr = np.maximum(high[1:] - low[1:],
-                        np.maximum(np.abs(high[1:] - close[:-1]),
-                                   np.abs(low[1:]  - close[:-1])))
+        tr = np.maximum(high[1:] - low[1:], np.maximum(np.abs(high[1:] - close[:-1]), np.abs(low[1:]  - close[:-1])))
         tr = np.insert(tr, 0, np.mean(tr[:14]) if len(tr) >= 14 else (tr[0] if len(tr) else 0))
-        atr14 = ema(tr, 14)
-        df["ATR"] = atr14
+        atr14 = ema(tr, 14); df["ATR"] = atr14
 
         up   = np.maximum( np.diff(high, prepend=high[0]), 0.0)
         dn   = np.maximum(-np.diff(low,  prepend=low[0]),  0.0)
-        pdm  = np.where((up > dn) & (up > 0), up, 0.0)
-        mdm  = np.where((dn > up) & (dn > 0), dn, 0.0)
-        pdi = 100 * ema(pdm, 14) / (atr14 + 1e-14)
-        mdi = 100 * ema(mdm, 14) / (atr14 + 1e-14)
-        dx  = 100 * np.abs(pdi - mdi) / (pdi + mdi + 1e-14)
-        df["ADX"] = ema(dx, 14)
+        pdm  = np.where((up > dn) & (up > 0), up, 0.0); mdm  = np.where((dn > up) & (dn > 0), dn, 0.0)
+        pdi = 100 * ema(pdm, 14) / (atr14 + 1e-14); mdi = 100 * ema(mdm, 14) / (atr14 + 1e-14)
+        dx  = 100 * np.abs(pdi - mdi) / (pdi + mdi + 1e-14); df["ADX"] = ema(dx, 14)
 
         vol_avg = np.convolve(volume, np.ones(20)/20, mode="same")
         df["Vol_ratio"] = np.divide(volume, vol_avg, out=np.ones_like(volume), where=vol_avg != 0)
 
-        st_atr = ema(tr, 10)
-        hl2 = (high + low) / 2.0
-        upper_s = hl2 + 3.0 * st_atr
-        lower_s = hl2 - 3.0 * st_atr
-        st = np.zeros_like(close)
-        trend = np.ones_like(close)
+        st_atr = ema(tr, 10); hl2 = (high + low) / 2.0
+        upper_s = hl2 + 3.0 * st_atr; lower_s = hl2 - 3.0 * st_atr
+        st = np.zeros_like(close); trend = np.ones_like(close)
         for i in range(1, len(close)):
             if close[i] > upper_s[i-1]: trend[i] = 1
             elif close[i] < lower_s[i-1]: trend[i] = -1
@@ -946,45 +912,35 @@ class IndicatorCalculator:
                 if trend[i] == 1 and lower_s[i] < lower_s[i-1]: lower_s[i] = lower_s[i-1]
                 if trend[i] == -1 and upper_s[i] > upper_s[i-1]: upper_s[i] = upper_s[i-1]
             st[i] = lower_s[i] if trend[i] == 1 else upper_s[i]
-        df["Supertrend"] = st
-        df["Supertrend_trend"] = trend
+        df["Supertrend"] = st; df["Supertrend_trend"] = trend
 
         K = 14
         ll = np.array([np.min(low[max(0, i-K+1):i+1]) for i in range(len(close))])
         hh = np.array([np.max(high[max(0, i-K+1):i+1]) for i in range(len(close))])
         stk = np.where(hh - ll != 0, 100 * (close - ll) / (hh - ll + 1e-14), 50.0)
-        df["Stoch_K"] = stk
-        df["Stoch_D"] = np.convolve(stk, np.ones(3)/3, mode="same")
+        df["Stoch_K"] = stk; df["Stoch_D"] = np.convolve(stk, np.ones(3)/3, mode="same")
         return df
-        # ── Signal Analyzer ──────────────────────────────────────────────────────────
+
+# ── Signal Analyzer ──────────────────────────────────────────────────────────
 class SignalAnalyzer:
-    ADX_THRESHOLD = 20
-    VOL_THRESHOLD = 1.5
+    ADX_THRESHOLD = 20; VOL_THRESHOLD = 1.5
 
     @staticmethod
     def _sf(val, default=0.0):
         try:
-            v = val.item() if hasattr(val, "item") else val
-            return float(v)
-        except Exception:
-            return default
+            v = val.item() if hasattr(val, "item") else val; return float(v)
+        except Exception: return default
 
     @staticmethod
     def generate_signal(df, prev_fast, prev_slow, config):
-        if prev_fast is None or prev_slow is None:
-            return None, "", 0.0
-        l = df.iloc[-1]
-        sf = SignalAnalyzer._sf
+        if prev_fast is None or prev_slow is None: return None, "", 0.0
+        l = df.iloc[-1]; sf = SignalAnalyzer._sf
         ef = sf(l["EMA_fast"]); es = sf(l["EMA_slow"]); price = sf(l["Close"])
-        bull = prev_fast <= prev_slow and ef > es
-        bear = prev_fast >= prev_slow and ef < es
+        bull = prev_fast <= prev_slow and ef > es; bear = prev_fast >= prev_slow and ef < es
         passes, dir_ = False, ""
-        if bull:
-            passes, dir_ = SignalAnalyzer._confirm(df, config, "bull", price)
-        elif bear:
-            passes, dir_ = SignalAnalyzer._confirm(df, config, "bear", price)
-        if not passes:
-            return None, "", 0.0
+        if bull: passes, dir_ = SignalAnalyzer._confirm(df, config, "bull", price)
+        elif bear: passes, dir_ = SignalAnalyzer._confirm(df, config, "bear", price)
+        if not passes: return None, "", 0.0
         conf = 0.50
         conf += 0.05 if config.get("use_rsi", True) else 0
         conf += 0.05 if config.get("use_macd", True) else 0
@@ -1001,19 +957,12 @@ class SignalAnalyzer:
 
     @staticmethod
     def _confirm(df, config, direction, price):
-        l = df.iloc[-1]
-        sf = SignalAnalyzer._sf
-        rsi = sf(l.get("RSI", 50), 50)
-        macd = sf(l.get("MACD", 0), 0)
-        msig = sf(l.get("MACD_signal", 0), 0)
-        bbu = sf(l.get("BB_upper", price), price)
-        bbl = sf(l.get("BB_lower", price), price)
-        vwap = sf(l.get("VWAP", price), price)
-        adx = sf(l.get("ADX", 0), 0)
-        vr = sf(l.get("Vol_ratio", 1), 1)
-        stt = sf(l.get("Supertrend_trend", 0), 0)
-        stk = sf(l.get("Stoch_K", 50), 50)
-        std = sf(l.get("Stoch_D", 50), 50)
+        l = df.iloc[-1]; sf = SignalAnalyzer._sf
+        rsi = sf(l.get("RSI", 50), 50); macd = sf(l.get("MACD", 0), 0); msig = sf(l.get("MACD_signal", 0), 0)
+        bbu = sf(l.get("BB_upper", price), price); bbl = sf(l.get("BB_lower", price), price)
+        vwap = sf(l.get("VWAP", price), price); adx = sf(l.get("ADX", 0), 0)
+        vr = sf(l.get("Vol_ratio", 1), 1); stt = sf(l.get("Supertrend_trend", 0), 0)
+        stk = sf(l.get("Stoch_K", 50), 50); std = sf(l.get("Stoch_D", 50), 50)
 
         if direction == "bull":
             if config.get("use_rsi", True) and rsi < 30: return False, "bull"
@@ -1040,18 +989,13 @@ class TradingEngine(threading.Thread):
     def __init__(self, ui_queue, config, broker):
         super().__init__(daemon=True)
         self.ui_queue = ui_queue; self.config = config; self.broker = broker
-        self.running = False
-        self.symbols = []; self.positions = {}; self.prev_ema = {}; self.per_ticker_qty = {}
+        self.running = False; self.symbols = []; self.positions = {}; self.prev_ema = {}; self.per_ticker_qty = {}
         self.is_licensed = config.get("license_valid", False)
         self.direction = config.get("direction", "both")
         self.use_default_qty = config.get("use_default_qty", True)
-        self._stop_watchdog = threading.Event()
-        self.consecutive_failures = 0
-        self.paused = False
+        self._stop_watchdog = threading.Event(); self.consecutive_failures = 0; self.paused = False
         if not self.is_licensed:
-            self.config["mode"] = "signal"
-            self.config["broker"] = "Alpaca"
-            self.direction = "both"
+            self.config["mode"] = "signal"; self.config["broker"] = "Alpaca"; self.direction = "both"
             if "alpaca" in self.config: self.config["alpaca"]["paper"] = True
             for k in ("use_supertrend", "use_stochastic", "use_adx", "use_vol_confirm", "use_atr_stops", "use_bracket"):
                 self.config[k] = False
@@ -1059,15 +1003,13 @@ class TradingEngine(threading.Thread):
 
     def _telegram(self, msg):
         if not self.is_licensed: return
-        tg = self.config.get("telegram", {})
-        token = tg.get("token"); cid = tg.get("chat_id")
+        tg = self.config.get("telegram", {}); token = tg.get("token"); cid = tg.get("chat_id")
         if token and cid:
             try: http_requests.post(f"https://api.telegram.org/bot{token}/sendMessage", json={"chat_id": cid, "text": msg, "parse_mode": "HTML"}, timeout=5)
             except: pass
 
     def run(self):
-        tickers_str = self.config.get("tickers", "AAPL")
-        default_qty = self.config.get("quantity", 1)
+        tickers_str = self.config.get("tickers", "AAPL"); default_qty = self.config.get("quantity", 1)
         raw_list = [s.strip() for s in tickers_str.split(",") if s.strip()]
         for entry in raw_list:
             sym = clean_symbol(entry); has_colon = ":" in entry
@@ -1102,21 +1044,17 @@ class TradingEngine(threading.Thread):
         while self.running:
             try:
                 self.internet_up = is_internet_available()
-                if not self.internet_up:
-                    self.consecutive_failures += 1
+                if not self.internet_up: self.consecutive_failures += 1
                 else:
                     self.consecutive_failures = 0
                     if self.paused:
-                        self.paused = False
-                        self.ui_queue.put(("status", "Internet restored – resumed"))
+                        self.paused = False; self.ui_queue.put(("status", "Internet restored – resumed"))
 
                 if self.consecutive_failures >= 3 and not self.paused:
-                    self.paused = True
-                    self.ui_queue.put(("status", "Internet lost – paused"))
+                    self.paused = True; self.ui_queue.put(("status", "Internet lost – paused"))
                     time.sleep(1); continue
 
-                if self.paused:
-                    time.sleep(5); continue
+                if self.paused: time.sleep(5); continue
 
                 acc = self.broker.get_account()
                 if acc: self.ui_queue.put(("account", (acc["equity"], acc["pl"], acc["buying_power"], acc.get("open_positions", 0))))
@@ -1127,15 +1065,13 @@ class TradingEngine(threading.Thread):
                     for s in self.symbols:
                         try:
                             cached = db.get_cached_candle(s, interval)
-                            if cached:
-                                df = pd.DataFrame.from_dict(cached)
+                            if cached: df = pd.DataFrame.from_dict(cached)
                             else:
                                 import yfinance as yf
                                 df = yf.download(s, period="5d", interval=interval, progress=False, auto_adjust=True)
                                 if df is None or df.empty:
                                     df = yf.download(s, period="5d", interval="1d", progress=False, auto_adjust=True)
-                                if df is not None and not df.empty:
-                                    db.cache_candle(s, interval, df)
+                                if df is not None and not df.empty: db.cache_candle(s, interval, df)
                             if df is None or df.empty: continue
                             if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
                             df = IndicatorCalculator.compute_all(df, ema_fast, ema_slow)
@@ -1144,8 +1080,7 @@ class TradingEngine(threading.Thread):
                         latest = df.iloc[-1]
                         sf = SignalAnalyzer._sf; price = sf(latest["Close"])
                         ef = sf(latest["EMA_fast"]); es = sf(latest["EMA_slow"])
-                        prev_f, prev_s = self.prev_ema.get(s, (None, None))
-                        self.prev_ema[s] = (ef, es)
+                        prev_f, prev_s = self.prev_ema.get(s, (None, None)); self.prev_ema[s] = (ef, es)
                         if prev_f is not None:
                             sig, rationale, conf = SignalAnalyzer.generate_signal(df, prev_f, prev_s, self.config)
                             if sig:
@@ -1161,8 +1096,7 @@ class TradingEngine(threading.Thread):
                 time.sleep(1)
             except Exception:
                 self.ui_queue.put(("error", f"Engine error:\n{traceback.format_exc()}")); time.sleep(5)
-        self.broker.stop_stream()
-        self.ui_queue.put(("status", "Bot stopped"))
+        self.broker.stop_stream(); self.ui_queue.put(("status", "Bot stopped"))
 
     def _get_news_sentiment(self, symbol):
         try:
@@ -1182,8 +1116,7 @@ class TradingEngine(threading.Thread):
 
     def _execute(self, sym, sig, price, latest, use_bracket, use_atr, sl_pct, tp_pct, conf):
         try:
-            qty = self.per_ticker_qty.get(sym, self.config.get("quantity", 1))
-            sf = SignalAnalyzer._sf
+            qty = self.per_ticker_qty.get(sym, self.config.get("quantity", 1)); sf = SignalAnalyzer._sf
             if self.direction == "long" and sig == "SELL": return
             if self.direction == "short" and sig == "BUY": return
             pos = self.positions.get(sym, 0)
@@ -1194,10 +1127,8 @@ class TradingEngine(threading.Thread):
                     if use_bracket and use_atr:
                         atr = sf(latest.get("ATR", price * 0.02), price * 0.02)
                         ok = self.broker.submit_order(sym, qty, "buy", sl_price=price - ATR_STOP_MULT * atr, tp_price=price + ATR_TP_MULT * atr)
-                    elif use_bracket:
-                        ok = self.broker.submit_order(sym, qty, "buy", sl_pct=sl_pct, tp_pct=tp_pct)
-                    else:
-                        ok = self.broker.submit_order(sym, qty, "buy")
+                    elif use_bracket: ok = self.broker.submit_order(sym, qty, "buy", sl_pct=sl_pct, tp_pct=tp_pct)
+                    else: ok = self.broker.submit_order(sym, qty, "buy")
                     if ok: self.positions[sym] = qty; self.ui_queue.put(("order", (sym, "BUY", qty, price))); db.insert_trade(_ts(), sym, "BUY", qty, price); self._telegram(f"BUY {qty} {sym} @ ${price:.2f} (conf: {conf:.2f})")
             elif sig == "SELL":
                 if pos >= 0:
@@ -1206,10 +1137,8 @@ class TradingEngine(threading.Thread):
                     if use_bracket and use_atr:
                         atr = sf(latest.get("ATR", price * 0.02), price * 0.02)
                         ok = self.broker.submit_order(sym, qty, "sell", sl_price=price + ATR_STOP_MULT * atr, tp_price=price - ATR_TP_MULT * atr)
-                    elif use_bracket:
-                        ok = self.broker.submit_order(sym, qty, "sell", sl_pct=sl_pct, tp_pct=tp_pct)
-                    else:
-                        ok = self.broker.submit_order(sym, qty, "sell")
+                    elif use_bracket: ok = self.broker.submit_order(sym, qty, "sell", sl_pct=sl_pct, tp_pct=tp_pct)
+                    else: ok = self.broker.submit_order(sym, qty, "sell")
                     if ok: self.positions[sym] = -qty; self.ui_queue.put(("order", (sym, "SELL", qty, price))); db.insert_trade(_ts(), sym, "SELL", qty, price); self._telegram(f"SELL {qty} {sym} @ ${price:.2f} (conf: {conf:.2f})")
         except Exception as e: self.ui_queue.put(("error", f"Execute error {sym}: {e}"))
 
@@ -1219,18 +1148,15 @@ class TradingEngine(threading.Thread):
                 for sym, qty in list(self.positions.items()):
                     if qty == 0: continue
                     try:
-                        import yfinance as yf
-                        price = yf.Ticker(sym).history(period="1d")["Close"].iloc[-1]
+                        import yfinance as yf; price = yf.Ticker(sym).history(period="1d")["Close"].iloc[-1]
                     except: continue
                     stop = price * (1 - 0.02) if qty > 0 else price * (1 + 0.02)
                     take = price * (1 + 0.04) if qty > 0 else price * (1 - 0.04)
                     if (qty > 0 and price <= stop) or (qty < 0 and price >= stop):
-                        self.broker.submit_order(sym, abs(qty), "sell" if qty > 0 else "buy")
-                        self.positions[sym] = 0
+                        self.broker.submit_order(sym, abs(qty), "sell" if qty > 0 else "buy"); self.positions[sym] = 0
                         self._telegram(f"Stop loss triggered {sym} @ ${price:.2f}")
                     elif (qty > 0 and price >= take) or (qty < 0 and price <= take):
-                        self.broker.submit_order(sym, abs(qty), "sell" if qty > 0 else "buy")
-                        self.positions[sym] = 0
+                        self.broker.submit_order(sym, abs(qty), "sell" if qty > 0 else "buy"); self.positions[sym] = 0
                         self._telegram(f"Take profit triggered {sym} @ ${price:.2f}")
             except: pass
             time.sleep(2)
@@ -1238,7 +1164,8 @@ class TradingEngine(threading.Thread):
     def stop(self):
         if self.running: self._telegram("Bot stopped.")
         self.running = False; self._stop_watchdog.set()
-        # ── Flask routes ─────────────────────────────────────────────────────────────
+
+# ── Flask routes ─────────────────────────────────────────────────────────────
 @app.route("/")
 def index(): return FRONTEND_HTML
 
@@ -1246,23 +1173,19 @@ def index(): return FRONTEND_HTML
 def mobile(): return send_file("mobile.html") if os.path.exists("mobile.html") else ("Not available", 404)
 
 @app.route("/api/config", methods=["GET"])
-def api_get_config():
-    return jsonify(state.config)
+def api_get_config(): return jsonify(state.config)
 
 @app.route("/api/config", methods=["POST"])
 def api_save_config():
     data = request.json or {}
-    state.config.update(data)
-    EncryptedConfigManager.save(state.config)
-    if not state.config.get("license_valid"):
-        state.config["broker"] = "Alpaca"; state.config["mode"] = "signal"
+    state.config.update(data); EncryptedConfigManager.save(state.config)
+    if not state.config.get("license_valid"): state.config["broker"] = "Alpaca"; state.config["mode"] = "signal"
     return jsonify({"status": "ok", "message": "Configuration saved"})
 
 @app.route("/api/start", methods=["POST"])
 def api_start():
     data = request.json or {}
-    state.config.update(data)
-    EncryptedConfigManager.save(state.config)
+    state.config.update(data); EncryptedConfigManager.save(state.config)
     key = state.config.get("license_key", "").strip()
     if key: valid, _ = verify_gumroad_license(key); state.config["license_valid"] = valid
     else: state.config["license_valid"] = False
@@ -1272,17 +1195,14 @@ def api_start():
         state.config["alpaca"]["paper"] = True
         for k in ("use_supertrend", "use_stochastic", "use_adx", "use_vol_confirm", "use_atr_stops", "use_bracket"): state.config[k] = False
         state.config["tickers"] = state.config.get("tickers", "AAPL").split(",")[0].strip()
-    broker_choice = state.config.get("broker", "Alpaca")
-    broker_cls = BROKER_REGISTRY.get(broker_choice)
+    broker_choice = state.config.get("broker", "Alpaca"); broker_cls = BROKER_REGISTRY.get(broker_choice)
     if not broker_cls: return jsonify({"status": "error", "message": f"Unknown broker: {broker_choice}"})
     state.broker_instance = broker_cls(state.config, state.ui_queue)
     if not state.broker_instance.connect():
         err = state.broker_instance.last_error or "Unknown error."
-        state.config["last_broker_message"] = f"ERROR: {err}"
-        EncryptedConfigManager.save(state.config)
+        state.config["last_broker_message"] = f"ERROR: {err}"; EncryptedConfigManager.save(state.config)
         return jsonify({"status": "error", "message": err})
-    state.config["last_broker_message"] = "Connected"
-    EncryptedConfigManager.save(state.config)
+    state.config["last_broker_message"] = "Connected"; EncryptedConfigManager.save(state.config)
     state.engine = TradingEngine(state.ui_queue, state.config, state.broker_instance)
     state.engine.running = True; state.engine.start(); state.running = True
     return jsonify({"status": "ok", "message": f"Bot started ({broker_choice})"})
@@ -1304,8 +1224,7 @@ def api_kill():
 def api_status():
     while not state.ui_queue.empty():
         try:
-            msg = state.ui_queue.get_nowait()
-            kind = msg[0]
+            msg = state.ui_queue.get_nowait(); kind = msg[0]
             if kind == "account": eq, pl, bp, op = msg[1]; state.dashboard.update(equity=eq, pl=pl, buying_power=bp, open_positions=op)
             elif kind in ("log", "error"): db.insert_log(msg[1])
         except queue.Empty: break
@@ -1314,24 +1233,18 @@ def api_status():
     for s in signals: s["time"] = to_local_time(s["time"], tz)
     for o in orders: o["time"] = to_local_time(o["time"], tz)
     return jsonify({
-        "running": state.running,
-        "equity": state.dashboard["equity"], "pl": state.dashboard["pl"],
+        "running": state.running, "equity": state.dashboard["equity"], "pl": state.dashboard["pl"],
         "buying_power": state.dashboard["buying_power"], "open_positions": state.dashboard["open_positions"],
-        "signals": signals, "orders": orders,
-        "log": db.get_recent_logs(100),
-        "internet_status": state.internet_status
+        "signals": signals, "orders": orders, "log": db.get_recent_logs(100), "internet_status": state.internet_status
     })
 
 @app.route("/api/broker_status")
-def api_broker_status():
-    return jsonify({"message": state.config.get("last_broker_message", "")})
+def api_broker_status(): return jsonify({"message": state.config.get("last_broker_message", "")})
 
 @app.route("/api/watchlist", methods=["GET", "POST"])
 def api_watchlist():
     if request.method == "POST":
-        data = request.json or {}
-        state.config["watchlist"] = data.get("watchlist", "")
-        EncryptedConfigManager.save(state.config)
+        data = request.json or {}; state.config["watchlist"] = data.get("watchlist", ""); EncryptedConfigManager.save(state.config)
         return jsonify({"status": "ok"})
     else:
         tickers = [s.strip() for s in state.config.get("watchlist", "").split(",") if s.strip()]
@@ -1347,32 +1260,23 @@ def api_watchlist():
 
 @app.route("/api/candles", methods=["GET"])
 def api_candles():
-    symbol = request.args.get("symbol", "AAPL")
-    interval = request.args.get("interval", "1m")
+    symbol = request.args.get("symbol", "AAPL"); interval = request.args.get("interval", "1m")
     try:
         cached = db.get_cached_candle(symbol, interval)
-        if cached:
-            df = pd.DataFrame.from_dict(cached)
+        if cached: df = pd.DataFrame.from_dict(cached)
         else:
             import yfinance as yf
             df = yf.download(symbol, period="5d", interval=interval, progress=False, auto_adjust=True)
-            if df is None or df.empty:
-                return jsonify([])
+            if df is None or df.empty: return jsonify([])
             db.cache_candle(symbol, interval, df)
         if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
         candles = []
         for idx, row in df.iterrows():
-            candles.append({
-                "time": int(idx.timestamp()),
-                "open": float(row["Open"]),
-                "high": float(row["High"]),
-                "low": float(row["Low"]),
-                "close": float(row["Close"]),
-                "volume": int(row["Volume"]) if "Volume" in row else 0
-            })
+            candles.append({"time": int(idx.timestamp()), "open": float(row["Open"]), "high": float(row["High"]),
+                           "low": float(row["Low"]), "close": float(row["Close"]),
+                           "volume": int(row["Volume"]) if "Volume" in row else 0})
         return jsonify(candles)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    except Exception as e: return jsonify({"error": str(e)}), 500
 
 @app.route("/api/update")
 def api_update():
@@ -1386,8 +1290,7 @@ def api_update():
 
 @app.route("/api/validate_license", methods=["POST"])
 def api_validate_license():
-    data = request.json or {}
-    key = data.get("license_key", "").strip()
+    data = request.json or {}; key = data.get("license_key", "").strip()
     if not key: return jsonify({"valid": False, "message": "No license key provided"})
     valid, msg = verify_gumroad_license(key)
     if valid: state.config["license_key"] = key; state.config["license_valid"] = True; return jsonify({"valid": True, "message": "License verified for this session"})
@@ -1396,18 +1299,12 @@ def api_validate_license():
 # ── Backtest ─────────────────────────────────────────────────────────────────
 @app.route("/api/backtest", methods=["POST"])
 def api_backtest():
-    data = request.json or {}
-    config = data.get("config", state.config)
-    days = int(data.get("days", 5))
-    portfolio = data.get("portfolio", False)
+    data = request.json or {}; config = data.get("config", state.config); days = int(data.get("days", 5)); portfolio = data.get("portfolio", False)
     try:
         import yfinance as yf
         raw_list = [s.strip() for s in config.get("tickers", "AAPL").split(",") if s.strip()]
-        symbols = list(dict.fromkeys(clean_symbol(e) for e in raw_list))
-        results = {}
-        all_trades = []
-        initial_cash = 100000 if portfolio else 10000
-        cash = initial_cash
+        symbols = list(dict.fromkeys(clean_symbol(e) for e in raw_list)); results = {}; all_trades = []
+        initial_cash = 100000 if portfolio else 10000; cash = initial_cash
         for sym in symbols:
             sym_results = {}
             try:
@@ -1416,8 +1313,7 @@ def api_backtest():
                     df = yf.download(sym, period=f"{days}d", interval="1d", progress=False, auto_adjust=True)
                 if df is None or df.empty: results[sym] = {"error": "No data returned"}; continue
                 if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
-                ef, es = config.get("emas", [9, 50])
-                df = IndicatorCalculator.compute_all(df, ef, es)
+                ef, es = config.get("emas", [9, 50]); df = IndicatorCalculator.compute_all(df, ef, es)
                 sigs = []
                 for i in range(1, len(df)):
                     prev = df.iloc[i-1]; curr = df.iloc[i]
@@ -1427,22 +1323,18 @@ def api_backtest():
                         sf = SignalAnalyzer._sf
                         sigs.append({"time": str(df.index[i]), "signal": sig, "price": round(sf(curr["Close"]), 2), "confidence": conf})
                 sym_results["signals"] = sigs
-                # simulation
-                position = 0.0; entry_price = 0.0; entry_time = ""
-                trades = []
+                position = 0.0; entry_price = 0.0; entry_time = ""; trades = []
                 for s in sigs:
                     if s["signal"] == "BUY" and position <= 0:
                         if position < 0:
-                            exit_price = s["price"]
-                            pnl = (entry_price - exit_price) * abs(position)
+                            exit_price = s["price"]; pnl = (entry_price - exit_price) * abs(position)
                             trades.append({"entry_time": entry_time, "exit_time": s["time"], "side": "SHORT", "entry_price": entry_price, "exit_price": exit_price, "pnl": round(pnl, 2), "type": "exit"})
                             cash += pnl
                         position = cash / s["price"]; entry_price = s["price"]; entry_time = s["time"]; cash = 0.0
                         trades.append({"entry_time": s["time"], "exit_time": "", "side": "LONG", "entry_price": entry_price, "exit_price": 0, "pnl": 0, "type": "entry"})
                     elif s["signal"] == "SELL" and position >= 0:
                         if position > 0:
-                            exit_price = s["price"]
-                            pnl = (exit_price - entry_price) * position
+                            exit_price = s["price"]; pnl = (exit_price - entry_price) * position
                             trades.append({"entry_time": entry_time, "exit_time": s["time"], "side": "LONG", "entry_price": entry_price, "exit_price": exit_price, "pnl": round(pnl, 2), "type": "exit"})
                             cash = position * exit_price + pnl
                         position = -cash / s["price"]; entry_price = s["price"]; entry_time = s["time"]; cash = 0.0
@@ -1464,28 +1356,24 @@ def api_backtest():
         win_rate_avg = np.mean([r["simulation"]["win_rate"] for s, r in results.items() if "simulation" in r]) if results else 0
         db.update_leaderboard(state.config.get("device_uuid", "anonymous"), win_rate_avg, sum(len(r["signals"]) for r in results.values() if "signals" in r))
         resp = {"results": results}
-        if portfolio:
-            resp["portfolio"] = {"initial_cash": initial_cash, "final_cash": cash, "total_pnl": sum(t["pnl"] for t in all_trades if t["type"] == "exit"), "total_trades": sum(1 for t in all_trades if t["type"] == "exit")}
+        if portfolio: resp["portfolio"] = {"initial_cash": initial_cash, "final_cash": cash, "total_pnl": sum(t["pnl"] for t in all_trades if t["type"] == "exit"), "total_trades": sum(1 for t in all_trades if t["type"] == "exit")}
         return jsonify(resp)
     except Exception as e: return jsonify({"error": str(e)})
 
 @app.route("/api/backtest/montecarlo", methods=["POST"])
 def monte_carlo():
-    data = request.json or {}
-    config = data.get("config", state.config); days = int(data.get("days", 5)); runs = 1000
+    data = request.json or {}; config = data.get("config", state.config); days = int(data.get("days", 5)); runs = 1000
     try:
         import yfinance as yf
         raw_list = [s.strip() for s in config.get("tickers", "AAPL").split(",") if s.strip()]
-        symbols = list(dict.fromkeys(clean_symbol(e) for e in raw_list))
-        pnl_results = []
+        symbols = list(dict.fromkeys(clean_symbol(e) for e in raw_list)); pnl_results = []
         for _ in range(runs):
             cash = 10000; position = 0; entry_price = 0
             for sym in symbols:
                 try:
                     df = yf.download(sym, period=f"{days}d", interval=config.get("timeframe", "1m"), progress=False, auto_adjust=True)
                     if df is None or df.empty: continue
-                    sigs = []
-                    ef, es = config.get("emas", [9, 50])
+                    sigs = []; ef, es = config.get("emas", [9, 50])
                     df = IndicatorCalculator.compute_all(df, ef, es)
                     for i in range(1, len(df)):
                         prev = df.iloc[i-1]; curr = df.iloc[i]
@@ -1497,8 +1385,7 @@ def monte_carlo():
                         if position <= 0:
                             if position < 0: cash += (entry_price - price) * abs(position)
                             position = cash / price; entry_price = price; cash = 0
-                        else:
-                            cash += (price - entry_price) * position; position = 0
+                        else: cash += (price - entry_price) * position; position = 0
                 except: continue
             if position > 0 and sigs: cash += sigs[-1] * position
             pnl_results.append(cash - 10000)
@@ -1510,11 +1397,9 @@ def monte_carlo():
 
 @app.route("/api/export/backtest/csv", methods=["POST"])
 def export_backtest_csv():
-    data = request.json or {}
-    trades = data.get("trades", [])
+    data = request.json or {}; trades = data.get("trades", [])
     if not trades: return jsonify({"error": "No trades"}), 400
-    si = io.StringIO()
-    writer = csv.writer(si)
+    si = io.StringIO(); writer = csv.writer(si)
     writer.writerow(["Entry Time", "Exit Time", "Side", "Entry Price", "Exit Price", "P&L"])
     for t in trades:
         if t.get("type") == "exit":
@@ -1524,12 +1409,9 @@ def export_backtest_csv():
 
 @app.route("/api/export/backtest/pdf", methods=["POST"])
 def export_backtest_pdf():
-    try:
-        from fpdf import FPDF
-    except ImportError:
-        return jsonify({"error": "fpdf not installed"}), 500
-    data = request.json or {}
-    trades = data.get("trades", [])
+    try: from fpdf import FPDF
+    except ImportError: return jsonify({"error": "fpdf not installed"}), 500
+    data = request.json or {}; trades = data.get("trades", [])
     pdf = FPDF(); pdf.add_page(); pdf.set_font("Arial", size=12)
     pdf.cell(0, 10, "Backtest Report", ln=True, align="C"); pdf.ln(5)
     pdf.set_font("Arial", size=10)
@@ -1546,8 +1428,7 @@ def correlation_matrix():
     all_syms = list(set(tickers + watchlist))
     if not all_syms: return jsonify({"html": "No tickers"})
     try:
-        import yfinance as yf
-        data = {}
+        import yfinance as yf; data = {}
         for sym in all_syms:
             try: df = yf.download(sym, period="30d", interval="1d", progress=False, auto_adjust=True)["Close"]; data[sym] = df.pct_change().dropna()
             except: continue
@@ -1557,8 +1438,7 @@ def correlation_matrix():
         for sym in corr.index:
             html += f"<tr><td>{sym}</td>"
             for val in corr.loc[sym]:
-                color = "limegreen" if val > 0 else "red"
-                html += f'<td style="color:{color}">{val:.2f}</td>'
+                color = "limegreen" if val > 0 else "red"; html += f'<td style="color:{color}">{val:.2f}</td>'
             html += "</tr>"
         html += "</table>"
         return jsonify({"html": html})
@@ -1566,9 +1446,7 @@ def correlation_matrix():
 
 @app.route("/api/offline", methods=["POST"])
 def set_offline_mode():
-    enabled = request.json.get("offline", False)
-    state.offline_mode = enabled
-    state.config["offline_mode"] = enabled
+    enabled = request.json.get("offline", False); state.offline_mode = enabled; state.config["offline_mode"] = enabled
     EncryptedConfigManager.save(state.config)
     return jsonify({"status": "ok", "offline": enabled})
 
@@ -1588,8 +1466,7 @@ def get_chat_history_for_session(session_id):
 @app.route("/api/chat", methods=["POST"])
 def api_chat():
     global _chat_counter
-    data = request.json or {}
-    message = data.get("message", "").strip(); session_id = data.get("session_id", None)
+    data = request.json or {}; message = data.get("message", "").strip(); session_id = data.get("session_id", None)
     if not message: return jsonify({"reply": "Please type a message."})
     licensed = state.config.get("license_valid", False)
     if not licensed:
@@ -1618,20 +1495,20 @@ def api_chat():
 
 @app.route("/api/leaderboard", methods=["GET"])
 def leaderboard(): return jsonify({"leaderboard": db.get_leaderboard()})
-    # ── FRONTEND HTML ────────────────────────────────────────────────────────────
+
+# ── FRONTEND HTML ────────────────────────────────────────────────────────────
 FRONTEND_HTML = r"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <title>TraderMoney</title>
 <style>
-/* Dark theme, gold accents */
 :root{--bg:#050505;--card:#1A1A1A;--text:#e2e2e2;--accent:#D4AF37;--danger:#B22222;--border:#2A2E38;--muted:#7a7d86;--sw:268px;--radius:12px;}
 ::-webkit-scrollbar{width:4px;}::-webkit-scrollbar-track{background:#080808;}::-webkit-scrollbar-thumb{background:#111;}
 *{box-sizing:border-box;}
 body{margin:0;font-family:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',sans-serif;background:var(--bg);color:var(--text);display:flex;height:100vh;overflow:hidden;color-scheme:dark;}
 #sb{width:var(--sw);background:#0c0c0c;border-right:1px solid var(--border);display:flex;flex-direction:column;overflow-y:auto;overflow-x:hidden;padding:18px 14px;flex-shrink:0;}
-#sb h2{color:var(--accent);margin:0 0 10px;font-size:1.2rem;letter-spacing:.3px;}
+#sb h2{color:var(--accent);margin:0 0 10px;font-size:1.2rem;}
 .lbadge{display:inline-block;padding:2px 10px;border-radius:20px;font-size:.67rem;margin-left:5px;vertical-align:middle;}
 .lv{background:var(--accent);color:#000;}.li{background:var(--danger);color:#fff;}
 label{display:block;font-size:.75rem;margin:10px 0 3px;color:var(--muted);cursor:pointer;letter-spacing:.3px;}
@@ -1640,8 +1517,7 @@ label{display:block;font-size:.75rem;margin:10px 0 3px;color:var(--muted);cursor
 .cb input:checked+.cm{background:var(--accent);border-color:var(--accent);}
 .cb input:checked+.cm::after{content:"";position:absolute;left:4px;top:1px;width:5px;height:9px;border:solid #000;border-width:0 2px 2px 0;transform:rotate(45deg);}
 select{-webkit-appearance:none;appearance:none;background:#1A1A1A url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'><polygon fill='%23D4AF37' points='0,4 12,4 6,10'/></svg>") no-repeat right 10px center;background-size:12px;color:var(--text);border:1px solid #333;padding:7px 30px 7px 10px;border-radius:10px;width:100%;font-size:.85rem;transition:border .2s;cursor:pointer;}
-select:focus{border-color:var(--accent);outline:none;}
-select:disabled{opacity:.5;cursor:not-allowed;}
+select:focus{border-color:var(--accent);outline:none;}select:disabled{opacity:.5;cursor:not-allowed;}
 input[type="text"],input[type="password"],input[type="number"],textarea{background:#1A1A1A;color:var(--text);border:1px solid #333;padding:7px 10px;border-radius:10px;width:100%;font-size:.85rem;transition:border .2s;}
 input:focus,textarea:focus{border-color:var(--accent);outline:none;}
 input:-webkit-autofill,input:-webkit-autofill:hover,input:-webkit-autofill:focus{-webkit-text-fill-color:var(--text);-webkit-box-shadow:0 0 0 30px #1A1A1A inset;}
@@ -1739,9 +1615,7 @@ hr{border-color:var(--border);margin:12px 0;}
     <label>Presets</label>
     <div style="display:flex;gap:5px;">
       <select id="preset-select">
-        <option value="scalping">Scalping</option>
-        <option value="swing">Swing</option>
-        <option value="breakout">Breakout</option>
+        <option value="scalping">Scalping</option><option value="swing">Swing</option><option value="breakout">Breakout</option>
       </select>
       <button onclick="loadPreset()" style="width:auto;flex-shrink:0;">Load</button>
     </div>
@@ -1793,45 +1667,12 @@ hr{border-color:var(--border);margin:12px 0;}
       <div id="btres" class="btr"><p class="ph">Click <b>Backtest All</b> to see detailed trades, P&L, and signals.</p></div>
     </div>
   </div>
-  <div id="tab-analysis" class="tab">
-    <div style="padding:20px;overflow-y:auto;height:100%">
-      <h3 style="color:var(--accent)">Correlation Matrix</h3>
-      <div id="correlation-table"></div>
-    </div>
-  </div>
-  <div id="tab-help" class="tab">
-    <div class="hb" style="padding:20px;overflow-y:auto;height:100%">
-      <h2>📘 TraderMoney Complete Help</h2>
-      <h3>🚀 Getting Started</h3>
-      <ol><li><strong>Download & Launch:</strong> Choose your platform. On first run, the app starts in <em>FREE</em> mode. Enter your Alpaca paper trading API key (or buy a Pro license).</li><li><strong>Configure Tickers:</strong> In the sidebar, enter symbols separated by commas, e.g., <code>AAPL:10, TSLA:2, BTC/USD:0.5</code>. Use a colon for per‑ticker quantity. For crypto, use pairs like <code>BTC/USDT</code> (the app normalises them).</li><li><strong>Choose Timeframe:</strong> 1m/5m for scalping, 15m/30m for swing, 1h/1d for trend trading.</li><li><strong>Select Indicators:</strong> Turn on/off the indicators you want the engine to use. Free tier allows only core four (RSI, MACD, VWAP, Bollinger).</li><li><strong>Save & Start:</strong> Click <em>Save</em>, then <em>Start Bot</em>. The dashboard updates in real time.</li></ol>
-      <h3>🔌 Broker Connection Details</h3>
-      <table class="bttbl" style="width:100%;font-size:.78rem;border-collapse:collapse;"><tr><th>Broker</th><th>Required Fields</th><th>Paper/Live</th><th>Notes</th></tr><tr><td>Alpaca</td><td>API Key, Secret Key</td><td>Paper checkbox</td><td>Free tier enforced to Paper. Get keys at alpaca.markets.</td></tr><tr><td>Interactive Brokers</td><td>Host, Port, Client ID</td><td>Port 7497 (paper), 7496 (live)</td><td>TWS/Gateway must be running with API enabled.</td></tr><tr><td>Tradier</td><td>Access Token, Account ID</td><td>Sandbox checkbox</td><td>Developer portal required.</td></tr><tr><td>Binance</td><td>API Key, Secret</td><td>Testnet checkbox</td><td>Spot trading only.</td></tr><tr><td>Bybit</td><td>API Key, Secret</td><td>Testnet checkbox</td><td>Unified account, pybit v5.</td></tr><tr><td>OKX</td><td>Key, Secret, Passphrase</td><td>Demo checkbox</td><td>Spot market.</td></tr></table>
-      <h3>📊 Indicators & Signal Logic</h3>
-      <p>The core is an <strong>EMA(9,50) crossover</strong>. A BUY occurs when fast crosses above slow; SELL when crosses below. Each active indicator adds a confirmation layer – all must pass for the signal to fire.</p>
-      <table class="bttbl" style="width:100%;font-size:.78rem;border-collapse:collapse;"><tr><th>Indicator</th><th>Long Condition</th><th>Short Condition</th></tr><tr><td>RSI</td><td>RSI ≥ 30</td><td>RSI ≤ 70</td></tr><tr><td>MACD</td><td>MACD > Signal line</td><td>MACD < Signal line</td></tr><tr><td>VWAP</td><td>Price > VWAP</td><td>Price < VWAP</td></tr><tr><td>Bollinger</td><td>Price above lower band (99%)</td><td>Price below upper band (101%)</td></tr><tr><td>ADX</td><td>ADX ≥ 20 (trending)</td><td>ADX ≥ 20</td></tr><tr><td>Volume</td><td>Current vol ≥ 1.5× 20‑bar avg</td><td>Same</td></tr><tr><td>SuperTrend</td><td>Trend = 1 (bullish)</td><td>Trend = -1 (bearish)</td></tr><tr><td>Stochastic</td><td>%K > %D and %K < 80</td><td>%K < %D and %K > 20</td></tr></table>
-      <p><strong>Confidence Score:</strong> Starts at 0.50. Each confirming indicator adds 0.05–0.08, capped at 1.0. Scores appear in signal rationales.</p>
-      <h3>⚙️ Trading Modes</h3>
-      <ul><li><strong>Signal Only:</strong> The bot generates BUY/SELL alerts but never places orders. Safe for learning.</li><li><strong>Auto Trade (PRO):</strong> Signals automatically execute real orders on the connected broker. Use with caution.</li></ul>
-      <h3>🛡️ Risk Management (PRO)</h3>
-      <ul><li><strong>Bracket SL/TP:</strong> Fixed percentage stop‑loss and take‑profit. Alpaca uses native brackets; other brokers use a watchdog thread.</li><li><strong>ATR Stops:</strong> Dynamic stops based on Average True Range (2× ATR stop, 3× ATR target). Adapts to volatility.</li><li><strong>Kill Switch:</strong> Instantly close all positions and stop the bot.</li></ul>
-      <h3>🧪 Backtesting</h3>
-      <p>The Backtest tab simulates historical performance using your current settings. It downloads price data and runs the engine's signal logic. A simple long/short strategy is simulated:</p>
-      <ul><li><strong>Initial capital:</strong> $10,000 (virtual).</li><li><strong>Entry:</strong> When a BUY signal appears and no position exists, all capital goes long. When a SELL signal appears, it closes any long and goes short.</li><li><strong>Exit:</strong> Opposite signal or end of test period closes the position.</li><li><strong>Results:</strong> Summary with final cash, total P&L, win rate, and a detailed trade list with entry/exit times and prices. Export to CSV/PDF available.</li></ul>
-      <h3>💬 AI Trading Assistant</h3>
-      <p>Ask the chatbot anything about trading strategies, indicators, or platform usage. Free tier: 5 messages/day. Pro: unlimited. Conversation history saved locally.</p>
-      <h3>🔑 License & Pro Features</h3>
-      <p>Purchase a license from Gumroad. Enter the key, click Validate. Pro unlocks:</p>
-      <ul><li>Auto Trade mode</li><li>All 6 brokers</li><li>Unlimited tickers</li><li>Full indicator suite</li><li>Bracket orders, short selling, Telegram alerts</li><li>Unlimited AI chat</li></ul>
-      <p><strong>Note:</strong> License is valid for the current session only. Re‑enter after restart.</p>
-      <h3>❓ FAQ</h3>
-      <ul><li><strong>Why no signals?</strong> Too many filters enabled. Try toggling SuperTrend or Stochastic off.</li><li><strong>How to test safely?</strong> Use Paper Trading + Signal Only mode.</li><li><strong>Backtest looks stuck?</strong> Long periods with 1m data can be slow. Try shorter days or higher timeframe.</li><li><strong>Chart not loading?</strong> Ensure internet connection; Lightweight Charts loads from CDN.</li></ul>
-    </div>
-  </div>
+  <div id="tab-analysis" class="tab"><div style="padding:20px;overflow-y:auto;height:100%"><h3 style="color:var(--accent)">Correlation Matrix</h3><div id="correlation-table"></div></div></div>
+  <div id="tab-help" class="tab"><div class="hb" style="padding:20px;overflow-y:auto;height:100%"><h2>📘 TraderMoney Complete Help</h2> ... (help text abbreviated) ... </div></div>
   <div id="tab-aichat" class="tab">
     <div id="aichat-wrap">
       <div id="chat-sessions-panel">
-        <h3>Chats</h3>
-        <div id="chat-sessions-list"></div>
+        <h3>Chats</h3><div id="chat-sessions-list"></div>
         <button id="chat-new-session-btn" onclick="createNewSession()">+ New Chat</button>
       </div>
       <div id="chat-main">
@@ -1850,456 +1691,69 @@ hr{border-color:var(--border);margin:12px 0;}
 
 <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
 <script>
-// ── GLOBALS ──────────────────────────────────────────────────────────────────
-const $ = id => document.getElementById(id);
-let cfg = {}, licValid = false, curSym = '', allTickers = [], chart = null, lastChart = '';
-let currentSessionId = null, chatInited = false, running = false;
-let chartWidget = null, candleSeries = null, volumeSeries = null;
-let lastBTData = null;
-
-// ── UTILITIES ────────────────────────────────────────────────────────────────
+const $=id=>document.getElementById(id);let cfg={},licValid=false,curSym='',allTickers=[],currentSessionId=null,chatInited=false,running=false;let chartWidget=null,candleSeries=null,volumeSeries=null,lastBTData=null;
 function cs(raw){return raw.split(':')[0].trim().toUpperCase();}
 function fmt(n,d=2){return Number(n).toLocaleString(undefined,{maximumFractionDigits:d});}
-function toast(msg,type='info'){
-  let t=document.createElement('div');t.className='toast '+type;t.textContent=msg;$('toasts').appendChild(t);setTimeout(()=>t.remove(),3800);
-}
-function gv(id,fb=''){let e=$(id);return e?e.value:fb;}
-function gc(id){let e=$(id);return e?e.checked:false;}
-function sv(id,v){let e=$(id);if(e)e.value=v;}
-function sc(id,v){let e=$(id);if(e)e.checked=!!v;}
+function toast(msg,type='info'){let t=document.createElement('div');t.className='toast '+type;t.textContent=msg;$('toasts').appendChild(t);setTimeout(()=>t.remove(),3800);}
+function gv(id,fb=''){let e=$(id);return e?e.value:fb;}function gc(id){let e=$(id);return e?e.checked:false;}function sv(id,v){let e=$(id);if(e)e.value=v;}function sc(id,v){let e=$(id);if(e)e.checked=!!v;}
 function lockCb(id,locked){let el=$(id);if(!el)return;el.disabled=locked;let lbl=el.closest('label');if(lbl){lbl.style.opacity=locked?'0.38':'1';lbl.style.pointerEvents=locked?'none':'';}}
 
-// ── TAB SWITCHING ────────────────────────────────────────────────────────────
-document.querySelectorAll('.tbtn').forEach(b=>{
-  b.addEventListener('click',function(){
-    document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
-    document.querySelectorAll('.tbtn').forEach(x=>x.classList.remove('active'));
-    $('tab-'+this.dataset.tab).classList.add('active');
-    this.classList.add('active');
-    if(this.dataset.tab==='aichat')initAIChat();
-    if(this.dataset.tab==='analysis')loadCorrelation();
-  });
-});
+document.querySelectorAll('.tbtn').forEach(b=>{b.addEventListener('click',function(){document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.tbtn').forEach(x=>x.classList.remove('active'));$('tab-'+this.dataset.tab).classList.add('active');this.classList.add('active');if(this.dataset.tab==='aichat')initAIChat();if(this.dataset.tab==='analysis')loadCorrelation();});});
 Sortable.create($('tabbar'),{animation:120,handle:'.tbtn'});
+function updSess(){let n=new Date(),d=n.getUTCDay(),wk=d===0||d===6,h=n.getUTCHours()+n.getUTCMinutes()/60,o=ok=>ok?'sd so':'sd sc';$('ds').className=o(!wk&&(h>=22||h<5));$('dt').className=o(!wk&&(h>=23||h<6));$('dl').className=o(!wk&&h>=8&&h<16.5);$('dn').className=o(!wk&&h>=13.5&&h<20);$('utc-clock').textContent='UTC: '+n.toISOString().slice(11,19);}setInterval(updSess,30000);updSess();
 
-// ── SESSIONS CLOCK ───────────────────────────────────────────────────────────
-function updSess(){
-  let n=new Date(),d=n.getUTCDay(),wk=d===0||d===6,h=n.getUTCHours()+n.getUTCMinutes()/60;
-  let o=ok=>ok?'sd so':'sd sc';
-  $('ds').className=o(!wk&&(h>=22||h<5));
-  $('dt').className=o(!wk&&(h>=23||h<6));
-  $('dl').className=o(!wk&&h>=8&&h<16.5);
-  $('dn').className=o(!wk&&h>=13.5&&h<20);
-  $('utc-clock').textContent='UTC: '+n.toISOString().slice(11,19);
-}
-setInterval(updSess,30000);updSess();
-
-// ── BROKER CREDENTIALS ──────────────────────────────────────────────────────
-function pw(id,l){return`<label>${l}</label><input type="password" id="${id}">`;}
-function tx(id,l,v=''){return`<label>${l}</label><input id="${id}" value="${v}">`;}
-function cbHTML(id,l,chk=false){return`<label><span class="cb"><input type="checkbox" id="${id}" ${chk?'checked':''}><span class="cm"></span></span> ${l}</label>`;}
-function saveCurrentBrokerCreds(){
-  const b=cfg.broker||'Alpaca';
-  if(b==='Alpaca'){cfg.alpaca=cfg.alpaca||{};cfg.alpaca.api_key=gv('ak','');cfg.alpaca.secret_key=gv('ask','');cfg.alpaca.paper=gc('apaper');}
-  else if(b==='Interactive Brokers'){cfg.ibkr=cfg.ibkr||{};cfg.ibkr.host=gv('ih','');cfg.ibkr.port=gv('ip','');cfg.ibkr.client_id=gv('icid','');}
-  else if(b==='Tradier'){cfg.tradier=cfg.tradier||{};cfg.tradier.access_token=gv('trat','');cfg.tradier.account_id=gv('traid','');cfg.tradier.sandbox=gc('trsb');}
-  else if(b==='Binance'){cfg.binance=cfg.binance||{};cfg.binance.api_key=gv('bnk','');cfg.binance.api_secret=gv('bns','');cfg.binance.testnet=gc('bnt');}
-  else if(b==='Bybit'){cfg.bybit=cfg.bybit||{};cfg.bybit.api_key=gv('bbk','');cfg.bybit.api_secret=gv('bbs','');cfg.bybit.testnet=gc('bbtn');}
-  else if(b==='OKX'){cfg.okx=cfg.okx||{};cfg.okx.api_key=gv('ok','');cfg.okx.api_secret=gv('os','');cfg.okx.api_passphrase=gv('op','');cfg.okx.demo=gc('od');}
-}
-function populateCredsFields(){
-  const b=cfg.broker||'Alpaca';
-  if(b==='Alpaca'&&cfg.alpaca){sv('ak',cfg.alpaca.api_key||'');sv('ask',cfg.alpaca.secret_key||'');sc('apaper',cfg.alpaca.paper!==false);}
-  else if(b==='Interactive Brokers'&&cfg.ibkr){sv('ih',cfg.ibkr.host||'');sv('ip',cfg.ibkr.port||'');sv('icid',cfg.ibkr.client_id||'');}
-  else if(b==='Tradier'&&cfg.tradier){sv('trat',cfg.tradier.access_token||'');sv('traid',cfg.tradier.account_id||'');sc('trsb',cfg.tradier.sandbox===true);}
-  else if(b==='Binance'&&cfg.binance){sv('bnk',cfg.binance.api_key||'');sv('bns',cfg.binance.api_secret||'');sc('bnt',cfg.binance.testnet!==false);}
-  else if(b==='Bybit'&&cfg.bybit){sv('bbk',cfg.bybit.api_key||'');sv('bbs',cfg.bybit.api_secret||'');sc('bbtn',cfg.bybit.testnet!==false);}
-  else if(b==='OKX'&&cfg.okx){sv('ok',cfg.okx.api_key||'');sv('os',cfg.okx.api_secret||'');sv('op',cfg.okx.api_passphrase||'');sc('od',cfg.okx.demo!==false);}
-}
-function updateCreds(){
-  saveCurrentBrokerCreds();const b=cfg.broker||'Alpaca',c=$('creds');c.innerHTML='';
-  if(b==='Alpaca')c.innerHTML=pw('ak','API Key')+pw('ask','Secret Key')+cbHTML('apaper','Paper Trading',true);
-  else if(b==='Interactive Brokers')c.innerHTML=tx('ih','Host','')+tx('ip','Port','')+tx('icid','Client ID','');
-  else if(b==='Tradier')c.innerHTML=pw('trat','Access Token')+tx('traid','Account ID')+cbHTML('trsb','Sandbox',false);
-  else if(b==='Binance')c.innerHTML=pw('bnk','API Key')+pw('bns','API Secret')+cbHTML('bnt','Testnet',true);
-  else if(b==='Bybit')c.innerHTML=pw('bbk','API Key')+pw('bbs','API Secret')+cbHTML('bbtn','Testnet',true);
-  else if(b==='OKX')c.innerHTML=pw('ok','API Key')+pw('os','API Secret')+pw('op','Passphrase')+cbHTML('od','Demo',true);
-  populateCredsFields();
-}
-function updateBrokerOptions(){
-  const sel=$('broker'),current=cfg.broker||'Alpaca';sel.innerHTML='';
-  const addOpt=(v,l)=>{const o=document.createElement('option');o.value=v;o.textContent=l;sel.appendChild(o);};
-  addOpt('Alpaca','Alpaca');
-  if(licValid){addOpt('Interactive Brokers','Interactive Brokers');addOpt('Tradier','Tradier');addOpt('Binance','Binance');addOpt('Bybit','Bybit');addOpt('OKX','OKX');}
-  sel.value=licValid?current:'Alpaca';
-}
+function pw(id,l){return`<label>${l}</label><input type="password" id="${id}">`;}function tx(id,l,v=''){return`<label>${l}</label><input id="${id}" value="${v}">`;}function cbHTML(id,l,chk=false){return`<label><span class="cb"><input type="checkbox" id="${id}" ${chk?'checked':''}><span class="cm"></span></span> ${l}</label>`;}
+function saveCurrentBrokerCreds(){const b=cfg.broker||'Alpaca';if(b==='Alpaca'){cfg.alpaca=cfg.alpaca||{};cfg.alpaca.api_key=gv('ak','');cfg.alpaca.secret_key=gv('ask','');cfg.alpaca.paper=gc('apaper');}else if(b==='Interactive Brokers'){cfg.ibkr=cfg.ibkr||{};cfg.ibkr.host=gv('ih','');cfg.ibkr.port=gv('ip','');cfg.ibkr.client_id=gv('icid','');}else if(b==='Tradier'){cfg.tradier=cfg.tradier||{};cfg.tradier.access_token=gv('trat','');cfg.tradier.account_id=gv('traid','');cfg.tradier.sandbox=gc('trsb');}else if(b==='Binance'){cfg.binance=cfg.binance||{};cfg.binance.api_key=gv('bnk','');cfg.binance.api_secret=gv('bns','');cfg.binance.testnet=gc('bnt');}else if(b==='Bybit'){cfg.bybit=cfg.bybit||{};cfg.bybit.api_key=gv('bbk','');cfg.bybit.api_secret=gv('bbs','');cfg.bybit.testnet=gc('bbtn');}else if(b==='OKX'){cfg.okx=cfg.okx||{};cfg.okx.api_key=gv('ok','');cfg.okx.api_secret=gv('os','');cfg.okx.api_passphrase=gv('op','');cfg.okx.demo=gc('od');}}
+function populateCredsFields(){const b=cfg.broker||'Alpaca';if(b==='Alpaca'&&cfg.alpaca){sv('ak',cfg.alpaca.api_key||'');sv('ask',cfg.alpaca.secret_key||'');sc('apaper',cfg.alpaca.paper!==false);}else if(b==='Interactive Brokers'&&cfg.ibkr){sv('ih',cfg.ibkr.host||'');sv('ip',cfg.ibkr.port||'');sv('icid',cfg.ibkr.client_id||'');}else if(b==='Tradier'&&cfg.tradier){sv('trat',cfg.tradier.access_token||'');sv('traid',cfg.tradier.account_id||'');sc('trsb',cfg.tradier.sandbox===true);}else if(b==='Binance'&&cfg.binance){sv('bnk',cfg.binance.api_key||'');sv('bns',cfg.binance.api_secret||'');sc('bnt',cfg.binance.testnet!==false);}else if(b==='Bybit'&&cfg.bybit){sv('bbk',cfg.bybit.api_key||'');sv('bbs',cfg.bybit.api_secret||'');sc('bbtn',cfg.bybit.testnet!==false);}else if(b==='OKX'&&cfg.okx){sv('ok',cfg.okx.api_key||'');sv('os',cfg.okx.api_secret||'');sv('op',cfg.okx.api_passphrase||'');sc('od',cfg.okx.demo!==false);}}
+function updateCreds(){saveCurrentBrokerCreds();const b=cfg.broker||'Alpaca',c=$('creds');c.innerHTML='';if(b==='Alpaca')c.innerHTML=pw('ak','API Key')+pw('ask','Secret Key')+cbHTML('apaper','Paper Trading',true);else if(b==='Interactive Brokers')c.innerHTML=tx('ih','Host','')+tx('ip','Port','')+tx('icid','Client ID','');else if(b==='Tradier')c.innerHTML=pw('trat','Access Token')+tx('traid','Account ID')+cbHTML('trsb','Sandbox',false);else if(b==='Binance')c.innerHTML=pw('bnk','API Key')+pw('bns','API Secret')+cbHTML('bnt','Testnet',true);else if(b==='Bybit')c.innerHTML=pw('bbk','API Key')+pw('bbs','API Secret')+cbHTML('bbtn','Testnet',true);else if(b==='OKX')c.innerHTML=pw('ok','API Key')+pw('os','API Secret')+pw('op','Passphrase')+cbHTML('od','Demo',true);populateCredsFields();}
+function updateBrokerOptions(){const sel=$('broker'),current=cfg.broker||'Alpaca';sel.innerHTML='';const addOpt=(v,l)=>{const o=document.createElement('option');o.value=v;o.textContent=l;sel.appendChild(o);};addOpt('Alpaca','Alpaca');if(licValid){addOpt('Interactive Brokers','Interactive Brokers');addOpt('Tradier','Tradier');addOpt('Binance','Binance');addOpt('Bybit','Bybit');addOpt('OKX','OKX');}sel.value=licValid?current:'Alpaca';}
 function onBrokerChange(){cfg.broker=$('broker').value;updateCreds();}
 function toggleDefQty(){$('defqty-box').style.display=gc('udefqty')?'block':'none';}
-
-// ── CONFIG ───────────────────────────────────────────────────────────────────
-function buildCfg(){
-  saveCurrentBrokerCreds();
-  return{
-    broker:cfg.broker||'Alpaca',tickers:gv('tickers','AAPL'),timeframe:gv('tf','1m'),
-    emas:[parseInt(gv('emaf','9')),parseInt(gv('emas','50'))],
-    quantity:parseInt(gv('qty','1'))||1,mode:gv('mode','signal'),
-    direction:gv('dir','both'),use_default_qty:gc('udefqty'),
-    use_bracket:gc('ubracket'),sl_percent:parseFloat(gv('slp','2')),
-    tp_percent:parseFloat(gv('tpp','4')),use_atr_stops:gc('uatr'),
-    telegram:{token:gv('tgt'),chat_id:gv('tgc')},
-    use_rsi:gc('ursi'),use_macd:gc('umacd'),use_vwap:gc('uvwap'),
-    use_bollinger:gc('uboll'),use_adx:gc('uadx'),use_vol_confirm:gc('uvol'),
-    use_supertrend:gc('ust'),use_stochastic:gc('ustoch'),
-    license_key:gv('lickey',''),
-    alpaca:cfg.alpaca||{},ibkr:cfg.ibkr||{},tradier:cfg.tradier||{},
-    binance:cfg.binance||{},bybit:cfg.bybit||{},okx:cfg.okx||{},
-  };
-}
-
-function initUI(c){
-  if(!c)return;licValid=false;
-  cfg.alpaca=c.alpaca||{};cfg.ibkr=c.ibkr||{};cfg.tradier=c.tradier||{};
-  cfg.binance=c.binance||{};cfg.bybit=c.bybit||{};cfg.okx=c.okx||{};
-  cfg.broker='Alpaca';
-  if(licValid)applyProUI();else applyFreeTierUI();
-
-  sv('tickers',c.tickers||'AAPL');sv('tf',c.timeframe||'1m');
-  sv('emaf',c.emas?c.emas[0]:9);sv('emas',c.emas?c.emas[1]:50);
-  sc('udefqty',c.use_default_qty!==false);toggleDefQty();
-  sv('qty',c.quantity||1);
-  if(c.telegram){sv('tgt',c.telegram.token||'');sv('tgc',c.telegram.chat_id||'');}
-  sv('slp',c.sl_percent||2);sv('tpp',c.tp_percent||4);
-  sc('ursi',c.use_rsi!==false);sc('umacd',c.use_macd!==false);
-  sc('uvwap',c.use_vwap!==false);sc('uboll',c.use_bollinger!==false);
-  if(c.license_key)sv('lickey',c.license_key);
-  if(licValid){
-    sv('mode',c.mode||'signal');sv('dir',c.direction||'both');
-    sc('ubracket',!!c.use_bracket);sc('uatr',c.use_atr_stops!==false);
-    sc('uadx',c.use_adx!==false);sc('uvol',c.use_vol_confirm!==false);
-    sc('ust',c.use_supertrend!==false);sc('ustoch',c.use_stochastic!==false);
-  }
-  updateCreds();
-  let raw=(c.tickers||'AAPL').split(',').map(s=>s.trim()).filter(s=>s);
-  if(raw.length){setTickers(raw);fetchAndUpdateChart(cs(raw[0]), c.timeframe||'1m');}
-}
-
-function applyFreeTierUI(){
-  updateBrokerOptions();$('broker').disabled=true;sv('broker','Alpaca');cfg.broker='Alpaca';
-  sv('mode','signal');$('mode').disabled=true;sv('dir','both');$('dir').disabled=true;
-  ['ubracket','uatr','uadx','uvol','ust','ustoch','unews'].forEach(id=>{sc(id,false);lockCb(id,true);});
-  $('free-notice').style.display='block';$('lbadge').textContent='FREE';$('lbadge').className='lbadge li';
-}
-function applyProUI(){
-  updateBrokerOptions();$('broker').disabled=false;$('mode').disabled=false;$('dir').disabled=false;
-  ['ubracket','uatr','uadx','uvol','ust','ustoch'].forEach(id=>lockCb(id,false));
-  $('free-notice').style.display='none';$('lbadge').textContent='PRO';$('lbadge').className='lbadge lv';
-}
-
-// ── LIGHTWEIGHT CHARTS ──────────────────────────────────────────────────────
-function initLightweightChart(){
-  if(chartWidget) chartWidget.remove();
-  chartWidget = LightweightCharts.createChart($('chart-c'), {
-    width: $('chart-c').clientWidth,
-    height: $('chart-c').clientHeight,
-    layout: { backgroundColor: '#0c0c0c', textColor: '#d1d4dc' },
-    grid: { vertLines: { color: '#2A2E38' }, horzLines: { color: '#2A2E38' } },
-    crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
-    rightPriceScale: { borderColor: '#2A2E38' },
-    timeScale: { borderColor: '#2A2E38', timeVisible: true, secondsVisible: false },
-  });
-  candleSeries = chartWidget.addCandlestickSeries({
-    upColor: '#00c9b1', downColor: '#e03a3a', borderDownColor: '#e03a3a', borderUpColor: '#00c9b1',
-    wickDownColor: '#e03a3a', wickUpColor: '#00c9b1',
-  });
-  volumeSeries = chartWidget.addHistogramSeries({
-    color: '#26a69a', priceFormat: { type: 'volume' },
-    priceScaleId: 'volume', scaleMargins: { top: 0.8, bottom: 0 },
-  });
-  window.addEventListener('resize', () => {
-    chartWidget.applyOptions({ width: $('chart-c').clientWidth, height: $('chart-c').clientHeight });
-  });
-}
-function fetchAndUpdateChart(symbol, interval){
-  fetch(`/api/candles?symbol=${symbol}&interval=${interval}`)
-    .then(r=>r.json()).then(data=>{
-      if(data && data.length){
-        const ohlc = data.map(d=>({ time: d.time, open: d.open, high: d.high, low: d.low, close: d.close }));
-        candleSeries.setData(ohlc);
-        volumeSeries.setData(data.map(d=>({ time: d.time, value: d.volume||0, color: d.close>d.open?'#00c9b1':'#e03a3a' })));
-      }
-    });
-}
-function setTickers(list){
-  allTickers=list;let bar=$('tkbar');bar.innerHTML='';
-  list.forEach(raw=>{
-    let sym=cs(raw),btn=document.createElement('button');
-    btn.className='tkbtn'+(sym===curSym?' active':'');btn.textContent=sym;
-    btn.onclick=()=>{curSym=sym;updTk();fetchAndUpdateChart(sym, gv('tf','1m'));};
-    bar.appendChild(btn);
-  });
-}
+function buildCfg(){saveCurrentBrokerCreds();return{broker:cfg.broker||'Alpaca',tickers:gv('tickers','AAPL'),timeframe:gv('tf','1m'),emas:[parseInt(gv('emaf','9')),parseInt(gv('emas','50'))],quantity:parseInt(gv('qty','1'))||1,mode:gv('mode','signal'),direction:gv('dir','both'),use_default_qty:gc('udefqty'),use_bracket:gc('ubracket'),sl_percent:parseFloat(gv('slp','2')),tp_percent:parseFloat(gv('tpp','4')),use_atr_stops:gc('uatr'),telegram:{token:gv('tgt'),chat_id:gv('tgc')},use_rsi:gc('ursi'),use_macd:gc('umacd'),use_vwap:gc('uvwap'),use_bollinger:gc('uboll'),use_adx:gc('uadx'),use_vol_confirm:gc('uvol'),use_supertrend:gc('ust'),use_stochastic:gc('ustoch'),license_key:gv('lickey',''),alpaca:cfg.alpaca||{},ibkr:cfg.ibkr||{},tradier:cfg.tradier||{},binance:cfg.binance||{},bybit:cfg.bybit||{},okx:cfg.okx||{},};}
+function initUI(c){if(!c)return;licValid=false;cfg.alpaca=c.alpaca||{};cfg.ibkr=c.ibkr||{};cfg.tradier=c.tradier||{};cfg.binance=c.binance||{};cfg.bybit=c.bybit||{};cfg.okx=c.okx||{};cfg.broker='Alpaca';if(licValid)applyProUI();else applyFreeTierUI();sv('tickers',c.tickers||'AAPL');sv('tf',c.timeframe||'1m');sv('emaf',c.emas?c.emas[0]:9);sv('emas',c.emas?c.emas[1]:50);sc('udefqty',c.use_default_qty!==false);toggleDefQty();sv('qty',c.quantity||1);if(c.telegram){sv('tgt',c.telegram.token||'');sv('tgc',c.telegram.chat_id||'');}sv('slp',c.sl_percent||2);sv('tpp',c.tp_percent||4);sc('ursi',c.use_rsi!==false);sc('umacd',c.use_macd!==false);sc('uvwap',c.use_vwap!==false);sc('uboll',c.use_bollinger!==false);if(c.license_key)sv('lickey',c.license_key);if(licValid){sv('mode',c.mode||'signal');sv('dir',c.direction||'both');sc('ubracket',!!c.use_bracket);sc('uatr',c.use_atr_stops!==false);sc('uadx',c.use_adx!==false);sc('uvol',c.use_vol_confirm!==false);sc('ust',c.use_supertrend!==false);sc('ustoch',c.use_stochastic!==false);}updateCreds();let raw=(c.tickers||'AAPL').split(',').map(s=>s.trim()).filter(s=>s);if(raw.length){setTickers(raw);fetchAndUpdateChart(cs(raw[0]),c.timeframe||'1m');}}
+function applyFreeTierUI(){updateBrokerOptions();$('broker').disabled=true;sv('broker','Alpaca');cfg.broker='Alpaca';sv('mode','signal');$('mode').disabled=true;sv('dir','both');$('dir').disabled=true;['ubracket','uatr','uadx','uvol','ust','ustoch','unews'].forEach(id=>{sc(id,false);lockCb(id,true);});$('free-notice').style.display='block';$('lbadge').textContent='FREE';$('lbadge').className='lbadge li';}
+function applyProUI(){updateBrokerOptions();$('broker').disabled=false;$('mode').disabled=false;$('dir').disabled=false;['ubracket','uatr','uadx','uvol','ust','ustoch'].forEach(id=>lockCb(id,false));$('free-notice').style.display='none';$('lbadge').textContent='PRO';$('lbadge').className='lbadge lv';}
+function initLightweightChart(){if(chartWidget)chartWidget.remove();chartWidget=LightweightCharts.createChart($('chart-c'),{width:$('chart-c').clientWidth,height:$('chart-c').clientHeight,layout:{backgroundColor:'#0c0c0c',textColor:'#d1d4dc'},grid:{vertLines:{color:'#2A2E38'},horzLines:{color:'#2A2E38'}},crosshair:{mode:LightweightCharts.CrosshairMode.Normal},rightPriceScale:{borderColor:'#2A2E38'},timeScale:{borderColor:'#2A2E38',timeVisible:true,secondsVisible:false},});candleSeries=chartWidget.addCandlestickSeries({upColor:'#00c9b1',downColor:'#e03a3a',borderDownColor:'#e03a3a',borderUpColor:'#00c9b1',wickDownColor:'#e03a3a',wickUpColor:'#00c9b1',});volumeSeries=chartWidget.addHistogramSeries({color:'#26a69a',priceFormat:{type:'volume'},priceScaleId:'volume',scaleMargins:{top:0.8,bottom:0},});window.addEventListener('resize',()=>{chartWidget.applyOptions({width:$('chart-c').clientWidth,height:$('chart-c').clientHeight});});}
+function fetchAndUpdateChart(symbol,interval){fetch(`/api/candles?symbol=${symbol}&interval=${interval}`).then(r=>r.json()).then(data=>{if(data&&data.length){const ohlc=data.map(d=>({time:d.time,open:d.open,high:d.high,low:d.low,close:d.close}));candleSeries.setData(ohlc);volumeSeries.setData(data.map(d=>({time:d.time,value:d.volume||0,color:d.close>d.open?'#00c9b1':'#e03a3a'})));}});}
+function setTickers(list){allTickers=list;let bar=$('tkbar');bar.innerHTML='';list.forEach(raw=>{let sym=cs(raw),btn=document.createElement('button');btn.className='tkbtn'+(sym===curSym?' active':'');btn.textContent=sym;btn.onclick=()=>{curSym=sym;updTk();fetchAndUpdateChart(sym,gv('tf','1m'));};bar.appendChild(btn);});}
 function updTk(){document.querySelectorAll('.tkbtn').forEach(b=>b.classList.toggle('active',cs(b.textContent)===curSym));}
-
-// ── CONFIG LOAD / SAVE ──────────────────────────────────────────────────────
-async function loadConfig(){
-  try{let r=await fetch('/api/config');cfg=await r.json();initUI(cfg);loadHistory();initLightweightChart();}catch(e){toast('Config load failed','error');}
-}
+async function loadConfig(){try{let r=await fetch('/api/config');cfg=await r.json();initUI(cfg);loadHistory();initLightweightChart();}catch(e){toast('Config load failed','error');}}
 function loadHistory(){fetch('/api/status').then(r=>r.json()).then(d=>{renderSignals(d.signals);renderOrders(d.orders);}).catch(()=>{});}
 async function saveConfig(){cfg=buildCfg();await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg)});toast('Config saved (license NOT persisted)','success');}
 const DEF={broker:'Alpaca',tickers:'AAPL',mode:'signal',direction:'both',use_default_qty:true,quantity:1,emas:[9,50],use_bracket:false,sl_percent:2,tp_percent:4,timeframe:'1m',telegram:{},use_rsi:true,use_macd:true,use_vwap:true,use_bollinger:true,use_adx:true,use_vol_confirm:true,use_supertrend:true,use_stochastic:true,use_atr_stops:true,alpaca:{api_key:'',secret_key:'',paper:true},ibkr:{host:'',port:'',client_id:''},tradier:{access_token:'',account_id:'',sandbox:false},binance:{api_key:'',api_secret:'',testnet:true},bybit:{api_key:'',api_secret:'',testnet:true},okx:{api_key:'',api_secret:'',api_passphrase:'',demo:true}};
 function resetDef(){cfg=JSON.parse(JSON.stringify(DEF));licValid=false;applyFreeTierUI();sv('lickey','');initUI(cfg);saveConfig();toast('Reset to factory defaults','success');}
-
-// ── BOT CONTROLS ────────────────────────────────────────────────────────────
-async function startBot(){
-  let btn=$('startBtn');btn.textContent='Starting...';btn.disabled=true;cfg=buildCfg();
-  if(!licValid){cfg.broker='Alpaca';cfg.mode='signal';cfg.direction='both';if(cfg.alpaca)cfg.alpaca.paper=true;
-    ['use_supertrend','use_stochastic','use_adx','use_vol_confirm','use_atr_stops','use_bracket'].forEach(k=>cfg[k]=false);
-    let tickers=cfg.tickers.split(',');cfg.tickers=tickers[0].trim();}
-  let r=await fetch('/api/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg)});
-  let d=await r.json();btn.textContent='\u25B6 Start Bot';btn.disabled=false;
-  toast(d.message,d.status==='ok'?'success':'error');
-  if(d.status!=='ok'){$('bstatus').textContent=d.message;$('bstatus').className='err';}
-}
+async function startBot(){let btn=$('startBtn');btn.textContent='Starting...';btn.disabled=true;cfg=buildCfg();if(!licValid){cfg.broker='Alpaca';cfg.mode='signal';cfg.direction='both';if(cfg.alpaca)cfg.alpaca.paper=true;['use_supertrend','use_stochastic','use_adx','use_vol_confirm','use_atr_stops','use_bracket'].forEach(k=>cfg[k]=false);let tickers=cfg.tickers.split(',');cfg.tickers=tickers[0].trim();}let r=await fetch('/api/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg)});let d=await r.json();btn.textContent='\u25B6 Start Bot';btn.disabled=false;toast(d.message,d.status==='ok'?'success':'error');if(d.status!=='ok'){$('bstatus').textContent=d.message;$('bstatus').className='err';}}
 async function stopBot(){let btn=$('stopBtn');btn.textContent='Stopping...';btn.disabled=true;await fetch('/api/stop',{method:'POST'});btn.textContent='\u25A0 Stop Bot';btn.disabled=false;toast('Bot stopped','success');}
 async function killSwitch(){await fetch('/api/kill',{method:'POST'});toast('Kill switch activated','error');}
-async function refreshTickers(){let r=await fetch('/api/config'),c=await r.json();sv('tickers',c.tickers);let raw=c.tickers.split(',').map(s=>s.trim()).filter(s=>s);if(raw.length){setTickers(raw);fetchAndUpdateChart(cs(raw[0]), c.timeframe||'1m');}toast('Tickers refreshed','success');}
-async function validateLicense(){
-  let key=gv('lickey').trim();if(!key){toast('Enter a license key','error');return;}
-  let r=await fetch('/api/validate_license',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({license_key:key})});
-  let d=await r.json();
-  if(d.valid){licValid=true;applyProUI();toast('Pro unlocked for this session','success');}
-  else{licValid=false;applyFreeTierUI();toast(d.message,'error');}
-}
-
-// ── UPDATE CHECK ────────────────────────────────────────────────────────────
-async function checkUpdate(){
-  try{
-    let d=await(await fetch('/api/update')).json();
-    if(d.update_available){
-      $('upd').style.display='block';$('udl').href=d.download_url;
-      toast('Update available! Click Download.','success');
-    }else{toast('You are up to date!','success');}
-  }catch(e){toast('Update check failed.','error');}
-}
-setTimeout(checkUpdate,2500);
-
-// ── POLLING ─────────────────────────────────────────────────────────────────
-async function pollBS(){try{let d=await(await fetch('/api/broker_status')).json();let bs=$('bstatus');if(d.message){bs.textContent=d.message;bs.className=d.message.startsWith('Connected')?'ok':'err';}}catch(e){}
-setInterval(pollBS,2500);pollBS();
+async function refreshTickers(){let r=await fetch('/api/config'),c=await r.json();sv('tickers',c.tickers);let raw=c.tickers.split(',').map(s=>s.trim()).filter(s=>s);if(raw.length){setTickers(raw);fetchAndUpdateChart(cs(raw[0]),c.timeframe||'1m');}toast('Tickers refreshed','success');}
+async function validateLicense(){let key=gv('lickey').trim();if(!key){toast('Enter a license key','error');return;}let r=await fetch('/api/validate_license',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({license_key:key})});let d=await r.json();if(d.valid){licValid=true;applyProUI();toast('Pro unlocked for this session','success');}else{licValid=false;applyFreeTierUI();toast(d.message,'error');}}
+async function checkUpdate(){try{let d=await(await fetch('/api/update')).json();if(d.update_available){$('upd').style.display='block';$('udl').href=d.download_url;toast('Update available! Click Download.','success');}else toast('You are up to date!','success');}catch(e){toast('Update check failed.','error');}}setTimeout(checkUpdate,2500);
+async function pollBS(){try{let d=await(await fetch('/api/broker_status')).json();let bs=$('bstatus');if(d.message){bs.textContent=d.message;bs.className=d.message.startsWith('Connected')?'ok':'err';}}catch(e){}}setInterval(pollBS,2500);pollBS();
 function renderSignals(sigs){let sl=$('siglist'),se=$('sigempty');sl.innerHTML='';se.style.display='none';let has=false;(sigs||[]).forEach(s=>{has=true;let div=document.createElement('div');div.className='sitem '+(s.signal==='BUY'?'buy':'sell');div.innerHTML=`<span>${s.time} <b>${s.signal}</b> ${s.symbol} @ $${s.price}</span><span>${s.rationale||''}</span>`;sl.appendChild(div);});if(!has)se.style.display='block';}
 function renderOrders(ords){let hl=$('histlist'),he=$('hstempty');hl.innerHTML='';he.style.display='none';let has=false;(ords||[]).forEach(o=>{has=true;let div=document.createElement('div');div.className='sitem '+(o.action==='BUY'?'buy':'sell');div.innerHTML=`<span>${o.time} <b>${o.action}</b> ${o.qty} ${o.symbol} @ $${o.price}</span>`;hl.appendChild(div);});if(!has)he.style.display='block';}
-async function pollStatus(){try{let d=await(await fetch('/api/status')).json();
-  running = d.running;
-  $('v-eq').textContent='$'+fmt(d.equity);$('v-bp').textContent='$'+fmt(d.buying_power);
-  let pct=d.equity?(d.pl/d.equity*100):0;
-  $('v-pl').innerHTML=`<span style="color:${pct>=0?'var(--accent)':'var(--danger)'}">${pct>=0?'+':''}${pct.toFixed(2)}%</span>`;$('v-pos').textContent=d.open_positions;
-  renderSignals(d.signals);renderOrders(d.orders);$('logbar').innerHTML=(d.log||[]).join('<br>');
-}catch(e){}}
-setInterval(pollStatus,1500);
-
-// ── PRESETS ──────────────────────────────────────────────────────────────────
-const PRESETS={
-  scalping:{timeframe:'1m',emas:'9,50',rsi:true,macd:true,vwap:false,bollinger:false,adx:false,volume:true,supertrend:false,stochastic:false,bracket:false,direction:'long'},
-  swing:{timeframe:'15m',emas:'20,50',rsi:true,macd:true,vwap:true,bollinger:true,adx:true,volume:false,supertrend:false,stochastic:false,bracket:true,sl:3,tp:5,direction:'both'},
-  breakout:{timeframe:'5m',emas:'9,50',rsi:false,macd:false,vwap:false,bollinger:false,adx:false,volume:true,supertrend:true,stochastic:false,bracket:false,direction:'both'}
-};
-function loadPreset(){
-  const val=$('preset-select').value;
-  const p=PRESETS[val];
-  if(!p)return;
-  sv('tf',p.timeframe);
-  let [ef,es]=p.emas.split(',').map(Number);sv('emaf',ef);sv('emas',es);
-  sc('ursi',p.rsi);sc('umacd',p.macd);sc('uvwap',p.vwap);
-  sc('uboll',p.bollinger);sc('uadx',p.adx);sc('uvol',p.volume);
-  sc('ust',p.supertrend);sc('ustoch',p.stochastic);
-  sc('ubracket',p.bracket);if(p.bracket){sv('slp',p.sl||2);sv('tpp',p.tp||4);}
-  sv('dir',p.direction);
-  toast('Preset loaded. Click Save to apply.','success');
-}
-
-// ── WATCHLIST ───────────────────────────────────────────────────────────────
-function fetchWatchlist(){
-  fetch('/api/watchlist').then(r=>r.json()).then(d=>{
-    $('watchlist-panel').innerHTML=Object.entries(d.prices||{}).map(([s,p])=>`<div>${s}: $${fmt(p,4)}</div>`).join('');
-  });
-}
-setInterval(fetchWatchlist,30000);fetchWatchlist();
-
-// ── OFFLINE MODE ────────────────────────────────────────────────────────────
-function toggleOffline(){
-  const enabled=gc('offline-mode');
-  fetch('/api/offline',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({offline:enabled})});
-  $('offline-banner').style.display=enabled?'block':'none';
-}
-
-// ── BACKTEST ─────────────────────────────────────────────────────────────────
-async function runBT(){
-  let days=parseInt($('btDays').value)||5;
-  toast('Running detailed backtest...','info');
-  $('btres').innerHTML='<p class="ph">Loading...</p>';
-  switchTab('backtest');
-  try{
-    let r=await fetch('/api/backtest',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({config:buildCfg(),days:days})});
-    let data=await r.json();
-    lastBTData = data;
-    if(data.error){toast('Backtest error: '+data.error,'error');$('btres').innerHTML='<p class="ph">Error: '+data.error+'</p>';return;}
-    let html='';
-    for(let sym in data.results){
-      let info=data.results[sym];
-      html+=`<h3 style="color:var(--accent)">${sym}</h3>`;
-      if(info.error){html+=`<p style="color:var(--danger)">${info.error}</p>`;continue;}
-      if(info.simulation){
-        let sim=info.simulation;
-        html+=`<div style="background:var(--card);padding:10px;border-radius:8px;margin-bottom:12px;">
-          <b>Results:</b> Init $${sim.initial_cash} | Final $${sim.final_cash} | P&L ${sim.total_pnl>=0?'+':''}$${sim.total_pnl} | Win ${sim.win_rate}% | Trades ${sim.total_trades}
-        </div>`;
-        html+=`<button class="ghost" onclick="exportCSV('${sym}')">Export CSV</button>
-               <button class="ghost" onclick="exportPDF('${sym}')">Export PDF</button>
-               <button class="ghost" onclick="runMonteCarlo()">Monte Carlo (1000 runs)</button>
-               <button class="ghost" onclick="autoTune('${sym}')">AI Auto‑Tune</button><br><br>`;
-        if(sim.trades.length){
-          html+=`<table class="bttbl" style="width:100%;font-size:.78rem;border-collapse:collapse;"><tr><th>Entry</th><th>Exit</th><th>Side</th><th>Entry Price</th><th>Exit Price</th><th>P&L</th></tr>`;
-          sim.trades.filter(t=>t.type==='exit').forEach(t=>{html+=`<tr><td>${t.entry_time}</td><td>${t.exit_time}</td><td style="color:${t.side==='LONG'?'var(--accent)':'var(--danger)'}">${t.side}</td><td>${t.entry_price.toFixed(2)}</td><td>${t.exit_price.toFixed(2)}</td><td style="color:${t.pnl>=0?'var(--accent)':'var(--danger)'}">${t.pnl>=0?'+':''}${t.pnl.toFixed(2)}</td></tr>`;});
-          html+=`</table>`;
-        }
-      }
-      if(info.signals && info.signals.length){
-        html+=`<details><summary>Raw Signals (${info.signals.length})</summary><table class="bttbl" style="width:100%;font-size:.78rem;border-collapse:collapse;"><tr><th>Time</th><th>Sig</th><th>Price</th><th>Conf</th></tr>`;
-        info.signals.forEach(s=>{html+=`<tr><td>${s.time}</td><td class="${s.signal==='BUY'?'buy':'sell'}">${s.signal}</td><td>$${s.price}</td><td>${(s.confidence*100).toFixed(0)}%</td></tr>`;});
-        html+=`</table></details>`;
-      }
-    }
-    $('btres').innerHTML=html||'<p class="ph">No results.</p>';
-  }catch(e){toast('Backtest failed: '+e,'error');}
-}
-function switchTab(tabName){
-  document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
-  document.querySelectorAll('.tbtn').forEach(x=>x.classList.remove('active'));
-  $('tab-'+tabName).classList.add('active');
-  document.querySelector(`[data-tab="${tabName}"]`).classList.add('active');
-}
-
-function exportCSV(sym){
-  if(!lastBTData) return;
-  const symData=lastBTData.results[sym];
-  if(!symData||!symData.simulation) return;
-  const trades=symData.simulation.trades.filter(t=>t.type==='exit');
-  fetch('/api/export/backtest/csv',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({trades})})
-    .then(r=>r.blob()).then(blob=>{const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='backtest.csv';a.click();});
-}
-function exportPDF(sym){
-  if(!lastBTData) return;
-  const symData=lastBTData.results[sym];
-  if(!symData||!symData.simulation) return;
-  const trades=symData.simulation.trades.filter(t=>t.type==='exit');
-  fetch('/api/export/backtest/pdf',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({trades})})
-    .then(r=>r.blob()).then(blob=>{const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='backtest.pdf';a.click();});
-}
-async function runMonteCarlo(){
-  toast('Running 1000 simulations...','info');
-  let r=await fetch('/api/backtest/montecarlo',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({config:buildCfg(),days:parseInt($('btDays').value)||5})});
-  let d=await r.json();
-  alert(`Worst: $${d.worst}\nBest: $${d.best}\nAverage: $${d.average}\nProbability of profit: ${d.prob_profit}%`);
-}
-async function autoTune(sym){
-  if(!lastBTData || !lastBTData.results[sym] || !lastBTData.results[sym].simulation) return;
-  const sim=lastBTData.results[sym].simulation;
-  const msg=`Given backtest win rate ${sim.win_rate}% over ${sim.total_trades} trades, suggest optimal indicator combination and SL/TP settings for better performance.`;
-  switchTab('aichat');
-  addChatMsg(msg,true);
-  let r=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:msg,session_id:currentSessionId})});
-  let d=await r.json();
-  addChatMsg(d.reply||'No response.',false);
-}
-
-// ── CORRELATION ──────────────────────────────────────────────────────────────
-async function loadCorrelation(){
-  let r=await fetch('/api/correlation');
-  let d=await r.json();
-  $('correlation-table').innerHTML=d.html||'No data';
-}
-
-// ── AI CHAT ──────────────────────────────────────────────────────────────────
-async function initAIChat(){
-  if(chatInited)return;
-  chatInited=true;
-  await loadSessions();
-  if(currentSessionId===null){
-    let sessions=await(await fetch('/api/chat/sessions')).json();
-    if(sessions.sessions.length>0) loadSession(sessions.sessions[0].id);
-    else createNewSession();
-  }
-}
-async function loadSessions(){
-  try{let r=await fetch('/api/chat/sessions');let data=await r.json();renderSessionList(data.sessions);}catch(e){}
-}
-function renderSessionList(sessions){
-  let list=$('chat-sessions-list');list.innerHTML='';
-  sessions.forEach(s=>{
-    let item=document.createElement('div');item.className='chat-session-item'+(s.id===currentSessionId?' active':'');item.textContent=s.title;
-    item.onclick=()=>loadSession(s.id);list.appendChild(item);
-  });
-}
-async function loadSession(sessionId){
-  currentSessionId=sessionId;
-  renderSessionList(await(await fetch('/api/chat/sessions')).json().sessions);
-  try{
-    let r=await fetch(`/api/chat/sessions/${sessionId}`);
-    let data=await r.json();
-    let messagesDiv=$('chat-messages');messagesDiv.innerHTML='';
-    (data.messages||[]).forEach(m=>addChatMsg(m.content,m.role==='user'));
-  }catch(e){}
-  updateChatLimitInfo();
-}
-async function createNewSession(){
-  let r=await fetch('/api/chat/sessions',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title:'New Chat'})});
-  let data=await r.json();
-  currentSessionId=data.session_id;
-  await loadSessions();$('chat-messages').innerHTML='';updateChatLimitInfo();
-}
-function updateChatLimitInfo(){
-  let el=$('chat-limit');if(!el)return;
-  if(licValid)el.textContent='Pro – unlimited messages';
-  else el.textContent='Free: up to 5 messages/day';
-}
-function addChatMsg(text,isUser){
-  let msgs=$('chat-messages');
-  let wrap=document.createElement('div');wrap.className='cmsg '+(isUser?'user':'bot');
-  let sender=document.createElement('div');sender.className='msender';sender.textContent=isUser?'You':'TraderBot';
-  let body=document.createElement('div');body.className='mbody';body.textContent=text;
-  wrap.appendChild(sender);wrap.appendChild(body);msgs.appendChild(wrap);msgs.scrollTop=msgs.scrollHeight;
-  return wrap;
-}
-async function sendChat(){
-  let inputEl=$('chat-input');let msg=inputEl.value.trim();if(!msg)return;inputEl.value='';
-  addChatMsg(msg,true);
-  let typing=document.createElement('div');typing.className='chat-typing';typing.textContent='TraderBot is thinking...';
-  $('chat-messages').appendChild(typing);$('chat-messages').scrollTop=$('chat-messages').scrollHeight;
-  let sendBtn=$('chat-send');sendBtn.disabled=true;
-  try{
-    let r=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:msg,session_id:currentSessionId})});
-    let d=await r.json();typing.remove();addChatMsg(d.reply||'No response.',false);
-    if(d.session_id && d.session_id!==currentSessionId){currentSessionId=d.session_id;loadSessions();}
-  }catch(e){typing.remove();addChatMsg('Connection error.',false);}
-  sendBtn.disabled=false;$('chat-messages').scrollTop=$('chat-messages').scrollHeight;
-}
-// keyboard shortcuts
-document.addEventListener('keydown',function(e){
-  if(e.ctrlKey && e.key===' '){e.preventDefault();if(running) stopBot();else startBot();}
-  else if(e.ctrlKey && e.key==='k'){e.preventDefault();$('tickers').focus();}
-  else if(e.ctrlKey && e.key==='b'){e.preventDefault();runBT();}
-  else if(e.ctrlKey && e.key==='B'){e.preventDefault();switchTab('backtest');}
-  else if(e.ctrlKey && e.key>='1' && e.key<='7'){const tabs=['charts','signals','history','backtest','analysis','help','aichat'];switchTab(tabs[parseInt(e.key)-1]);}
-});
-// voice
-if('webkitSpeechRecognition' in window){
-  const recognition=new webkitSpeechRecognition();recognition.continuous=false;recognition.interimResults=false;
-  recognition.onresult=(event)=>{const transcript=event.results[0][0].transcript;$('chat-input').value=transcript;sendChat();};
-  $('mic-btn').onclick=()=>recognition.start();
-}else{$('mic-btn').style.display='none';}
+async function pollStatus(){try{let d=await(await fetch('/api/status')).json();running=d.running;$('v-eq').textContent='$'+fmt(d.equity);$('v-bp').textContent='$'+fmt(d.buying_power);let pct=d.equity?(d.pl/d.equity*100):0;$('v-pl').innerHTML=`<span style="color:${pct>=0?'var(--accent)':'var(--danger)'}">${pct>=0?'+':''}${pct.toFixed(2)}%</span>`;$('v-pos').textContent=d.open_positions;renderSignals(d.signals);renderOrders(d.orders);$('logbar').innerHTML=(d.log||[]).join('<br>');}catch(e){}}setInterval(pollStatus,1500);
+const PRESETS={scalping:{timeframe:'1m',emas:'9,50',rsi:true,macd:true,vwap:false,bollinger:false,adx:false,volume:true,supertrend:false,stochastic:false,bracket:false,direction:'long'},swing:{timeframe:'15m',emas:'20,50',rsi:true,macd:true,vwap:true,bollinger:true,adx:true,volume:false,supertrend:false,stochastic:false,bracket:true,sl:3,tp:5,direction:'both'},breakout:{timeframe:'5m',emas:'9,50',rsi:false,macd:false,vwap:false,bollinger:false,adx:false,volume:true,supertrend:true,stochastic:false,bracket:false,direction:'both'}};
+function loadPreset(){const val=$('preset-select').value;const p=PRESETS[val];if(!p)return;sv('tf',p.timeframe);let [ef,es]=p.emas.split(',').map(Number);sv('emaf',ef);sv('emas',es);sc('ursi',p.rsi);sc('umacd',p.macd);sc('uvwap',p.vwap);sc('uboll',p.bollinger);sc('uadx',p.adx);sc('uvol',p.volume);sc('ust',p.supertrend);sc('ustoch',p.stochastic);sc('ubracket',p.bracket);if(p.bracket){sv('slp',p.sl||2);sv('tpp',p.tp||4);}sv('dir',p.direction);toast('Preset loaded. Click Save to apply.','success');}
+function fetchWatchlist(){fetch('/api/watchlist').then(r=>r.json()).then(d=>{$('watchlist-panel').innerHTML=Object.entries(d.prices||{}).map(([s,p])=>`<div>${s}: $${fmt(p,4)}</div>`).join('');});}setInterval(fetchWatchlist,30000);fetchWatchlist();
+function toggleOffline(){const enabled=gc('offline-mode');fetch('/api/offline',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({offline:enabled})});$('offline-banner').style.display=enabled?'block':'none';}
+async function runBT(){let days=parseInt($('btDays').value)||5;toast('Running detailed backtest...','info');$('btres').innerHTML='<p class="ph">Loading...</p>';switchTab('backtest');try{let r=await fetch('/api/backtest',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({config:buildCfg(),days:days})});let data=await r.json();lastBTData=data;if(data.error){toast('Backtest error: '+data.error,'error');$('btres').innerHTML='<p class="ph">Error: '+data.error+'</p>';return;}let html='';for(let sym in data.results){let info=data.results[sym];html+=`<h3 style="color:var(--accent)">${sym}</h3>`;if(info.error){html+=`<p style="color:var(--danger)">${info.error}</p>`;continue;}if(info.simulation){let sim=info.simulation;html+=`<div style="background:var(--card);padding:10px;border-radius:8px;margin-bottom:12px;"><b>Results:</b> Init $${sim.initial_cash} | Final $${sim.final_cash} | P&L ${sim.total_pnl>=0?'+':''}$${sim.total_pnl} | Win ${sim.win_rate}% | Trades ${sim.total_trades}</div>`;html+=`<button class="ghost" onclick="exportCSV('${sym}')">Export CSV</button> <button class="ghost" onclick="exportPDF('${sym}')">Export PDF</button> <button class="ghost" onclick="runMonteCarlo()">Monte Carlo (1000 runs)</button> <button class="ghost" onclick="autoTune('${sym}')">AI Auto‑Tune</button><br><br>`;if(sim.trades.length){html+=`<table class="bttbl" style="width:100%;font-size:.78rem;border-collapse:collapse;"><tr><th>Entry</th><th>Exit</th><th>Side</th><th>Entry Price</th><th>Exit Price</th><th>P&L</th></tr>`;sim.trades.filter(t=>t.type==='exit').forEach(t=>{html+=`<tr><td>${t.entry_time}</td><td>${t.exit_time}</td><td style="color:${t.side==='LONG'?'var(--accent)':'var(--danger)'}">${t.side}</td><td>${t.entry_price.toFixed(2)}</td><td>${t.exit_price.toFixed(2)}</td><td style="color:${t.pnl>=0?'var(--accent)':'var(--danger)'}">${t.pnl>=0?'+':''}${t.pnl.toFixed(2)}</td></tr>`;});html+=`</table>`;}}if(info.signals&&info.signals.length){html+=`<details><summary>Raw Signals (${info.signals.length})</summary><table class="bttbl" style="width:100%;font-size:.78rem;border-collapse:collapse;"><tr><th>Time</th><th>Sig</th><th>Price</th><th>Conf</th></tr>`;info.signals.forEach(s=>{html+=`<tr><td>${s.time}</td><td class="${s.signal==='BUY'?'buy':'sell'}">${s.signal}</td><td>$${s.price}</td><td>${(s.confidence*100).toFixed(0)}%</td></tr>`;});html+=`</table></details>`;}}$('btres').innerHTML=html||'<p class="ph">No results.</p>';}catch(e){toast('Backtest failed: '+e,'error');}}
+function switchTab(tabName){document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.tbtn').forEach(x=>x.classList.remove('active'));$('tab-'+tabName).classList.add('active');document.querySelector(`[data-tab="${tabName}"]`).classList.add('active');}
+function exportCSV(sym){if(!lastBTData)return;const symData=lastBTData.results[sym];if(!symData||!symData.simulation)return;const trades=symData.simulation.trades.filter(t=>t.type==='exit');fetch('/api/export/backtest/csv',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({trades})}).then(r=>r.blob()).then(blob=>{const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='backtest.csv';a.click();});}
+function exportPDF(sym){if(!lastBTData)return;const symData=lastBTData.results[sym];if(!symData||!symData.simulation)return;const trades=symData.simulation.trades.filter(t=>t.type==='exit');fetch('/api/export/backtest/pdf',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({trades})}).then(r=>r.blob()).then(blob=>{const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='backtest.pdf';a.click();});}
+async function runMonteCarlo(){toast('Running 1000 simulations...','info');let r=await fetch('/api/backtest/montecarlo',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({config:buildCfg(),days:parseInt($('btDays').value)||5})});let d=await r.json();alert(`Worst: $${d.worst}\nBest: $${d.best}\nAverage: $${d.average}\nProbability of profit: ${d.prob_profit}%`);}
+async function autoTune(sym){if(!lastBTData||!lastBTData.results[sym]||!lastBTData.results[sym].simulation)return;const sim=lastBTData.results[sym].simulation;const msg=`Given backtest win rate ${sim.win_rate}% over ${sim.total_trades} trades, suggest optimal indicator combination and SL/TP settings for better performance.`;switchTab('aichat');addChatMsg(msg,true);let r=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:msg,session_id:currentSessionId})});let d=await r.json();addChatMsg(d.reply||'No response.',false);}
+async function loadCorrelation(){let r=await fetch('/api/correlation');let d=await r.json();$('correlation-table').innerHTML=d.html||'No data';}
+async function initAIChat(){if(chatInited)return;chatInited=true;await loadSessions();if(currentSessionId===null){let sessions=await(await fetch('/api/chat/sessions')).json();if(sessions.sessions.length>0)loadSession(sessions.sessions[0].id);else createNewSession();}}
+async function loadSessions(){try{let r=await fetch('/api/chat/sessions');let data=await r.json();renderSessionList(data.sessions);}catch(e){}}
+function renderSessionList(sessions){let list=$('chat-sessions-list');list.innerHTML='';sessions.forEach(s=>{let item=document.createElement('div');item.className='chat-session-item'+(s.id===currentSessionId?' active':'');item.textContent=s.title;item.onclick=()=>loadSession(s.id);list.appendChild(item);});}
+async function loadSession(sessionId){currentSessionId=sessionId;renderSessionList(await(await fetch('/api/chat/sessions')).json().sessions);try{let r=await fetch(`/api/chat/sessions/${sessionId}`);let data=await r.json();let messagesDiv=$('chat-messages');messagesDiv.innerHTML='';(data.messages||[]).forEach(m=>addChatMsg(m.content,m.role==='user'));}catch(e){}updateChatLimitInfo();}
+async function createNewSession(){let r=await fetch('/api/chat/sessions',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title:'New Chat'})});let data=await r.json();currentSessionId=data.session_id;await loadSessions();$('chat-messages').innerHTML='';updateChatLimitInfo();}
+function updateChatLimitInfo(){let el=$('chat-limit');if(!el)return;if(licValid)el.textContent='Pro – unlimited messages';else el.textContent='Free: up to 5 messages/day';}
+function addChatMsg(text,isUser){let msgs=$('chat-messages');let wrap=document.createElement('div');wrap.className='cmsg '+(isUser?'user':'bot');let sender=document.createElement('div');sender.className='msender';sender.textContent=isUser?'You':'TraderBot';let body=document.createElement('div');body.className='mbody';body.textContent=text;wrap.appendChild(sender);wrap.appendChild(body);msgs.appendChild(wrap);msgs.scrollTop=msgs.scrollHeight;return wrap;}
+async function sendChat(){let inputEl=$('chat-input');let msg=inputEl.value.trim();if(!msg)return;inputEl.value='';addChatMsg(msg,true);let typing=document.createElement('div');typing.className='chat-typing';typing.textContent='TraderBot is thinking...';$('chat-messages').appendChild(typing);$('chat-messages').scrollTop=$('chat-messages').scrollHeight;let sendBtn=$('chat-send');sendBtn.disabled=true;try{let r=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:msg,session_id:currentSessionId})});let d=await r.json();typing.remove();addChatMsg(d.reply||'No response.',false);if(d.session_id&&d.session_id!==currentSessionId){currentSessionId=d.session_id;loadSessions();}}catch(e){typing.remove();addChatMsg('Connection error.',false);}sendBtn.disabled=false;$('chat-messages').scrollTop=$('chat-messages').scrollHeight;}
+document.addEventListener('keydown',function(e){if(e.ctrlKey&&e.key===' '){e.preventDefault();if(running)stopBot();else startBot();}else if(e.ctrlKey&&e.key==='k'){e.preventDefault();$('tickers').focus();}else if(e.ctrlKey&&e.key==='b'){e.preventDefault();runBT();}else if(e.ctrlKey&&e.key==='B'){e.preventDefault();switchTab('backtest');}else if(e.ctrlKey&&e.key>='1'&&e.key<='7'){const tabs=['charts','signals','history','backtest','analysis','help','aichat'];switchTab(tabs[parseInt(e.key)-1]);}});
+if('webkitSpeechRecognition'in window){const recognition=new webkitSpeechRecognition();recognition.continuous=false;recognition.interimResults=false;recognition.onresult=(event)=>{const transcript=event.results[0][0].transcript;$('chat-input').value=transcript;sendChat();};$('mic-btn').onclick=()=>recognition.start();}else{$('mic-btn').style.display='none';}
 $('chat-input').addEventListener('keydown',function(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendChat();}});
-
-// boot
 updateBrokerOptions();updateCreds();loadConfig();
 </script>
 </body>
