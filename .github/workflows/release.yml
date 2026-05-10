@@ -21,10 +21,11 @@ jobs:
         run: |
           pip install pywebview flask flask-cors yfinance pandas requests alpaca-trade-api numpy cryptography ib_insync pyinstaller pillow
           pip install python-binance pybit okx
+          pip install lightweight-charts fpdf
       - name: Build app
         run: |
           if (Test-Path icon.ico) { $iconArg = "--icon=icon.ico" } else { $iconArg = "" }
-          pyinstaller --noconsole --windowed --name "TraderMoney" --collect-all pywebview $iconArg --hidden-import=binance.client --hidden-import=pybit.unified --hidden-import=okx.Account --hidden-import=okx.Trade --hidden-import=ib_insync app.py
+          pyinstaller --noconsole --windowed --name "TraderMoney" --collect-all pywebview --collect-data lightweight_charts $iconArg --hidden-import=binance.client --hidden-import=pybit.unified --hidden-import=okx.Account --hidden-import=okx.Trade --hidden-import=ib_insync app.py
         shell: pwsh
       - name: Zip artifact
         shell: pwsh
@@ -47,11 +48,12 @@ jobs:
         run: |
           pip install pywebview flask flask-cors yfinance pandas requests alpaca-trade-api numpy cryptography ib_insync pyinstaller pillow
           pip install python-binance pybit okx
+          pip install lightweight-charts fpdf
       - name: Build app
         run: |
           ICON=""
           if [ -f icon.icns ]; then ICON="--icon=icon.icns"; fi
-          pyinstaller --noconsole --windowed --name "TraderMoney" --collect-all pywebview --target-architecture arm64 --codesign-identity - --osx-bundle-identifier com.tradermoney.app $ICON app.py
+          pyinstaller --noconsole --windowed --name "TraderMoney" --collect-all pywebview --collect-data lightweight_charts --target-architecture arm64 --codesign-identity - --osx-bundle-identifier com.tradermoney.app $ICON app.py
       - name: Strip signatures
         run: |
           find dist/TraderMoney.app -type f \( -name "Python" -o -name "*.dylib" -o -name "*.so" \) -exec codesign --remove-signature {} \; 2>/dev/null || true
@@ -76,11 +78,12 @@ jobs:
         run: |
           pip install pywebview flask flask-cors yfinance pandas requests alpaca-trade-api numpy cryptography ib_insync pyinstaller pillow
           pip install python-binance pybit okx
+          pip install lightweight-charts fpdf
       - name: Build app
         run: |
           ICON=""
           if [ -f icon.icns ]; then ICON="--icon=icon.icns"; fi
-          pyinstaller --noconsole --windowed --name "TraderMoney" --collect-all pywebview --target-architecture x86_64 --codesign-identity - --osx-bundle-identifier com.tradermoney.app $ICON app.py
+          pyinstaller --noconsole --windowed --name "TraderMoney" --collect-all pywebview --collect-data lightweight_charts --target-architecture x86_64 --codesign-identity - --osx-bundle-identifier com.tradermoney.app $ICON app.py
       - name: Strip signatures
         run: |
           find dist/TraderMoney.app -type f \( -name "Python" -o -name "*.dylib" -o -name "*.so" \) -exec codesign --remove-signature {} \; 2>/dev/null || true
