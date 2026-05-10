@@ -1,5 +1,5 @@
 """
-TraderMoney v2.0.4 – Stable release with TradingView charts, AI Chat sessions, and improved UI spacing.
+TraderMoney v2.0.5 – Stable release with TradingView charts, AI Chat sessions, and improved UI spacing.
 Removed: offline mode, correlation matrix, alloc_pct (portfolio backtest).
 Added: Chat session management (rename, delete), larger spacing, cleaner layout.
 """
@@ -25,10 +25,11 @@ import webview
 from flask import Flask, jsonify, request, send_file
 from flask_cors import CORS
 
-APP_VERSION = "2.0.4"
+APP_VERSION = "2.0.5"
 
 # ── AI Chat (ChatAnywhere) ────────────────────────────────────────────────────
-CHATANYWHERE_API_KEY = "sk-hUwjVr5dWqvnwBjYeglNUNuiNi4yW2znuaRwauuKryf2XauS"  # Replace with your key
+# Get ChatAnywhere API key from environment variable (recommended) or set directly
+CHATANYWHERE_API_KEY = os.environ.get("CHATANYWHERE_API_KEY", "sk-hUwjVr5dWqvnwBjYeglNUNuiNi4yW2znuaRwauuKryf2XauS")
 FREE_CHAT_DAILY_LIMIT = 5
 
 _CHAT_SYSTEM_PROMPT = (
@@ -38,8 +39,6 @@ _CHAT_SYSTEM_PROMPT = (
     "Stochastic, ATR), risk management, broker connections, and platform usage. "
     "Keep responses focused and under 220 words. Use plain text only."
 )
-
-_chat_counter: Dict[str, Any] = {"date": None, "count": 0}
 
 # ── Gumroad ───────────────────────────────────────────────────────────────────
 GUMROAD_PRODUCT_ID = "73otoT7rzJukCy-Lt4hhkQ=="
@@ -131,13 +130,17 @@ class DatabaseManager:
             title   TEXT NOT NULL,
             created TEXT NOT NULL
         );
-        CREATE TABLE IF NOT EXISTS chat_messages (
+                CREATE TABLE IF NOT EXISTS chat_messages (
             id         INTEGER PRIMARY KEY AUTOINCREMENT,
             session_id INTEGER NOT NULL,
             role       TEXT NOT NULL,
             content    TEXT NOT NULL,
             timestamp  TEXT NOT NULL,
             FOREIGN KEY(session_id) REFERENCES chat_sessions(id) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS chat_daily_usage (
+            date TEXT PRIMARY KEY,
+            count INTEGER NOT NULL
         );
         """)
         self.conn.commit()
@@ -1883,61 +1886,81 @@ def get_chat_history(session_id):
 
 @app.route("/api/chat", methods=["POST"])
 def api_chat():
-    global _chat_counter
     data = request.json or {}
     message = data.get("message", "").strip()
     session_id = data.get("session_id")
+
     if not message:
         return jsonify({"reply": "Please type a message."})
 
     licensed = state.config.get("license_valid", False)
 
+    # Daily limit for free tier (persisted in DB)
+    today = datetime.now().strftime("%Y-%m-%d")
     if not licensed:
-        today = datetime.now().strftime("%Y-%m-%d")
-        if _chat_counter["date"] != today:
-            _chat_counter["date"] = today
-            _chat_counter["count"] = 0
-        if _chat_counter["count"] >= FREE_CHAT_DAILY_LIMIT:
+        row = db._query("SELECT count FROM chat_daily_usage WHERE date = ?", (today,))
+        used = row[0][0] if row else 0
+        if used >= FREE_CHAT_DAILY_LIMIT:
             return jsonify({
                 "reply": f"Daily chat limit reached ({FREE_CHAT_DAILY_LIMIT} messages/day on Free tier). Upgrade to Pro for unlimited AI access."
             })
-        _chat_counter["count"] += 1
+        # increment later after successful API call
 
     if not session_id:
         session_id = db.create_chat_session()
-    else:
-        # verify session exists
-        pass
-
     db.insert_chat_message(session_id, "user", message)
 
-    if not CHATANYWHERE_API_KEY or CHATANYWHERE_API_KEY.startswith("sk-YOUR"):
-        return jsonify({"reply": "ChatAnywhere API key not configured. Please update CHATANYWHERE_API_KEY in app.py"})
-
-    # Build conversation context
+    # Build conversation context (last 20 messages)
     history = db.get_chat_history(session_id, limit=20)
     messages = [{"role": "system", "content": _CHAT_SYSTEM_PROMPT}]
     for h in history:
         messages.append({"role": h["role"], "content": h["content"]})
 
+    # Call ChatAnywhere API
     try:
         resp = http_requests.post(
             "https://api.chatanywhere.tech/v1/chat/completions",
-            headers={"Authorization": f"Bearer {CHATANYWHERE_API_KEY}", "Content-Type": "application/json"},
-            json={"model": "gpt-3.5-turbo", "messages": messages, "max_tokens": 350, "temperature": 0.65},
-            timeout=30,
+            headers={
+                "Authorization": f"Bearer {CHATANYWHERE_API_KEY}",
+                "Content-Type": "application/json",
+                "User-Agent": "TraderMoney/2.0"
+            },
+            json={
+                "model": "gpt-3.5-turbo",
+                "messages": messages,
+                "max_tokens": 350,
+                "temperature": 0.65
+            },
+            timeout=45,
+            verify=True
         )
         result = resp.json()
-        if "error" in result:
-            err_msg = result["error"].get("message", "Unknown ChatAnywhere error")
-            db.insert_log(f"[AI Chat] Error: {err_msg}")
-            return jsonify({"reply": f"AI error: {err_msg}"})
+        if resp.status_code != 200:
+            error_msg = result.get("error", {}).get("message", f"HTTP {resp.status_code}")
+            db.insert_log(f"[AI Chat] API error: {error_msg}")
+            return jsonify({"reply": f"AI service error: {error_msg}"})
+
         reply = result["choices"][0]["message"]["content"].strip()
+
+        # Increment daily counter only on success
+        if not licensed:
+            db._exec(
+                "INSERT INTO chat_daily_usage (date, count) VALUES (?, 1) "
+                "ON CONFLICT(date) DO UPDATE SET count = count + 1",
+                (today,)
+            )
         db.insert_chat_message(session_id, "bot", reply)
         return jsonify({"reply": reply, "session_id": session_id})
+
+    except http_requests.exceptions.Timeout:
+        db.insert_log("[AI Chat] Timeout")
+        return jsonify({"reply": "AI service timed out. Please try again in a few seconds."})
+    except http_requests.exceptions.ConnectionError:
+        db.insert_log("[AI Chat] Connection error")
+        return jsonify({"reply": "Network error – cannot reach AI service. Check your internet connection."})
     except Exception as e:
         db.insert_log(f"[AI Chat] Exception: {e}")
-        return jsonify({"reply": f"AI service unavailable: {e}"})
+        return jsonify({"reply": f"Unexpected error: {str(e)[:100]}. Please try again later."})
 
 
 # ── FRONTEND HTML (TradingView charts + Chat sessions) ───────────────────────
@@ -2377,11 +2400,44 @@ function addChatMsg(text,isUser){
   wrap.appendChild(sender); wrap.appendChild(body); msgs.appendChild(wrap); msgs.scrollTop=msgs.scrollHeight; return wrap;
 }
 async function sendChat(){
-  let inputEl=$('chat-input'); let msg=inputEl.value.trim(); if(!msg) return; inputEl.value=''; addChatMsg(msg,true);
-  let typing=document.createElement('div'); typing.className='chat-typing'; typing.textContent='TraderBot is thinking...'; $('chat-messages').appendChild(typing); $('chat-messages').scrollTop=$('chat-messages').scrollHeight;
-  let sendBtn=$('chat-send'); sendBtn.disabled=true;
-  try{ let r=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:msg,session_id:currentSessionId})}); let d=await r.json(); typing.remove(); addChatMsg(d.reply||'No response.',false); if(d.session_id && d.session_id!==currentSessionId){ currentSessionId=d.session_id; await loadSessions(); } } catch(e){ typing.remove(); addChatMsg('Connection error. Please try again.',false); }
-  sendBtn.disabled=false; $('chat-messages').scrollTop=$('chat-messages').scrollHeight;
+  let inputEl=$('chat-input');
+  let msg=inputEl.value.trim();
+  if(!msg) return;
+  inputEl.value='';
+  addChatMsg(msg,true);
+
+  let typing=document.createElement('div');
+  typing.className='chat-typing';
+  typing.textContent='TraderBot is thinking...';
+  $('chat-messages').appendChild(typing);
+  $('chat-messages').scrollTop=$('chat-messages').scrollHeight;
+
+  let sendBtn=$('chat-send');
+  sendBtn.disabled=true;
+
+  try{
+    let r=await fetch('/api/chat',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({message:msg, session_id:currentSessionId})
+    });
+    let d=await r.json();
+    typing.remove();
+    if(d.reply){
+      addChatMsg(d.reply, false);
+    } else {
+      addChatMsg('No response from AI.', false);
+    }
+    if(d.session_id && d.session_id!==currentSessionId){
+      currentSessionId=d.session_id;
+      await loadSessions();
+    }
+  } catch(e){
+    typing.remove();
+    addChatMsg('Network error – cannot connect to server.', false);
+  }
+  sendBtn.disabled=false;
+  $('chat-messages').scrollTop=$('chat-messages').scrollHeight;
 }
 $('chat-input').addEventListener('keydown',function(e){ if(e.key==='Enter'&&!e.shiftKey){ e.preventDefault(); sendChat(); } });
 
