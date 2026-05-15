@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-TraderMoney v2.0.12 – Triple-A Professional Trading Terminal
+TraderMoney v2.0.13 – Triple-A Professional Trading Terminal
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Complete file – ready to run.
 Includes embedded TradingView charts, full frontend JS, all brokers.
@@ -35,7 +35,7 @@ import webview
 from flask import Flask, Response, jsonify, request, send_file
 from flask_cors import CORS
 
-APP_VERSION = "2.0.12"
+APP_VERSION = "2.0.13"
 
 # ──────────────────────────────────────────────────────────────────────────────
 # STRUCTURED LOGGING
@@ -872,7 +872,13 @@ class BinanceBroker(BaseBroker):
                 self._ws_client.stop()
             except Exception as e: self._emit_log(f"Stream warning: {e}")
         threading.Thread(target=run, daemon=True).start()
-    def stop_stream(self): self._stop_stream = True; if self._ws_client: self._ws_client.stop(); self.stop_heartbeat()
+      def stop_stream(self):
+        self._stop_stream = True
+        if self._ws_client:
+            try:
+                self._ws_client.stop()
+            except Exception:
+                pass
 register_broker("Binance", BinanceBroker)
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -969,7 +975,11 @@ class OKXBroker(BaseBroker):
         s = symbol.replace("/","-").replace("_","-").upper()
         return s if "-" in s else s+"-USDT"
     def connect(self) -> bool:
-        creds = self.config.get("okx", {}); api_key=creds.get("api_key","").strip(); api_secret=creds.get("api_secret","").strip(); passphrase=creds.get("api_passphrase","").strip(); demo=creds.get("demo",True)
+               creds = self.config.get("okx", {})
+        api_key = creds.get("api_key", "").strip()
+        api_secret = creds.get("api_secret", "").strip()
+        passphrase = creds.get("api_passphrase", "").strip()
+        demo = creds.get("demo", True)
         self._flag = "1" if demo else "0"
         if not api_key or not api_secret or not passphrase: self._emit_error("OKX credentials missing"); return False
         try:
