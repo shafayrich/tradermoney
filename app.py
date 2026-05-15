@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-TraderMoney v2.0.18 – Triple-A Professional Trading Terminal
+TraderMoney v2.0.19 – Triple-A Professional Trading Terminal
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Complete file – ready to run.
 Includes embedded TradingView charts, full frontend JS, all brokers.
@@ -35,7 +35,7 @@ import webview
 from flask import Flask, Response, jsonify, request, send_file
 from flask_cors import CORS
 
-APP_VERSION = "2.0.18"
+APP_VERSION = "2.0.19"
 
 # ──────────────────────────────────────────────────────────────────────────────
 # STRUCTURED LOGGING
