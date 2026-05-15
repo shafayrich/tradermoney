@@ -57,7 +57,7 @@ jobs:
   # macOS – Intel (x86_64) – runs on Intel Macs and Apple Silicon via Rosetta 2
   # -------------------------------------------------------------------------
   build-macos:
-    runs-on: macos-13          # Intel runner
+    runs-on: macos-15-intel      # ✅ Updated runner label
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
