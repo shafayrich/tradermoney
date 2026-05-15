@@ -35,7 +35,7 @@ jobs:
         run: |
           $iconArg = ""
           if (Test-Path "icon.ico") { $iconArg = "--icon=icon.ico" }
-          pyinstaller --onedir --windowed --name "TraderMoney" --add-data "app.py;." --collect-all pywebview $iconArg `
+          pyinstaller --onedir --windowed --name "TraderMoney" --add-data "app.py;." --collect-all pywebview --collect-all yfinance --collect-all pandas --collect-all cryptography $iconArg `
             --hidden-import=alpaca_trade_api --hidden-import=ib_insync --hidden-import=binance.client `
             --hidden-import=pybit.unified_trading --hidden-import=okx.Account --hidden-import=okx.Trade `
             --hidden-import=flask --hidden-import=flask_cors --hidden-import=cryptography.fernet `
@@ -78,7 +78,7 @@ jobs:
         run: |
           ICON=""
           if [ -f icon.icns ]; then ICON="--icon=icon.icns"; fi
-          pyinstaller --onedir --windowed --name "TraderMoney" --add-data "app.py:." --collect-all pywebview --target-architecture arm64 --codesign-identity - --osx-bundle-identifier com.tradermoney.app $ICON \
+          pyinstaller --onedir --windowed --name "TraderMoney" --add-data "app.py:." --collect-all pywebview --collect-all yfinance --collect-all pandas --collect-all cryptography --target-architecture arm64 --codesign-identity - --osx-bundle-identifier com.tradermoney.app $ICON \
             --hidden-import=alpaca_trade_api --hidden-import=ib_insync --hidden-import=binance.client \
             --hidden-import=pybit.unified_trading --hidden-import=okx.Account --hidden-import=okx.Trade \
             --hidden-import=flask --hidden-import=flask_cors --hidden-import=cryptography.fernet \
@@ -125,7 +125,7 @@ jobs:
         run: |
           ICON=""
           if [ -f icon.icns ]; then ICON="--icon=icon.icns"; fi
-          pyinstaller --onedir --windowed --name "TraderMoney" --add-data "app.py:." --collect-all pywebview --target-architecture x86_64 --codesign-identity - --osx-bundle-identifier com.tradermoney.app $ICON \
+          pyinstaller --onedir --windowed --name "TraderMoney" --add-data "app.py:." --collect-all pywebview --collect-all yfinance --collect-all pandas --collect-all cryptography --target-architecture x86_64 --codesign-identity - --osx-bundle-identifier com.tradermoney.app $ICON \
             --hidden-import=alpaca_trade_api --hidden-import=ib_insync --hidden-import=binance.client \
             --hidden-import=pybit.unified_trading --hidden-import=okx.Account --hidden-import=okx.Trade \
             --hidden-import=flask --hidden-import=flask_cors --hidden-import=cryptography.fernet \
@@ -177,7 +177,7 @@ jobs:
         run: |
           ICON=""
           if [ -f icon.png ]; then ICON="--icon=icon.png"; fi
-          pyinstaller --onedir --name "TraderMoney" --add-data "app.py:." --collect-all pywebview $ICON \
+          pyinstaller --onedir --name "TraderMoney" --add-data "app.py:." --collect-all pywebview --collect-all yfinance --collect-all pandas --collect-all cryptography $ICON \
             --hidden-import=alpaca_trade_api --hidden-import=ib_insync --hidden-import=binance.client \
             --hidden-import=pybit.unified_trading --hidden-import=okx.Account --hidden-import=okx.Trade \
             --hidden-import=flask --hidden-import=flask_cors --hidden-import=cryptography.fernet \
