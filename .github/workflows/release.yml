@@ -3,10 +3,10 @@ name: Build and Release
 on:
   push:
     tags:
-      - 'v*'               # triggers on tags like v2.0.11
+      - 'v*'
 
 permissions:
-  contents: write          # needed to create GitHub Release
+  contents: write
 
 jobs:
   # -------------------------------------------------------------------------
@@ -35,12 +35,17 @@ jobs:
         run: |
           $iconArg = ""
           if (Test-Path "icon.ico") { $iconArg = "--icon=icon.ico" }
-          pyinstaller --onedir --windowed --name "TraderMoney" --add-data "app.py;." --collect-all pywebview --collect-all yfinance --collect-all pandas --collect-all cryptography $iconArg `
+          pyinstaller --onedir --windowed --name "TraderMoney" `
+            --add-data "app.py;." `
+            --collect-all pywebview --collect-all yfinance --collect-all pandas --collect-all cryptography `
+            --copy-metadata yfinance --copy-metadata pandas `
             --hidden-import=alpaca_trade_api --hidden-import=ib_insync --hidden-import=binance.client `
             --hidden-import=pybit.unified_trading --hidden-import=okx.Account --hidden-import=okx.Trade `
             --hidden-import=flask --hidden-import=flask_cors --hidden-import=cryptography.fernet `
             --hidden-import=yfinance --hidden-import=pandas --hidden-import=numpy --hidden-import=fpdf `
-            --hidden-import=websocket --hidden-import=zoneinfo --hidden-import=asyncio app.py
+            --hidden-import=websocket --hidden-import=zoneinfo --hidden-import=asyncio `
+            --hidden-import=pandas._libs.tslibs.base `
+            $iconArg app.py
 
       - name: Package as ZIP
         shell: pwsh
@@ -54,10 +59,10 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
 
   # -------------------------------------------------------------------------
-  # macOS – Intel (x86_64) – works on both Intel and Apple Silicon (via Rosetta 2)
+  # macOS Universal2 (works on both Intel and Apple Silicon)
   # -------------------------------------------------------------------------
-  build-macos-intel:
-    runs-on: macos-13          # Intel runner (macOS 13 Ventura on Intel)
+  build-macos:
+    runs-on: macos-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -74,28 +79,37 @@ jobs:
           pip install python-binance pybit okx
           pip install fpdf websocket-client
 
-      - name: Build with PyInstaller (macOS x86_64)
+      - name: Build with PyInstaller (macOS universal2)
         run: |
           ICON=""
           if [ -f icon.icns ]; then ICON="--icon=icon.icns"; fi
-          pyinstaller --onedir --windowed --name "TraderMoney" --add-data "app.py:." --collect-all pywebview --collect-all yfinance --collect-all pandas --collect-all cryptography --target-architecture x86_64 --codesign-identity - --osx-bundle-identifier com.tradermoney.app $ICON \
+          pyinstaller --onedir --windowed --name "TraderMoney" \
+            --add-data "app.py:." \
+            --collect-all pywebview --collect-all yfinance --collect-all pandas --collect-all cryptography \
+            --copy-metadata yfinance --copy-metadata pandas \
+            --target-architecture universal2 \
+            --codesign-identity - \
+            --osx-bundle-identifier com.tradermoney.app \
+            $ICON \
             --hidden-import=alpaca_trade_api --hidden-import=ib_insync --hidden-import=binance.client \
             --hidden-import=pybit.unified_trading --hidden-import=okx.Account --hidden-import=okx.Trade \
             --hidden-import=flask --hidden-import=flask_cors --hidden-import=cryptography.fernet \
             --hidden-import=yfinance --hidden-import=pandas --hidden-import=numpy --hidden-import=fpdf \
-            --hidden-import=websocket --hidden-import=zoneinfo --hidden-import=asyncio app.py
+            --hidden-import=websocket --hidden-import=zoneinfo --hidden-import=asyncio \
+            --hidden-import=pandas._libs.tslibs.base \
+            app.py
 
-      - name: Strip code signatures (to avoid errors on unsigned builds)
+      - name: Strip code signatures (unsigned builds)
         run: |
           find dist/TraderMoney.app -type f \( -name "Python" -o -name "*.dylib" -o -name "*.so" \) -exec codesign --remove-signature {} \; 2>/dev/null || true
           codesign --remove-signature dist/TraderMoney.app/Contents/MacOS/TraderMoney 2>/dev/null || true
 
       - name: Package as tar.gz
-        run: cd dist && tar -czf ../TraderMoney_macOS_Intel.tar.gz TraderMoney.app
+        run: cd dist && tar -czf ../TraderMoney_macOS_universal.tar.gz TraderMoney.app
 
       - name: Upload to release
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ github.ref_name }}
-          files: TraderMoney_macOS_Intel.tar.gz
+          files: TraderMoney_macOS_universal.tar.gz
           token: ${{ secrets.GITHUB_TOKEN }}
