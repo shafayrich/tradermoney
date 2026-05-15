@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-TraderMoney v2.0.11 – Triple-A Professional Trading Terminal
+TraderMoney v2.0.12 – Triple-A Professional Trading Terminal
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Complete file – ready to run.
 Includes embedded TradingView charts, full frontend JS, all brokers.
@@ -35,7 +35,7 @@ import webview
 from flask import Flask, Response, jsonify, request, send_file
 from flask_cors import CORS
 
-APP_VERSION = "2.0.11"
+APP_VERSION = "2.0.12"
 
 # ──────────────────────────────────────────────────────────────────────────────
 # STRUCTURED LOGGING
@@ -631,8 +631,12 @@ class IBKRBroker(BaseBroker):
         if self._loop is None or not self._loop.is_running():
             self._ib_thread = threading.Thread(target=self._start_loop, daemon=True, name="IBKRLoop")
             self._ib_thread.start()
-            waited=0; while (self._loop is None or not self._loop.is_running()) and waited<5: time.sleep(0.3); waited+=0.3
-            if self._loop is None or not self._loop.is_running(): raise RuntimeError("IBKR event loop failed")
+            waited = 0
+            while (self._loop is None or not self._loop.is_running()) and waited < 5:
+                time.sleep(0.3)
+                waited += 0.3
+            if self._loop is None or not self._loop.is_running():
+                raise RuntimeError("IBKR event loop failed to start")
     def _run_coro(self, coro, timeout=15):
         return asyncio.run_coroutine_threadsafe(coro, self._loop).result(timeout=timeout)
     def connect(self) -> bool:
