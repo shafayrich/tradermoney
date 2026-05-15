@@ -10,7 +10,20 @@ permissions:
 
 jobs:
 
+  validate-syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Check Python syntax
+        run: |
+          python -m py_compile app.py
+          echo "✓ Python syntax is valid"
+
   build-windows:
+    needs: validate-syntax
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -25,7 +38,7 @@ jobs:
       - name: Build app
         run: |
           if (Test-Path icon.ico) { $iconArg = "--icon=icon.ico" } else { $iconArg = "" }
-          pyinstaller --noconsole --windowed --name "TraderMoney" --collect-all pywebview --collect-data lightweight_charts $iconArg --hidden-import=binance.client --hidden-import=pybit.unified --hidden-import=okx.Account --hidden-import=okx.Trade --hidden-import=ib_insync app.py
+          pyinstaller --noconsole --windowed --name "TraderMoney" --collect-all pywebview --collect-data lightweight_charts $iconArg --hidden-import=binance.client --hidden-import=pybit.unified --hidden-import=okx --hidden-import=ib_insync -F app.py
         shell: pwsh
       - name: Zip artifact
         shell: pwsh
@@ -38,6 +51,7 @@ jobs:
           token: ${{ secrets.RELEASE_TOKEN }}
 
   build-macos-apple-silicon:
+    needs: validate-syntax
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -53,7 +67,7 @@ jobs:
         run: |
           ICON=""
           if [ -f icon.icns ]; then ICON="--icon=icon.icns"; fi
-          pyinstaller --noconsole --windowed --name "TraderMoney" --collect-all pywebview --collect-data lightweight_charts --target-architecture arm64 --codesign-identity - --osx-bundle-identifier com.tradermoney.app $ICON app.py
+          pyinstaller --noconsole --windowed --name "TraderMoney" --collect-all pywebview --collect-data lightweight_charts --target-architecture arm64 --codesign-identity - --osx-bundle-identifier com.tradermoney.app $ICON --hidden-import=binance.client --hidden-import=pybit.unified --hidden-import=okx --hidden-import=ib_insync -F app.py
       - name: Strip signatures
         run: |
           find dist/TraderMoney.app -type f \( -name "Python" -o -name "*.dylib" -o -name "*.so" \) -exec codesign --remove-signature {} \; 2>/dev/null || true
@@ -68,6 +82,7 @@ jobs:
           token: ${{ secrets.RELEASE_TOKEN }}
 
   build-macos-intel:
+    needs: validate-syntax
     runs-on: macos-15-intel
     steps:
       - uses: actions/checkout@v4
@@ -83,7 +98,7 @@ jobs:
         run: |
           ICON=""
           if [ -f icon.icns ]; then ICON="--icon=icon.icns"; fi
-          pyinstaller --noconsole --windowed --name "TraderMoney" --collect-all pywebview --collect-data lightweight_charts --target-architecture x86_64 --codesign-identity - --osx-bundle-identifier com.tradermoney.app $ICON app.py
+          pyinstaller --noconsole --windowed --name "TraderMoney" --collect-all pywebview --collect-data lightweight_charts --target-architecture x86_64 --codesign-identity - --osx-bundle-identifier com.tradermoney.app $ICON --hidden-import=binance.client --hidden-import=pybit.unified --hidden-import=okx --hidden-import=ib_insync -F app.py
       - name: Strip signatures
         run: |
           find dist/TraderMoney.app -type f \( -name "Python" -o -name "*.dylib" -o -name "*.so" \) -exec codesign --remove-signature {} \; 2>/dev/null || true
