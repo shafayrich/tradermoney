@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-TraderMoney v2.0.14 – Triple-A Professional Trading Terminal
+TraderMoney v2.0.15 – Triple-A Professional Trading Terminal
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Complete file – ready to run.
 Includes embedded TradingView charts, full frontend JS, all brokers.
@@ -35,7 +35,7 @@ import webview
 from flask import Flask, Response, jsonify, request, send_file
 from flask_cors import CORS
 
-APP_VERSION = "2.0.14"
+APP_VERSION = "2.0.15"
 
 # ──────────────────────────────────────────────────────────────────────────────
 # STRUCTURED LOGGING
@@ -870,9 +870,8 @@ class BinanceBroker(BaseBroker):
                 for s in sym_map: self._ws_client.trade(symbol=s)
                 while not self._stop_stream: time.sleep(1)
                 self._ws_client.stop()
-            except Exception as e: self._emit_log(f"Stream warning: {e}")
-        threading.Thread(target=run, daemon=True).start()
-      def stop_stream(self):
+                       except Exception as e: self._emit_log(f"Stream warning: {e}")
+    def stop_stream(self):  # ✅ Correct indentation (4 spaces)
         self._stop_stream = True
         if self._ws_client:
             try:
