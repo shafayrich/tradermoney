@@ -57,7 +57,7 @@ jobs:
   # macOS – Intel (x86_64) – runs on Intel Macs and Apple Silicon via Rosetta 2
   # -------------------------------------------------------------------------
   build-macos:
-    runs-on: macos-15-intel      # ✅ Updated runner label
+    runs-on: macos-15-intel
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -70,7 +70,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install --upgrade pip
-          pip install pywebview flask flask-cors yfinance pandas requests alpaca-trade-api numpy cryptography ib_insync pyinstaller
+          pip install pywebview flask flask-cors yfinance pandas requests alpaca-trade-api numpy cryptography ib_insync pyinstaller pillow
           pip install python-binance pybit okx
           pip install fpdf websocket-client
 
