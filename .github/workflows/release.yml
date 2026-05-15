@@ -54,57 +54,10 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
 
   # -------------------------------------------------------------------------
-  # macOS – Apple Silicon (ARM64)
-  # -------------------------------------------------------------------------
-  build-macos-arm64:
-    runs-on: macos-14          # M1/M2 runner
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install dependencies
-        run: |
-          pip install --upgrade pip
-          pip install pywebview flask flask-cors yfinance pandas requests alpaca-trade-api numpy cryptography ib_insync pyinstaller
-          pip install python-binance pybit okx
-          pip install fpdf websocket-client
-
-      - name: Build with PyInstaller (macOS ARM64)
-        run: |
-          ICON=""
-          if [ -f icon.icns ]; then ICON="--icon=icon.icns"; fi
-          pyinstaller --onedir --windowed --name "TraderMoney" --add-data "app.py:." --collect-all pywebview --collect-all yfinance --collect-all pandas --collect-all cryptography --target-architecture arm64 --codesign-identity - --osx-bundle-identifier com.tradermoney.app $ICON \
-            --hidden-import=alpaca_trade_api --hidden-import=ib_insync --hidden-import=binance.client \
-            --hidden-import=pybit.unified_trading --hidden-import=okx.Account --hidden-import=okx.Trade \
-            --hidden-import=flask --hidden-import=flask_cors --hidden-import=cryptography.fernet \
-            --hidden-import=yfinance --hidden-import=pandas --hidden-import=numpy --hidden-import=fpdf \
-            --hidden-import=websocket --hidden-import=zoneinfo --hidden-import=asyncio app.py
-
-      - name: Strip code signatures (to avoid errors)
-        run: |
-          find dist/TraderMoney.app -type f \( -name "Python" -o -name "*.dylib" -o -name "*.so" \) -exec codesign --remove-signature {} \; 2>/dev/null || true
-          codesign --remove-signature dist/TraderMoney.app/Contents/MacOS/TraderMoney 2>/dev/null || true
-
-      - name: Package as tar.gz
-        run: cd dist && tar -czf ../TraderMoney_macOS_AppleSilicon.tar.gz TraderMoney.app
-
-      - name: Upload to release
-        uses: softprops/action-gh-release@v1
-        with:
-          tag_name: ${{ github.ref_name }}
-          files: TraderMoney_macOS_AppleSilicon.tar.gz
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-  # -------------------------------------------------------------------------
-  # macOS – Intel (x86_64)
+  # macOS – Intel (x86_64) – works on both Intel and Apple Silicon (via Rosetta 2)
   # -------------------------------------------------------------------------
   build-macos-intel:
-    runs-on: macos-13          # Intel runner
+    runs-on: macos-13          # Intel runner (macOS 13 Ventura on Intel)
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -132,7 +85,7 @@ jobs:
             --hidden-import=yfinance --hidden-import=pandas --hidden-import=numpy --hidden-import=fpdf \
             --hidden-import=websocket --hidden-import=zoneinfo --hidden-import=asyncio app.py
 
-      - name: Strip code signatures
+      - name: Strip code signatures (to avoid errors on unsigned builds)
         run: |
           find dist/TraderMoney.app -type f \( -name "Python" -o -name "*.dylib" -o -name "*.so" \) -exec codesign --remove-signature {} \; 2>/dev/null || true
           codesign --remove-signature dist/TraderMoney.app/Contents/MacOS/TraderMoney 2>/dev/null || true
@@ -145,51 +98,4 @@ jobs:
         with:
           tag_name: ${{ github.ref_name }}
           files: TraderMoney_macOS_Intel.tar.gz
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-  # -------------------------------------------------------------------------
-  # Linux Build (AppImage or simple folder)
-  # -------------------------------------------------------------------------
-  build-linux:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install system dependencies (for PyWebView)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.0-dev
-
-      - name: Install Python dependencies
-        run: |
-          pip install --upgrade pip
-          pip install pywebview flask flask-cors yfinance pandas requests alpaca-trade-api numpy cryptography ib_insync pyinstaller
-          pip install python-binance pybit okx
-          pip install fpdf websocket-client
-
-      - name: Build with PyInstaller (Linux)
-        run: |
-          ICON=""
-          if [ -f icon.png ]; then ICON="--icon=icon.png"; fi
-          pyinstaller --onedir --name "TraderMoney" --add-data "app.py:." --collect-all pywebview --collect-all yfinance --collect-all pandas --collect-all cryptography $ICON \
-            --hidden-import=alpaca_trade_api --hidden-import=ib_insync --hidden-import=binance.client \
-            --hidden-import=pybit.unified_trading --hidden-import=okx.Account --hidden-import=okx.Trade \
-            --hidden-import=flask --hidden-import=flask_cors --hidden-import=cryptography.fernet \
-            --hidden-import=yfinance --hidden-import=pandas --hidden-import=numpy --hidden-import=fpdf \
-            --hidden-import=websocket --hidden-import=zoneinfo --hidden-import=asyncio app.py
-
-      - name: Package as tar.gz
-        run: cd dist && tar -czf ../TraderMoney_Linux.tar.gz TraderMoney
-
-      - name: Upload to release
-        uses: softprops/action-gh-release@v1
-        with:
-          tag_name: ${{ github.ref_name }}
-          files: TraderMoney_Linux.tar.gz
           token: ${{ secrets.GITHUB_TOKEN }}
