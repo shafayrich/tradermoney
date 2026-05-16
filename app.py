@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-TraderMoney v2.1.2 – Fixed Edition
+TraderMoney v2.1.3 – Enhanced Backtest Edition
 Changes from v2.1.2 base:
   1. Backtest simulation: corrected P&L double-counting bug and short-position
      principal tracking. Equity is now carried correctly through all transitions.
@@ -37,7 +37,7 @@ import webview
 from flask import Flask, Response, jsonify, request, send_file
 from flask_cors import CORS
 
-APP_VERSION = "2.1.2"
+APP_VERSION = "2.1.3"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # AI CONFIGURATION
@@ -2354,7 +2354,53 @@ def api_backtest():
                 exits = [t for t in trades if t["type"] == "exit"]
                 total_pnl = sum(t["pnl"] for t in exits)
                 wins = sum(1 for t in exits if t["pnl"] > 0)
+                losses = sum(1 for t in exits if t["pnl"] < 0)
                 win_rate = (wins / len(exits) * 100) if exits else 0
+
+                # Advanced metrics
+                pnl_list = [t["pnl"] for t in exits]
+                avg_trade = float(np.mean(pnl_list)) if pnl_list else 0.0
+                best_trade = max(pnl_list) if pnl_list else 0.0
+                worst_trade = min(pnl_list) if pnl_list else 0.0
+                gross_profit = sum(p for p in pnl_list if p > 0)
+                gross_loss = abs(sum(p for p in pnl_list if p < 0))
+                profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else (float('inf') if gross_profit > 0 else 0.0)
+                avg_win = (gross_profit / wins) if wins > 0 else 0.0
+                avg_loss = (gross_loss / losses) if losses > 0 else 0.0
+                expectancy = avg_trade
+
+                # Equity curve
+                eq_curve = [{"time": "Start", "equity": float(initial_cash)}]
+                running_eq = float(initial_cash)
+                for t in exits:
+                    running_eq += t["pnl"]
+                    eq_curve.append({"time": t["exit_time"], "equity": round(running_eq, 2)})
+
+                # Max drawdown
+                peak = float(initial_cash)
+                max_dd = 0.0
+                max_dd_pct = 0.0
+                for pt in eq_curve:
+                    if pt["equity"] > peak:
+                        peak = pt["equity"]
+                    dd = peak - pt["equity"]
+                    dd_pct = (dd / peak * 100) if peak > 0 else 0
+                    if dd > max_dd:
+                        max_dd = dd
+                    if dd_pct > max_dd_pct:
+                        max_dd_pct = dd_pct
+
+                # Sharpe ratio (annualized, using trade returns)
+                if len(pnl_list) >= 2:
+                    returns = [p / initial_cash for p in pnl_list]
+                    avg_ret = float(np.mean(returns))
+                    std_ret = float(np.std(returns, ddof=1))
+                    sharpe = (avg_ret / std_ret * math.sqrt(252)) if std_ret > 0 else 0.0
+                else:
+                    sharpe = 0.0
+
+                # Return on investment
+                roi = ((final_cash - initial_cash) / initial_cash * 100) if initial_cash > 0 else 0.0
 
                 sym_results["simulation"] = {
                     "initial_cash": initial_cash,
@@ -2362,6 +2408,20 @@ def api_backtest():
                     "total_pnl": round(total_pnl, 2),
                     "win_rate": round(win_rate, 1),
                     "total_trades": len(exits),
+                    "wins": wins,
+                    "losses": losses,
+                    "avg_trade": round(avg_trade, 2),
+                    "best_trade": round(best_trade, 2),
+                    "worst_trade": round(worst_trade, 2),
+                    "profit_factor": round(profit_factor, 2) if profit_factor != float('inf') else 999.99,
+                    "sharpe_ratio": round(sharpe, 2),
+                    "max_drawdown": round(max_dd, 2),
+                    "max_drawdown_pct": round(max_dd_pct, 1),
+                    "roi": round(roi, 2),
+                    "avg_win": round(avg_win, 2),
+                    "avg_loss": round(avg_loss, 2),
+                    "expectancy": round(expectancy, 2),
+                    "equity_curve": eq_curve,
                     "trades": trades,
                 }
                 all_trades.extend(trades)
@@ -3537,7 +3597,7 @@ if __name__ == "__main__":
     time.sleep(1.2)
 
     window = webview.create_window(
-        "TraderMoney 2.1.2",
+        "TraderMoney 2.1.3",
         "http://127.0.0.1:5050",
         width=1440,
         height=880,

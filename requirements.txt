@@ -1,0 +1,19 @@
+# Core (required)
+numpy
+pandas
+requests
+flask
+flask-cors
+pywebview
+cryptography
+yfinance
+fpdf2
+
+# Optional broker SDKs (install only what you need)
+# alpaca-trade-api
+# alpaca-py
+# ib_insync
+# binance-connector
+# pybit
+# python-okx
+# websocket-client
