@@ -457,10 +457,10 @@
     </footer>
 
     <script>
-        fetch('https://raw.githubusercontent.com/shafayrich/tradermoney/main/version.json')
+        fetch('https://raw.githubusercontent.com/shafayrich/tradermoney/main/version.json?t=' + Date.now())
             .then(r => r.json())
             .then(data => { document.getElementById('version-number').textContent = 'v' + data.latest_version; })
-            .catch(() => { document.getElementById('version-number').textContent = 'v1.0.52'; });
+            .catch(() => { document.getElementById('version-number').textContent = 'v2.1.3'; });
     </script>
 </body>
 </html>
