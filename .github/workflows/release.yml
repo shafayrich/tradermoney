@@ -8,6 +8,9 @@ on:
 permissions:
   contents: write
 
+env:
+  OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+
 jobs:
   # -------------------------------------------------------------------------
   # Windows Build (64-bit)
@@ -28,7 +31,7 @@ jobs:
           pip install --upgrade pip
           pip install pywebview flask flask-cors yfinance pandas requests alpaca-trade-api numpy cryptography ib_insync pyinstaller pillow
           pip install python-binance pybit okx
-          pip install fpdf websocket-client
+          pip install fpdf2 websocket-client
 
       - name: Build with PyInstaller (Windows)
         shell: pwsh
@@ -39,7 +42,7 @@ jobs:
             --hidden-import=alpaca_trade_api --hidden-import=ib_insync --hidden-import=binance.client `
             --hidden-import=pybit.unified_trading --hidden-import=okx.Account --hidden-import=okx.Trade `
             --hidden-import=flask --hidden-import=flask_cors --hidden-import=cryptography.fernet `
-            --hidden-import=yfinance --hidden-import=pandas --hidden-import=numpy --hidden-import=fpdf `
+            --hidden-import=yfinance --hidden-import=pandas --hidden-import=numpy --hidden-import=fpdf2 `
             --hidden-import=websocket --hidden-import=zoneinfo --hidden-import=asyncio app.py
 
       - name: Package as ZIP
@@ -54,9 +57,9 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
 
   # -------------------------------------------------------------------------
-  # macOS – Intel (x86_64) – runs on Intel Macs and Apple Silicon via Rosetta 2
+  # macOS – Intel (x86_64)
   # -------------------------------------------------------------------------
-  build-macos:
+  build-macos-intel:
     runs-on: macos-15-intel
     steps:
       - name: Checkout code
@@ -72,7 +75,7 @@ jobs:
           pip install --upgrade pip
           pip install pywebview flask flask-cors yfinance pandas requests alpaca-trade-api numpy cryptography ib_insync pyinstaller pillow
           pip install python-binance pybit okx
-          pip install fpdf websocket-client
+          pip install fpdf2 websocket-client
 
       - name: Build with PyInstaller (macOS x86_64)
         run: |
@@ -82,7 +85,7 @@ jobs:
             --hidden-import=alpaca_trade_api --hidden-import=ib_insync --hidden-import=binance.client \
             --hidden-import=pybit.unified_trading --hidden-import=okx.Account --hidden-import=okx.Trade \
             --hidden-import=flask --hidden-import=flask_cors --hidden-import=cryptography.fernet \
-            --hidden-import=yfinance --hidden-import=pandas --hidden-import=numpy --hidden-import=fpdf \
+            --hidden-import=yfinance --hidden-import=pandas --hidden-import=numpy --hidden-import=fpdf2 \
             --hidden-import=websocket --hidden-import=zoneinfo --hidden-import=asyncio app.py
 
       - name: Strip code signatures (unsigned builds)
@@ -98,4 +101,51 @@ jobs:
         with:
           tag_name: ${{ github.ref_name }}
           files: TraderMoney_macOS_Intel.tar.gz
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  # -------------------------------------------------------------------------
+  # macOS – Apple Silicon (arm64)
+  # -------------------------------------------------------------------------
+  build-macos-arm:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install pywebview flask flask-cors yfinance pandas requests alpaca-trade-api numpy cryptography ib_insync pyinstaller pillow
+          pip install python-binance pybit okx
+          pip install fpdf2 websocket-client
+
+      - name: Build with PyInstaller (macOS arm64)
+        run: |
+          ICON=""
+          if [ -f icon.icns ]; then ICON="--icon=icon.icns"; fi
+          pyinstaller --onedir --windowed --name "TraderMoney" --add-data "app.py:." --collect-all pywebview --collect-all yfinance --collect-all pandas --collect-all cryptography --target-architecture arm64 --codesign-identity - --osx-bundle-identifier com.tradermoney.app $ICON \
+            --hidden-import=alpaca_trade_api --hidden-import=ib_insync --hidden-import=binance.client \
+            --hidden-import=pybit.unified_trading --hidden-import=okx.Account --hidden-import=okx.Trade \
+            --hidden-import=flask --hidden-import=flask_cors --hidden-import=cryptography.fernet \
+            --hidden-import=yfinance --hidden-import=pandas --hidden-import=numpy --hidden-import=fpdf2 \
+            --hidden-import=websocket --hidden-import=zoneinfo --hidden-import=asyncio app.py
+
+      - name: Strip code signatures (unsigned builds)
+        run: |
+          find dist/TraderMoney.app -type f \( -name "Python" -o -name "*.dylib" -o -name "*.so" \) -exec codesign --remove-signature {} \; 2>/dev/null || true
+          codesign --remove-signature dist/TraderMoney.app/Contents/MacOS/TraderMoney 2>/dev/null || true
+
+      - name: Package as tar.gz
+        run: cd dist && tar -czf ../TraderMoney_macOS_AppleSilicon.tar.gz TraderMoney.app
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: TraderMoney_macOS_AppleSilicon.tar.gz
           token: ${{ secrets.GITHUB_TOKEN }}
