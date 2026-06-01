@@ -47,7 +47,7 @@ APP_VERSION = "2.2.0"
 # ═══════════════════════════════════════════════════════════════════════════════
 # AI CONFIGURATION
 # ═══════════════════════════════════════════════════════════════════════════════
-OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
+OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY") or "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"
 AI_MODELS = [
     "google/gemini-2.5-flash",
     "deepseek/deepseek-chat-v3-0324",
@@ -1436,6 +1436,7 @@ class IndicatorCalculator:
         high = np.asarray(df["High"]).astype(np.float64).ravel()
         low = np.asarray(df["Low"]).astype(np.float64).ravel()
         volume = (np.asarray(df["Volume"]).astype(np.float64).ravel() if "Volume" in df.columns else np.ones_like(close))
+        n = len(close)
 
         def ema(data: np.ndarray, span: int) -> np.ndarray:
             a = 2 / (span + 1)
@@ -1445,6 +1446,11 @@ class IndicatorCalculator:
                 res[i] = a * data[i] + (1 - a) * res[i - 1]
             return res
 
+        def safe_convolve(data, window_size, mode="same"):
+            if n >= window_size:
+                return np.convolve(data, np.ones(window_size) / window_size, mode=mode)[:n]
+            return np.full_like(data, np.nan)
+
         df["EMA_fast"] = ema(close, ema_fast)
         df["EMA_slow"] = ema(close, ema_slow)
 
@@ -1452,8 +1458,8 @@ class IndicatorCalculator:
         delta = np.diff(close, prepend=close[0])
         gain = np.where(delta > 0, delta, 0.0)
         loss = np.where(delta < 0, -delta, 0.0)
-        ag = np.convolve(gain, np.ones(rsi_period) / rsi_period, mode="full")[:len(close)]
-        al = np.convolve(loss, np.ones(rsi_period) / rsi_period, mode="full")[:len(close)]
+        ag = safe_convolve(gain, rsi_period, mode="full")
+        al = safe_convolve(loss, rsi_period, mode="full")
         rs = np.divide(ag, al, out=np.zeros_like(ag), where=al != 0)
         df["RSI"] = 100 - (100 / (1 + rs))
 
@@ -1463,8 +1469,12 @@ class IndicatorCalculator:
         df["MACD_signal"] = ema(m, macd_signal_p)
 
         # Bollinger Bands with custom period and std
-        ma_bb = np.convolve(close, np.ones(bb_period) / bb_period, mode="same")
-        std_bb = np.array([np.std(close[max(0, i - bb_period + 1):i + 1]) for i in range(len(close))])
+        if n >= bb_period:
+            ma_bb = safe_convolve(close, bb_period)
+            std_bb = np.array([np.std(close[max(0, i - bb_period + 1):i + 1]) for i in range(n)])
+        else:
+            ma_bb = np.full(n, np.nan)
+            std_bb = np.full(n, np.nan)
         df["BB_upper"] = ma_bb + bb_std * std_bb
         df["BB_lower"] = ma_bb - bb_std * std_bb
 
@@ -1488,8 +1498,7 @@ class IndicatorCalculator:
         df["ADX"] = ema(dx, adx_period)
 
         # Volume ratio with custom period
-        vol_avg = np.convolve(volume, np.ones(vol_period) / vol_period, mode="same")
-        df["Vol_ratio"] = np.divide(volume, vol_avg, out=np.ones_like(volume), where=vol_avg != 0)
+        df["Vol_ratio"] = safe_convolve(volume, vol_period)
 
         # SuperTrend with custom period and multiplier
         st_atr = ema(tr, st_period)
@@ -1596,39 +1605,40 @@ class SignalAnalyzer:
         stk = sf(l.get("Stoch_K", 50), 50)
         std_ = sf(l.get("Stoch_D", 50), 50)
 
+        def is_valid(v): return not (isinstance(v, float) and (math.isnan(v) or math.isinf(v)))
         if direction == "bull":
-            if config.get("use_rsi", True) and rsi < rsi_oversold:
+            if config.get("use_rsi", True) and is_valid(rsi) and rsi < rsi_oversold:
                 return False, "bull"
-            if config.get("use_macd", True) and macd <= msig:
+            if config.get("use_macd", True) and is_valid(macd) and is_valid(msig) and macd <= msig:
                 return False, "bull"
-            if config.get("use_vwap", True) and price < vwap:
+            if config.get("use_vwap", True) and is_valid(vwap) and price < vwap:
                 return False, "bull"
-            if config.get("use_bollinger", True) and price < bbl * 0.99:
+            if config.get("use_bollinger", True) and is_valid(bbl) and price < bbl * 0.99:
                 return False, "bull"
             if config.get("use_supertrend", True) and stt != 1:
                 return False, "bull"
-            if config.get("use_stochastic", True) and (stk < std_ or stk > 80):
+            if config.get("use_stochastic", True) and is_valid(stk) and is_valid(std_) and (stk < std_ or stk > 80):
                 return False, "bull"
-            if config.get("use_adx", True) and adx < adx_threshold:
+            if config.get("use_adx", True) and is_valid(adx) and adx < adx_threshold:
                 return False, "bull"
-            if config.get("use_vol_confirm", True) and vr < vol_threshold:
+            if config.get("use_vol_confirm", True) and is_valid(vr) and vr < vol_threshold:
                 return False, "bull"
         else:
-            if config.get("use_rsi", True) and rsi > rsi_overbought:
+            if config.get("use_rsi", True) and is_valid(rsi) and rsi > rsi_overbought:
                 return False, "bear"
-            if config.get("use_macd", True) and macd >= msig:
+            if config.get("use_macd", True) and is_valid(macd) and is_valid(msig) and macd >= msig:
                 return False, "bear"
-            if config.get("use_vwap", True) and price > vwap:
+            if config.get("use_vwap", True) and is_valid(vwap) and price > vwap:
                 return False, "bear"
-            if config.get("use_bollinger", True) and price > bbu * 1.01:
+            if config.get("use_bollinger", True) and is_valid(bbu) and price > bbu * 1.01:
                 return False, "bear"
             if config.get("use_supertrend", True) and stt != -1:
                 return False, "bear"
-            if config.get("use_stochastic", True) and (stk > std_ or stk < 20):
+            if config.get("use_stochastic", True) and is_valid(stk) and is_valid(std_) and (stk > std_ or stk < 20):
                 return False, "bear"
-            if config.get("use_adx", True) and adx < adx_threshold:
+            if config.get("use_adx", True) and is_valid(adx) and adx < adx_threshold:
                 return False, "bear"
-            if config.get("use_vol_confirm", True) and vr < vol_threshold:
+            if config.get("use_vol_confirm", True) and is_valid(vr) and vr < vol_threshold:
                 return False, "bear"
         return True, direction
 
@@ -2366,12 +2376,12 @@ def api_backtest():
                     pf = SignalAnalyzer._sf(prev["EMA_fast"])
                     ps = SignalAnalyzer._sf(prev["EMA_slow"])
                     sig, _, conf = SignalAnalyzer.generate_signal(
-                        df.iloc[:i + 1], pf, ps, config)
+                        df.iloc[:i + 1], pf, ps, config,
+                        indicator_params=ind_params)
                     if sig:
                         row = df.iloc[i]
                         rsi_v = SignalAnalyzer._sf(row.get("RSI", 50))
                         macd_v = SignalAnalyzer._sf(row.get("MACD", 0))
-                        bb_pct = SignalAnalyzer._sf(row.get("Close", row.get("close", price)))
                         reasons = []
                         if config.get("use_rsi", True):
                             reasons.append(f"RSI={rsi_v:.1f}")
@@ -2634,7 +2644,8 @@ def monte_carlo():
                     if isinstance(df.columns, pd.MultiIndex):
                         df.columns = df.columns.get_level_values(0)
                     ef, es = config.get("emas", [9, 50])
-                    df = IndicatorCalculator.compute_all(df, ef, es)
+                    ind_params = config.get("indicator_params", {})
+                    df = IndicatorCalculator.compute_all(df, ef, es, indicator_params=ind_params)
                     for i in range(1, len(df)):
                         prev = df.iloc[i - 1]
                         curr = df.iloc[i]
@@ -2642,7 +2653,7 @@ def monte_carlo():
                         ps = SignalAnalyzer._sf(prev["EMA_slow"])
                         sig, _, _ = SignalAnalyzer.generate_signal(
                             df.iloc[:i + 1], pf, ps, config,
-                            indicator_params=config.get("indicator_params", {}))
+                            indicator_params=ind_params)
                         if sig:
                             sigs.append(SignalAnalyzer._sf(curr["Close"]))
                 except Exception:
