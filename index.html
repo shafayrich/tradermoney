@@ -4,20 +4,22 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>TraderMoney — Institutional Trading Terminal</title>
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%230a0a0a'/><text x='50%25' y='58%25' dominant-baseline='middle' text-anchor='middle' fill='%23D4AF37' font-family='system-ui' font-weight='700' font-size='38'>TM</text></svg>">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%230b0e14'/><text x='50%25' y='58%25' dominant-baseline='middle' text-anchor='middle' fill='%2300c9a7' font-family='system-ui' font-weight='700' font-size='38'>TM</text></svg>">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <style>
         :root {
-            --bg: #0a0a0a;
-            --surface: #111111;
-            --border: #1e1e1e;
-            --text: #e4e4e4;
-            --muted: #6b6b6b;
-            --gold: #D4AF37;
-            --gold-dim: rgba(212,175,55,0.08);
-            --danger: #e03a3a;
+            --bg: #0b0e14;
+            --surface: #111827;
+            --border: rgba(255,255,255,0.04);
+            --border2: rgba(255,255,255,0.06);
+            --text: #e8edf5;
+            --muted: #64748b;
+            --accent: #00c9a7;
+            --accent-dim: rgba(0,201,167,0.12);
+            --danger: #ef4444;
+            --radius: 12px;
         }
         * { margin: 0; padding: 0; box-sizing: border-box; }
         html { background: var(--bg); scroll-behavior: smooth; }
@@ -38,8 +40,8 @@
             position: fixed;
             inset: 0;
             background-image:
-                linear-gradient(rgba(255,255,255,0.018) 1px, transparent 1px),
-                linear-gradient(90deg, rgba(255,255,255,0.018) 1px, transparent 1px);
+                linear-gradient(rgba(255,255,255,0.015) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255,255,255,0.015) 1px, transparent 1px);
             background-size: 64px 64px;
             pointer-events: none;
             z-index: 0;
@@ -73,24 +75,24 @@
         .logo {
             width: 56px;
             height: 56px;
-            background: var(--gold-dim);
-            border: 1px solid rgba(212,175,55,0.25);
+            background: var(--accent-dim);
+            border: 1px solid rgba(0,201,167,0.2);
             border-radius: 16px;
             display: flex;
             align-items: center;
             justify-content: center;
             margin-bottom: 32px;
             backdrop-filter: blur(10px);
-            box-shadow: 0 0 30px rgba(212,175,55,0.05);
+            box-shadow: 0 0 30px rgba(0,201,167,0.05);
         }
         .logo span {
             font-size: 1.4rem;
             font-weight: 700;
-            color: var(--gold);
+            color: var(--accent);
             letter-spacing: -0.5px;
         }
         h1 { font-size: 3.2rem; font-weight: 600; letter-spacing: -1.2px; line-height: 1.1; margin-bottom: 16px; color: #fff; }
-        h1 em { font-style: normal; color: var(--gold); }
+        h1 em { font-style: normal; color: var(--accent); }
         .subtitle {
             font-size: 1.05rem;
             color: var(--muted);
@@ -115,12 +117,12 @@
         .version-pill .dot {
             width: 7px;
             height: 7px;
-            background: #22c55e;
+            background: var(--accent);
             border-radius: 50%;
             animation: pulse-dot 2s infinite;
         }
         @keyframes pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
-        .version-pill strong { color: var(--gold); font-weight: 600; }
+        .version-pill strong { color: var(--accent); font-weight: 600; }
 
         .dl-section {
             display: flex;
@@ -152,20 +154,20 @@
             letter-spacing: 0.01em;
         }
         .dl-btn:hover {
-            border-color: #333;
-            background: #1a1a1a;
+            border-color: rgba(255,255,255,0.12);
+            background: rgba(255,255,255,0.04);
             transform: translateY(-1px);
             box-shadow: 0 4px 12px rgba(0,0,0,0.4);
         }
         .dl-btn.primary {
-            background: var(--gold);
-            color: #0a0a0a;
-            border-color: var(--gold);
+            background: var(--accent);
+            color: #000;
+            border-color: var(--accent);
             font-weight: 700;
         }
         .dl-btn.primary:hover {
-            background: #c4a02c;
-            border-color: #c4a02c;
+            background: #00b894;
+            border-color: #00b894;
         }
         .macos-note {
             font-size: 0.72rem;
@@ -174,8 +176,8 @@
             opacity: 0.85;
         }
         .gumroad-button {
-            background: var(--gold) !important;
-            color: #0a0a0a !important;
+            background: var(--accent) !important;
+            color: #000 !important;
             font-weight: 700 !important;
             font-size: 0.9rem !important;
             padding: 13px 32px !important;
@@ -188,7 +190,7 @@
         .gumroad-button:hover {
             opacity: 0.88;
             transform: translateY(-1px);
-            box-shadow: 0 4px 18px rgba(212,175,55,0.2);
+            box-shadow: 0 4px 18px rgba(0,201,167,0.2);
         }
         .divider {
             width: 1px;
@@ -252,7 +254,7 @@
             font-size: 0.9rem;
             background: var(--surface);
             border: 1px solid var(--border);
-            border-radius: 12px;
+            border-radius: var(--radius);
             overflow: hidden;
         }
         .compare-table th, .compare-table td {
@@ -262,12 +264,12 @@
         }
         .compare-table th {
             background: var(--surface);
-            color: var(--gold);
+            color: var(--accent);
             font-weight: 600;
             font-size: 1rem;
         }
         .compare-table td:first-child { font-weight: 500; }
-        .check { color: #22c55e; }
+        .check { color: var(--accent); }
         .cross { color: var(--danger); }
 
         /* Help section */
@@ -286,17 +288,17 @@
         .help-card {
             background: var(--surface);
             border: 1px solid var(--border);
-            border-radius: 12px;
+            border-radius: var(--radius);
             padding: 25px;
             margin-bottom: 18px;
             transition: border-color 0.2s;
         }
-        .help-card:hover { border-color: #2a2a2a; }
-        .help-card h3 { color: var(--gold); margin-bottom: 12px; font-size: 1.1rem; }
+        .help-card:hover { border-color: rgba(255,255,255,0.08); }
+        .help-card h3 { color: var(--accent); margin-bottom: 12px; font-size: 1.1rem; }
         .help-card p, .help-card li { color: var(--muted); font-size: 0.9rem; line-height: 1.6; }
         .help-card ul { padding-left: 20px; margin: 10px 0; }
         .help-card ol { padding-left: 20px; margin: 10px 0; }
-        .help-card code { background: #1a1a1a; padding: 2px 6px; border-radius: 4px; font-size: 0.85rem; color: var(--text); }
+        .help-card code { background: rgba(255,255,255,0.04); padding: 2px 6px; border-radius: 4px; font-size: 0.85rem; color: var(--text); }
 
         @media (max-width: 640px) {
             h1 { font-size: 2.2rem; }
@@ -332,14 +334,12 @@
 
         <div class="dl-section">
             <div class="dl-group">
-                <!-- Updated macOS download link to match actual release asset name -->
                 <a href="https://github.com/shafayrich/tradermoney/releases/latest/download/TraderMoney_macOS_Intel.tar.gz" class="dl-btn primary">
                     Download for macOS
                 </a>
                 <p class="macos-note">Works on Intel Macs &amp; Apple Silicon via Rosetta 2</p>
             </div>
             <div class="dl-group">
-                <!-- Windows download link unchanged (correct) -->
                 <a href="https://github.com/shafayrich/tradermoney/releases/latest/download/TraderMoney_Windows.zip" class="dl-btn">
                     Download for Windows
                 </a>
@@ -360,7 +360,6 @@
             <span class="f-chip">macOS &amp; <strong>Windows</strong></span>
         </div>
 
-        <!-- Free vs Pro -->
         <div class="compare-section">
             <h2>Free vs Pro</h2>
             <table class="compare-table">
@@ -378,7 +377,6 @@
             </table>
         </div>
 
-        <!-- Help section -->
         <div class="help-section">
             <h2>Documentation &amp; Help</h2>
 
@@ -387,7 +385,7 @@
                 <ol>
                     <li>Download the app for your platform.</li>
                     <li>Launch <strong>TraderMoney</strong>. The free tier allows Signal‑Only mode on Alpaca paper.</li>
-                    <li>Paste your Alpaca API Key &amp; Secret (get them from <a href="https://alpaca.markets" style="color:var(--gold)">alpaca.markets</a>). Enable Paper Trading.</li>
+                    <li>Paste your Alpaca API Key &amp; Secret (get them from <a href="https://alpaca.markets" style="color:var(--accent)">alpaca.markets</a>). Enable Paper Trading.</li>
                     <li>Enter your tickers (e.g., <code>AAPL, TSLA:2, MSFT</code>). Quantities after colon set per‑symbol size.</li>
                     <li>Click <strong>Start Bot</strong>. Signals will appear in the Signals tab.</li>
                 </ol>
@@ -396,7 +394,7 @@
             <div class="help-card">
                 <h3>Broker Setup</h3>
                 <ul>
-                    <li><strong>Alpaca:</strong> API Key + Secret. Check “Paper Trading” for simulation. Live requires a funded account.</li>
+                    <li><strong>Alpaca:</strong> API Key + Secret. Check &ldquo;Paper Trading&rdquo; for simulation. Live requires a funded account.</li>
                     <li><strong>Interactive Brokers:</strong> TWS or IB Gateway must be running with API enabled. Default port: 7497 (paper) / 7496 (live).</li>
                     <li><strong>Tradier:</strong> Access token from developer.tradier.com. Use Sandbox for testing.</li>
                     <li><strong>Binance:</strong> API Key + Secret. Testnet available via checkbox.</li>
@@ -460,7 +458,7 @@
         fetch('https://raw.githubusercontent.com/shafayrich/tradermoney/main/version.json?t=' + Date.now())
             .then(r => r.json())
             .then(data => { document.getElementById('version-number').textContent = 'v' + data.latest_version; })
-            .catch(() => { document.getElementById('version-number').textContent = 'v2.2.0'; });
+            .catch(() => { document.getElementById('version-number').textContent = 'v2.5.0'; });
     </script>
 </body>
 </html>
