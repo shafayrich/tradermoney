@@ -42,12 +42,12 @@ import webview
 from flask import Flask, Response, jsonify, request, send_file
 from flask_cors import CORS
 
-APP_VERSION = "2.2.0"
+APP_VERSION = "2.3.0"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # AI CONFIGURATION
 # ═══════════════════════════════════════════════════════════════════════════════
-OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY") or "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"
+OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY") or "INJECT_OPENROUTER_API_KEY"
 AI_MODELS = [
     "google/gemini-2.5-flash",
     "deepseek/deepseek-chat-v3-0324",
@@ -345,9 +345,6 @@ class EncryptedConfigManager:
 # ═══════════════════════════════════════════════════════════════════════════════
 # GLOBAL STATE
 # ═══════════════════════════════════════════════════════════════════════════════
-ATR_STOP_MULT = 2.0
-ATR_TP_MULT = 3.0
-
 def get_indicator_params(config: dict) -> dict:
     """Get indicator parameters from config, with defaults."""
     defaults = _DEFAULT_CONFIG.get("indicator_params", {})
@@ -916,10 +913,13 @@ class TradierBroker(BaseBroker):
         try:
             r = self.session.get(f"{self._base}/accounts/{self.account_id}/positions", timeout=10)
             r.raise_for_status()
-            raw = r.json().get("positions", {}).get("position", [])
+            p_data = r.json().get("positions")
+            if not p_data or p_data == "null":
+                return {}
+            raw = p_data.get("position", [])
             if isinstance(raw, dict):
                 raw = [raw]
-            return {p["symbol"]: int(float(p["quantity"])) for p in raw if p}
+            return {p["symbol"]: int(float(p["quantity"])) for p in raw if p and "symbol" in p and "quantity" in p}
         except Exception:
             return {}
 
@@ -1037,7 +1037,7 @@ class BinanceBroker(BaseBroker):
             resp = self.client.new_order(
                 symbol=self._norm(symbol),
                 side="BUY" if side == "buy" else "SELL",
-                type="MARKET", quantity=qty)
+                type="MARKET", quantity=round(float(qty), 6))
             if resp.get("status") not in ("FILLED", "NEW", "PARTIALLY_FILLED"):
                 self._emit_error(f"Binance order status: {resp}")
                 return False
@@ -1053,9 +1053,9 @@ class BinanceBroker(BaseBroker):
         for asset, free in self.get_positions().items():
             if free > 0:
                 try:
-                    self.client.new_order(symbol=asset + "USDT", side="SELL", type="MARKET", quantity=free)
-                except Exception:
-                    pass
+                    self.client.new_order(symbol=asset + "USDT", side="SELL", type="MARKET", quantity=round(float(free), 6))
+                except Exception as e:
+                    self._emit_log(f"Binance close pos error for {asset}: {e}")
         self._emit_log("Binance: all positions closed.")
 
     def get_positions(self):
@@ -1182,7 +1182,7 @@ class BybitBroker(BaseBroker):
         try:
             kwargs = dict(
                 category="spot", symbol=self._norm(symbol),
-                side="Buy" if side == "buy" else "Sell", orderType="Market", qty=str(qty))
+                side="Buy" if side == "buy" else "Sell", orderType="Market", qty=str(round(float(qty), 6)))
             if sl_price:
                 kwargs["stopLoss"] = str(round(sl_price, 4))
             if tp_price:
@@ -1202,7 +1202,10 @@ class BybitBroker(BaseBroker):
             return
         for ccy, eq in self.get_positions().items():
             if eq > 0:
-                self.session.place_order(category="spot", symbol=ccy + "USDT", side="Sell", orderType="Market", qty=str(eq))
+                try:
+                    self.session.place_order(category="spot", symbol=ccy + "USDT", side="Sell", orderType="Market", qty=str(round(float(eq), 6)))
+                except Exception as e:
+                    self._emit_log(f"Bybit close pos error for {ccy}: {e}")
         self._emit_log("Bybit: all positions closed.")
 
     def get_positions(self):
@@ -1330,7 +1333,7 @@ class OKXBroker(BaseBroker):
         try:
             resp = self._trade_api.place_order(
                 instId=self._norm(symbol), tdMode="cash",
-                side=side, ordType="market", sz=str(int(qty)))
+                side=side, ordType="market", sz=str(round(float(qty), 6)))
             items = resp.get("data", [{}])
             s_code = str(items[0].get("sCode", "-1")) if items else "-1"
             if s_code != "0":
@@ -1348,9 +1351,12 @@ class OKXBroker(BaseBroker):
             return
         for ccy, eq in self.get_positions().items():
             if eq > 0:
-                self._trade_api.place_order(
-                    instId=f"{ccy}-USDT", tdMode="cash",
-                    side="sell", ordType="market", sz=str(eq))
+                try:
+                    self._trade_api.place_order(
+                        instId=f"{ccy}-USDT", tdMode="cash",
+                        side="sell", ordType="market", sz=str(round(float(eq), 6)))
+                except Exception as e:
+                    self._emit_log(f"OKX close pos error for {ccy}: {e}")
         self._emit_log("OKX: all positions closed.")
 
     def get_positions(self):
@@ -1768,16 +1774,17 @@ class TradingEngine(threading.Thread):
         while self.running:
             try:
                 online = is_internet_available()
+                self.ui_queue.put(("internet", online))
                 if online:
                     if self.paused:
                         self.paused = False
                         self.consecutive_failures = 0
-                        self.ui_queue.put(("status", "Internet restored – resumed"))
+                        self.ui_queue.put(("status", "Internet restored - resumed"))
                 else:
                     self.consecutive_failures += 1
                     if self.consecutive_failures >= 3 and not self.paused:
                         self.paused = True
-                        self.ui_queue.put(("status", "Internet lost – paused"))
+                        self.ui_queue.put(("status", "Internet lost - paused"))
 
                 if self.paused:
                     time.sleep(5)
@@ -1884,10 +1891,13 @@ class TradingEngine(threading.Thread):
                     ok = False
                     if use_bracket and use_atr:
                         atr = sf(latest.get("ATR", price * 0.02), price * 0.02)
+                        ip = self.config.get("indicator_params", {})
+                        atr_sm = float(ip.get("atr_stop_mult", 2.0))
+                        atr_tm = float(ip.get("atr_tp_mult", 3.0))
                         ok = self.broker.submit_order(
                             sym, qty, "buy",
-                            sl_price=price - ATR_STOP_MULT * atr,
-                            tp_price=price + ATR_TP_MULT * atr)
+                            sl_price=price - atr_sm * atr,
+                            tp_price=price + atr_tm * atr)
                     elif use_bracket:
                         ok = self.broker.submit_order(
                             sym, qty, "buy", sl_pct=sl_pct, tp_pct=tp_pct)
@@ -1916,10 +1926,13 @@ class TradingEngine(threading.Thread):
                     ok = False
                     if use_bracket and use_atr:
                         atr = sf(latest.get("ATR", price * 0.02), price * 0.02)
+                        ip = self.config.get("indicator_params", {})
+                        atr_sm = float(ip.get("atr_stop_mult", 2.0))
+                        atr_tm = float(ip.get("atr_tp_mult", 3.0))
                         ok = self.broker.submit_order(
                             sym, qty, "sell",
-                            sl_price=price + ATR_STOP_MULT * atr,
-                            tp_price=price - ATR_TP_MULT * atr)
+                            sl_price=price + atr_sm * atr,
+                            tp_price=price - atr_tm * atr)
                     elif use_bracket:
                         ok = self.broker.submit_order(
                             sym, qty, "sell", sl_pct=sl_pct, tp_pct=tp_pct)
@@ -1939,6 +1952,8 @@ class TradingEngine(threading.Thread):
             self.ui_queue.put(("error", f"Execute error {sym}: {e}"))
 
     def _sl_tp_watchdog_loop(self):
+        sl_pct = self.config.get("sl_percent", 2.0)
+        tp_pct = self.config.get("tp_percent", 4.0)
         while not self._stop_watchdog.is_set() and self.running:
             try:
                 for sym, qty in list(self.positions.items()):
@@ -1949,8 +1964,8 @@ class TradingEngine(threading.Thread):
                         price = yf.Ticker(sym).history(period="1d")["Close"].iloc[-1]
                     except Exception:
                         continue
-                    stop = price * (1 - 0.02) if qty > 0 else price * (1 + 0.02)
-                    take = price * (1 + 0.04) if qty > 0 else price * (1 - 0.04)
+                    stop = price * (1 - sl_pct / 100) if qty > 0 else price * (1 + sl_pct / 100)
+                    take = price * (1 + tp_pct / 100) if qty > 0 else price * (1 - tp_pct / 100)
                     if (qty > 0 and price <= stop) or (qty < 0 and price >= stop):
                         self.broker.submit_order(
                             sym, abs(qty), "sell" if qty > 0 else "buy")
@@ -2204,7 +2219,6 @@ def api_stop():
     if state.engine:
         state.engine.stop()
     state.running = False
-    state.config["license_valid"] = False
     return jsonify({"status": "ok", "message": "Bot stopped"})
 
 @app.route("/api/kill", methods=["POST"])
@@ -2214,7 +2228,6 @@ def api_kill():
     if state.engine:
         state.engine.stop()
     state.running = False
-    state.config["license_valid"] = False
     return jsonify({"status": "ok", "message": "Kill switch activated"})
 
 @app.route("/api/status", methods=["GET"])
@@ -2226,6 +2239,8 @@ def api_status():
             if kind == "account":
                 eq, pl, bp, op = msg[1]
                 state.dashboard.update(equity=eq, pl=pl, buying_power=bp, open_positions=op)
+            elif kind == "internet":
+                state.internet_status = bool(msg[1])
             elif kind in ("log", "error"):
                 db.insert_log(msg[1])
         except queue.Empty:
@@ -2352,6 +2367,7 @@ def api_backtest():
         initial_cash = 100_000 if portfolio else 10_000
         portfolio_equity = float(initial_cash)   # used only in portfolio mode
 
+        bt_direction = config.get("direction", "both")
         for sym in symbols:
             sym_results: dict = {}
             try:
@@ -2370,7 +2386,10 @@ def api_backtest():
                 ind_params = config.get("indicator_params", {})
                 df = IndicatorCalculator.compute_all(df, ef, es, indicator_params=ind_params)
                 sigs: List[dict] = []
+                min_period = max(ef, es, 20)
                 for i in range(1, len(df)):
+                    if i < min_period:
+                        continue
                     prev = df.iloc[i - 1]
                     curr = df.iloc[i]
                     pf = SignalAnalyzer._sf(prev["EMA_fast"])
@@ -2379,6 +2398,11 @@ def api_backtest():
                         df.iloc[:i + 1], pf, ps, config,
                         indicator_params=ind_params)
                     if sig:
+                        # Apply direction filter
+                        if bt_direction == "long" and sig == "SELL":
+                            continue
+                        if bt_direction == "short" and sig == "BUY":
+                            continue
                         row = df.iloc[i]
                         rsi_v = SignalAnalyzer._sf(row.get("RSI", 50))
                         macd_v = SignalAnalyzer._sf(row.get("MACD", 0))
@@ -2628,12 +2652,13 @@ def monte_carlo():
         raw_list = [s.strip() for s in config.get("tickers", "AAPL").split(",") if s.strip()]
         symbols = list(dict.fromkeys(clean_symbol(e) for e in raw_list))
         pnl_results = []
+        bt_direction = config.get("direction", "both")
         for _ in range(runs):
             equity = 10_000.0
             cash = 10_000.0
             position = 0.0
             entry_price = 0.0
-            sigs = []
+            all_signals: List[Tuple[str, float]] = []
             for sym in symbols:
                 try:
                     df = yf.download(sym, period=f"{days}d",
@@ -2646,7 +2671,10 @@ def monte_carlo():
                     ef, es = config.get("emas", [9, 50])
                     ind_params = config.get("indicator_params", {})
                     df = IndicatorCalculator.compute_all(df, ef, es, indicator_params=ind_params)
+                    min_period = max(ef, es, 20)
                     for i in range(1, len(df)):
+                        if i < min_period:
+                            continue
                         prev = df.iloc[i - 1]
                         curr = df.iloc[i]
                         pf = SignalAnalyzer._sf(prev["EMA_fast"])
@@ -2655,29 +2683,41 @@ def monte_carlo():
                             df.iloc[:i + 1], pf, ps, config,
                             indicator_params=ind_params)
                         if sig:
-                            sigs.append(SignalAnalyzer._sf(curr["Close"]))
+                            if bt_direction == "long" and sig == "SELL":
+                                continue
+                            if bt_direction == "short" and sig == "BUY":
+                                continue
+                            all_signals.append((sig, SignalAnalyzer._sf(curr["Close"])))
                 except Exception:
                     continue
-            random.shuffle(sigs)
-            for price in sigs:
-                if position <= 0:
+            if not all_signals:
+                pnl_results.append(0.0)
+                continue
+            # Use random sampling with replacement for Monte Carlo
+            sampled = random.choices(all_signals, k=len(all_signals))
+            for sig_type, price in sampled:
+                if sig_type == "BUY" and position <= 0:
                     if position < 0:
                         pnl = (entry_price - price) * abs(position)
                         cash = abs(position) * entry_price + pnl
                         equity = cash
-                    position = cash / price
-                    entry_price = price
-                    cash = 0.0
-                else:
-                    pnl = (price - entry_price) * position
-                    cash = position * price
-                    equity = cash
-                    position = 0.0
-            # close any open long
-            if position > 0 and sigs:
-                equity = position * sigs[-1]
-            elif position < 0 and sigs:
-                pnl = (entry_price - sigs[-1]) * abs(position)
+                    if cash > 0:
+                        position = cash / price
+                        entry_price = price
+                        cash = 0.0
+                elif sig_type == "SELL" and position >= 0:
+                    if position > 0:
+                        pnl = (price - entry_price) * position
+                        cash = position * price
+                        equity = cash
+                    if cash > 0:
+                        position = -(cash / price)
+                        entry_price = price
+                        cash = 0.0
+            if position > 0 and all_signals:
+                equity = position * all_signals[-1][1]
+            elif position < 0 and all_signals:
+                pnl = (entry_price - all_signals[-1][1]) * abs(position)
                 equity = abs(position) * entry_price + pnl
             pnl_results.append(equity - 10_000)
 
@@ -2741,8 +2781,8 @@ def export_backtest_pdf():
     col_widths = [46, 46, 22, 26, 26, 26]
     headers = ["Entry", "Exit", "Side", "Entry $", "Exit $", "P&L"]
     aligns = ["L", "L", "C", "R", "R", "R"]
-    for w, h, a in zip(col_widths, headers, aligns):
-        pdf.cell(w, 7, h, 1, 0, a)
+    for w, hdr, a in zip(col_widths, headers, aligns):
+        pdf.cell(w, 7, hdr, 1, 0, a)
     pdf.ln()
     pdf.set_font("Arial", size=8)
     for t in exits:
@@ -3013,111 +3053,167 @@ FRONTEND_HTML = r"""
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>TraderMoney 2.2.0</title>
+<title>TraderMoney 2.3.0</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
-:root{--bg:#050505;--card:#1A1A1A;--text:#e2e2e2;--accent:#D4AF37;--danger:#B22222;--border:#2A2E38;--muted:#7a7d86;--sw:270px;--radius:12px;--shadow:0 4px 20px rgba(0,0,0,.4);--glow:0 0 12px rgba(212,175,55,.15);}
-::-webkit-scrollbar{width:4px;height:4px;}::-webkit-scrollbar-track{background:#080808;}::-webkit-scrollbar-thumb{background:linear-gradient(180deg,#333,#555);border-radius:2px;}
-*{box-sizing:border-box;-webkit-user-select:text;user-select:text;}
-html,body{height:100%;margin:0;padding:0;overflow:hidden;}
-body{font-family:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',sans-serif;background:var(--bg);color:var(--text);display:flex;height:100vh;overflow:hidden;color-scheme:dark;}
-svg.icon{width:16px;height:16px;fill:currentColor;vertical-align:middle;margin-right:4px;flex-shrink:0;}
-#sb{width:var(--sw);background:linear-gradient(180deg,#0c0c0c,#080808);border-right:1px solid var(--border);display:flex;flex-direction:column;overflow-y:auto;overflow-x:hidden;padding:18px 14px;flex-shrink:0;}
-#sb h2{color:var(--accent);margin:0 0 10px;font-size:1.2rem;letter-spacing:.3px;display:flex;align-items:center;gap:6px;text-shadow:0 0 10px rgba(212,175,55,.2);}
-.lbadge{display:inline-block;padding:2px 10px;border-radius:20px;font-size:.67rem;vertical-align:middle;letter-spacing:.5px;text-transform:uppercase;}
-.lv{background:linear-gradient(135deg,#D4AF37,#b8962e);color:#000;box-shadow:0 0 8px rgba(212,175,55,.3);}.li{background:linear-gradient(135deg,#B22222,#8b1a1a);color:#fff;}
-label{display:block;font-size:.75rem;margin:10px 0 3px;color:var(--muted);cursor:pointer;letter-spacing:.3px;transition:color .2s;}
-label:hover{color:var(--text);}
-.cb input{display:none;}
-.cb .cm{display:inline-block;width:18px;height:18px;border:2px solid #333;border-radius:6px;margin-right:6px;vertical-align:middle;position:relative;transition:all .2s;}
-.cb:hover .cm{border-color:#555;}
-.cb input:checked+.cm{background:var(--accent);border-color:var(--accent);box-shadow:0 0 6px rgba(212,175,55,.3);}
-.cb input:checked+.cm::after{content:"";position:absolute;left:4px;top:1px;width:5px;height:9px;border:solid #000;border-width:0 2px 2px 0;transform:rotate(45deg);}
-select{-webkit-appearance:none;appearance:none;background:#1A1A1A url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpolygon fill='%23D4AF37' points='0,4 12,4 6,10'/%3E%3C/svg%3E") no-repeat right 10px center;background-size:12px;color:var(--text);border:1px solid #333;padding:7px 30px 7px 10px;border-radius:10px;width:100%;font-size:.85rem;transition:border .2s,box-shadow .2s;cursor:pointer;}
-select:focus{border-color:var(--accent);outline:none;box-shadow:0 0 0 2px rgba(212,175,55,.1);}
-select:disabled{opacity:.5;cursor:not-allowed;}
-input[type="text"],input[type="password"],input[type="number"],textarea{background:#1A1A1A;color:var(--text);border:1px solid #333;padding:7px 10px;border-radius:10px;width:100%;font-size:.85rem;transition:border .2s,box-shadow .2s;}
-input:focus,textarea:focus{border-color:var(--accent);outline:none;box-shadow:0 0 0 2px rgba(212,175,55,.1);}
-input:-webkit-autofill{-webkit-text-fill-color:var(--text);-webkit-box-shadow:0 0 0 30px #1A1A1A inset;}
-button{cursor:pointer;background:linear-gradient(135deg,var(--accent),#b8962e);color:#050505;border:none;padding:9px 12px;border-radius:10px;width:100%;font-weight:600;margin-top:10px;font-size:.85rem;transition:all .25s;display:flex;align-items:center;justify-content:center;gap:5px;box-shadow:0 2px 8px rgba(0,0,0,.3);}
-button:hover{opacity:.95;transform:translateY(-1px);box-shadow:0 4px 14px rgba(212,175,55,.25);}
-button:active{transform:translateY(0);}
-button.ghost{background:var(--card);border:1px solid var(--border);color:var(--text);box-shadow:none;}
-button.ghost:hover{background:#222;border-color:#555;box-shadow:0 2px 8px rgba(0,0,0,.2);}
-button.danger{background:linear-gradient(135deg,var(--danger),#8b1a1a);color:#fff;}
-hr{border:0;height:1px;background:linear-gradient(90deg,transparent,var(--border),transparent);margin:12px 0;}
-.r2{display:flex;gap:5px;}.r2 input{width:100%;}
-#bstatus{font-size:.72rem;margin-top:3px;min-height:15px;word-break:break-word;padding:2px 0;}
-#bstatus.ok{color:#00c9b1;}#bstatus.err{color:var(--danger);}
-.free-notice{background:linear-gradient(135deg,#2a0505,#1a0303);color:#ff9090;border:1px solid var(--danger);padding:8px 10px;border-radius:8px;font-size:.74rem;margin-top:8px;display:none;line-height:1.5;}
-.bt-days-input{width:70px;display:inline-block;margin-left:6px;}
-#main{flex:1;display:flex;flex-direction:column;min-width:0;overflow:hidden;}
-.tab-bar{display:flex;background:var(--card);border-bottom:1px solid var(--border);overflow:hidden;flex-shrink:0;gap:2px;padding:0 4px;}
-.tbtn{flex:1;background:transparent;border:none;color:var(--text);padding:12px 4px;cursor:pointer;font-weight:500;transition:all .2s;min-width:60px;font-size:.82rem;display:flex;align-items:center;justify-content:center;gap:4px;margin:6px 0;border-radius:8px;}
-.tbtn:hover{background:rgba(255,255,255,.05);}
-.tbtn.active{background:rgba(212,175,55,.12);color:var(--accent);font-weight:700;box-shadow:inset 0 0 12px rgba(212,175,55,.05);}
-.tab{flex:1;display:none;overflow:auto;flex-direction:column;}
-.tab.active{display:flex;}
-#metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;padding:10px;background:linear-gradient(180deg,var(--card),#151515);border-bottom:1px solid var(--border);}
-.met{text-align:center;padding:4px;border-radius:8px;transition:background .2s;}.met:hover{background:rgba(255,255,255,.02);}.met .v{font-size:1.2rem;font-weight:bold;color:var(--accent);letter-spacing:.3px;}
-#sess{display:flex;align-items:center;gap:14px;padding:8px 12px;background:linear-gradient(180deg,var(--card),#151515);border-bottom:1px solid var(--border);font-size:.8rem;flex-wrap:wrap;}
-.sd{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:4px;box-shadow:0 0 4px currentColor;}
-.so{background:#00c9b1;color:#00c9b1;}.sc{background:var(--danger);color:var(--danger);}
-#tkbar{display:flex;flex-wrap:nowrap;overflow-x:auto;background:var(--card);border-bottom:1px solid var(--border);}
-.tkbtn{padding:7px 12px;background:transparent;border:none;color:var(--text);cursor:pointer;white-space:nowrap;transition:all .2s;font-size:.82rem;flex-shrink:0;border-radius:6px;margin:3px 2px;}
-.tkbtn:hover{background:rgba(255,255,255,.05);}
-.tkbtn.active{background:rgba(212,175,55,.12);color:var(--accent);font-weight:700;}
-#chart-c{flex:1;min-height:0;background:linear-gradient(180deg,#0c0c0c,#080808);}
-.sitem{display:flex;justify-content:space-between;padding:9px 12px;border-bottom:1px solid var(--border);font-size:.82rem;transition:background .15s;}
-.sitem:hover{background:rgba(255,255,255,.02);}
-.buy{color:var(--accent);}.sell{color:var(--danger);}
-.empty-placeholder{color:var(--muted);text-align:center;padding:30px;font-size:.9rem;}
-#toasts{position:fixed;top:16px;right:16px;z-index:9999;display:flex;flex-direction:column;gap:6px;}
-.toast{padding:14px 22px;border-radius:14px;font-weight:500;box-shadow:0 8px 32px rgba(0,0,0,.6);animation:si .3s ease;max-width:420px;font-size:.88rem;backdrop-filter:blur(10px);}
-.toast.success{background:linear-gradient(135deg,rgba(212,175,55,.95),rgba(184,150,46,.95));color:#000;border:1px solid rgba(212,175,55,.5);}
-.toast.error{background:linear-gradient(135deg,rgba(178,34,34,.95),rgba(139,26,26,.95));color:#fff;border:1px solid rgba(178,34,34,.5);}
-.toast.info{background:linear-gradient(135deg,rgba(26,18,0,.9),rgba(20,14,0,.9));color:var(--accent);border:1px solid rgba(212,175,55,.3);}
-@keyframes si{from{transform:translateX(120%);opacity:0}to{transform:translateX(0);opacity:1}}
-#upd{display:none;position:fixed;bottom:16px;right:16px;z-index:9999;background:linear-gradient(135deg,var(--accent),#b8962e);color:#000;padding:12px 18px;border-radius:10px;font-weight:bold;font-size:.88rem;box-shadow:0 4px 16px rgba(212,175,55,.3);}
-#upd a{color:#000;text-decoration:underline;}
-.btp{flex:1;display:flex;flex-direction:column;}
-.btr{flex:1;overflow:auto;padding:10px;}
-.ph{color:var(--muted);text-align:center;padding:36px 18px;font-size:.9rem;}
-.bttbl{width:100%;border-collapse:collapse;font-size:.76rem;margin-bottom:18px;}
-.bttbl th,.bttbl td{padding:5px 7px;border:1px solid var(--border);text-align:center;}
-.bttbl th{color:var(--accent);background:rgba(212,175,55,.04);font-weight:600;text-transform:uppercase;letter-spacing:.5px;font-size:.7rem;}
-.bttbl tr:hover td{background:rgba(255,255,255,.02);}
-#logbar{height:100px;overflow-y:auto;background:linear-gradient(180deg,#0a0a0a,#050505);padding:8px 12px;font-size:.74rem;border-top:1px solid var(--border);color:var(--muted);flex-shrink:0;}
-#logbar::-webkit-scrollbar-thumb{background:linear-gradient(180deg,#222,#333);}
-.hb{padding:20px;overflow:auto;height:100%;}
-.hb h3{color:var(--accent);margin-top:0;font-size:1.1rem;letter-spacing:.3px;}
-.hb h4{color:var(--text);margin:16px 0 6px;font-size:.92rem;border-left:3px solid var(--accent);padding-left:8px;}
-.hb p,.hb ul{font-size:.85rem;line-height:1.65;}.hb ul{padding-left:18px;}.hb li{margin-bottom:4px;}.hb a{color:var(--accent);text-decoration:none;}.hb a:hover{text-decoration:underline;}
-.istat{background:linear-gradient(135deg,var(--card),#151515);border-radius:var(--radius);padding:14px;margin:8px 0;border:1px solid var(--border);box-shadow:var(--shadow);}
-#aichat-wrap{display:flex;height:100%;}
-#chat-sessions-panel{width:220px;background:linear-gradient(180deg,var(--card),#121212);border-right:1px solid var(--border);display:flex;flex-direction:column;overflow-y:auto;}
-#chat-sessions-panel h3{padding:12px;margin:0;border-bottom:1px solid var(--border);font-size:.85rem;display:flex;align-items:center;gap:5px;color:var(--accent);}
-#chat-sessions-list{flex:1;overflow-y:auto;}
-.chat-session-item{padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--border);font-size:.78rem;color:var(--muted);transition:.15s;display:flex;align-items:center;gap:4px;}
-.chat-session-item:hover,.chat-session-item.active{background:rgba(212,175,55,.06);color:var(--text);}
-.cmsg .mbody code{background:#2a2a2a;padding:1px 5px;border-radius:4px;font-size:.8rem;color:#D4AF37;font-family:monospace;}
-#chat-new-session-btn{margin:8px;padding:8px;font-size:.8rem;background:linear-gradient(135deg,var(--accent),#b8962e);color:#000;border:none;border-radius:8px;cursor:pointer;width:calc(100% - 16px);font-weight:600;transition:all .2s;}
-#chat-new-session-btn:hover{box-shadow:0 2px 10px rgba(212,175,55,.3);}
-#chat-main{flex:1;display:flex;flex-direction:column;background:linear-gradient(180deg,#0a0a0a,#050505);}
-#chat-topbar{padding:10px 14px;background:linear-gradient(180deg,var(--card),#151515);border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;flex-shrink:0;}
-#chat-topbar .title{color:var(--accent);font-weight:600;font-size:.92rem;display:flex;align-items:center;gap:6px;}
-#chat-limit{font-size:.74rem;color:var(--muted);}
-#chat-messages{flex:1;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:10px;}
-.cmsg{max-width:82%;padding:10px 14px;border-radius:14px;font-size:.86rem;line-height:1.55;word-break:break-word;}
-.cmsg.bot{background:linear-gradient(135deg,#1a1200,#141000);border:1px solid rgba(74,56,0,.6);color:var(--text);align-self:flex-start;border-radius:4px 14px 14px 14px;box-shadow:0 2px 8px rgba(0,0,0,.3);}
-.cmsg.user{background:linear-gradient(135deg,#1e1e1e,#181818);border:1px solid #333;color:var(--text);align-self:flex-end;border-radius:14px 4px 14px 14px;}
-.cmsg .msender{font-size:.68rem;color:var(--accent);margin-bottom:4px;font-weight:700;letter-spacing:.4px;display:flex;align-items:center;gap:4px;}
-.cmsg.user .msender{color:var(--muted);}
-.cmsg .mbody{white-space:pre-wrap;}
-.chat-typing{color:var(--muted);font-size:.8rem;padding:4px 8px;font-style:italic;align-self:flex-start;}
-#chat-input-row{display:flex;gap:8px;padding:12px;border-top:1px solid var(--border);background:linear-gradient(180deg,var(--card),#151515);flex-shrink:0;}
-#chat-input{flex:1;resize:none;height:46px;padding:10px 12px;font-size:.87rem;border-radius:10px;background:#222;border-color:#444;}
-#chat-input:focus{border-color:var(--accent);}
-#chat-send{width:auto;margin-top:0;padding:10px 18px;flex-shrink:0;font-size:.87rem;}
+:root {
+  --bg: #030303; --bg2: #0a0a0a; --card: rgba(26,26,26,0.6);
+  --text: #eaeaea; --accent: #D4AF37; --accent2: #b8962e;
+  --danger: #B22222; --success: #00e6c3;
+  --border: rgba(255,255,255,0.06); --border2: rgba(255,255,255,0.1);
+  --muted: #8b8e98; --sw: 260px; --radius: 12px;
+  --shadow: 0 8px 32px rgba(0,0,0,0.5);
+  --glow: 0 0 20px rgba(212,175,55,0.15);
+  --glass: rgba(255,255,255,0.03);
+}
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.2); }
+* { box-sizing: border-box; -webkit-user-select: text; user-select: text; }
+html,body { height: 100%; margin: 0; padding: 0; overflow: hidden; }
+body { font-family: 'Inter', -apple-system, sans-serif; background: var(--bg); color: var(--text); display: flex; height: 100vh; overflow: hidden; color-scheme: dark; font-weight: 400; font-size: 14px; line-height: 1.5; }
+svg.icon { width: 14px; height: 14px; fill: currentColor; vertical-align: middle; margin-right: 5px; flex-shrink: 0; }
+
+#sb { width: var(--sw); background: linear-gradient(180deg, rgba(10,10,10,0.95), rgba(5,5,5,0.98)); border-right: 1px solid var(--border); display: flex; flex-direction: column; overflow-y: auto; overflow-x: hidden; padding: 16px 14px; flex-shrink: 0; }
+#sb h2 { color: var(--accent); margin: 0 0 12px; font-size: 1.15rem; font-weight: 700; letter-spacing: -0.3px; display: flex; align-items: center; gap: 6px; }
+
+.lbadge { display: inline-block; padding: 2px 10px; border-radius: 20px; font-size: 0.6rem; font-weight: 700; vertical-align: middle; letter-spacing: 0.6px; text-transform: uppercase; }
+.lv { background: linear-gradient(135deg, #D4AF37, #b8962e); color: #000; }
+.li { background: linear-gradient(135deg, #B22222, #8b1a1a); color: #fff; }
+
+label { display: block; font-size: 0.7rem; font-weight: 500; margin: 8px 0 4px; color: var(--muted); cursor: pointer; letter-spacing: 0.2px; transition: color 0.2s; }
+label:hover { color: var(--text); }
+.cb input { display: none; }
+.cb .cm { display: inline-block; width: 16px; height: 16px; border: 1.5px solid rgba(255,255,255,0.15); border-radius: 4px; margin-right: 6px; vertical-align: middle; position: relative; transition: all 0.2s; background: rgba(0,0,0,0.3); }
+.cb:hover .cm { border-color: rgba(255,255,255,0.3); }
+.cb input:checked+.cm { background: var(--accent); border-color: var(--accent); }
+.cb input:checked+.cm::after { content: ""; position: absolute; left: 4px; top: 1px; width: 4px; height: 7px; border: solid #000; border-width: 0 2px 2px 0; transform: rotate(45deg); }
+
+select, input[type="text"], input[type="password"], input[type="number"], textarea {
+  background: rgba(0,0,0,0.3); color: var(--text); border: 1px solid var(--border);
+  padding: 7px 10px; border-radius: 8px; width: 100%; font-size: 0.78rem; font-family: 'Inter', sans-serif;
+  transition: all 0.2s;
+}
+select { -webkit-appearance: none; appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10'%3E%3Cpolygon fill='%23D4AF37' points='0,3 10,3 5,8'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 10px center; background-size: 8px; cursor: pointer; padding-right: 28px; }
+select:focus, input:focus, textarea:focus { border-color: var(--accent); outline: none; }
+select:disabled { opacity: 0.4; cursor: not-allowed; }
+input:-webkit-autofill { -webkit-text-fill-color: var(--text); -webkit-box-shadow: 0 0 0 30px #1A1A1A inset; }
+
+button { cursor: pointer; background: linear-gradient(135deg, var(--accent), var(--accent2)); color: #000; border: none; padding: 7px 14px; border-radius: 8px; width: 100%; font-weight: 600; margin-top: 8px; font-size: 0.78rem; font-family: 'Inter', sans-serif; transition: all 0.2s; display: flex; align-items: center; justify-content: center; gap: 5px; }
+button:hover { opacity: 0.92; }
+button:active { transform: scale(0.98); }
+button.ghost { background: var(--glass); border: 1px solid var(--border); color: var(--text); }
+button.ghost:hover { background: rgba(255,255,255,0.06); border-color: var(--border2); }
+button.danger { background: linear-gradient(135deg, var(--danger), #8b1a1a); color: #fff; }
+hr { border: 0; height: 1px; background: linear-gradient(90deg, transparent, rgba(255,255,255,0.06), transparent); margin: 12px 0; }
+.r2 { display: flex; gap: 8px; } .r2 input { width: 100%; }
+#bstatus { font-size: 0.68rem; margin-top: 4px; min-height: 16px; word-break: break-word; padding: 3px 0; font-weight: 500; }
+#bstatus.ok { color: var(--success); } #bstatus.err { color: #ff4d4d; }
+.free-notice { background: rgba(178,34,34,0.08); color: #ff9090; border: 1px solid rgba(178,34,34,0.2); padding: 10px; border-radius: 8px; font-size: 0.7rem; margin-top: 10px; display: none; line-height: 1.5; }
+.bt-days-input { width: 60px; display: inline-block; margin-left: 6px; }
+
+#main { flex: 1; display: flex; flex-direction: column; min-width: 0; overflow: hidden; position: relative; z-index: 1; }
+.tab-bar { display: flex; background: rgba(8,8,8,0.9); border-bottom: 1px solid var(--border); overflow-x: auto; flex-shrink: 0; gap: 4px; padding: 8px 14px; }
+.tbtn { flex: 0 0 auto; background: transparent; border: none; color: var(--muted); padding: 6px 14px; cursor: pointer; font-weight: 500; transition: all 0.2s; min-width: auto; font-size: 0.78rem; display: flex; align-items: center; gap: 5px; margin: 0; border-radius: 6px; }
+.tbtn:hover { background: var(--glass); color: var(--text); }
+.tbtn.active { background: rgba(212,175,55,0.1); color: var(--accent); }
+.tab { flex: 1; display: none; overflow: auto; flex-direction: column; }
+.tab.active { display: flex; animation: fadeIn 0.25s ease; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: translateY(0); } }
+
+#metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; padding: 16px 20px; background: linear-gradient(180deg, rgba(15,15,15,0.9), rgba(8,8,8,0.95)); border-bottom: 1px solid var(--border); }
+.met { text-align: center; padding: 12px; border-radius: 10px; background: var(--glass); border: 1px solid var(--border); }
+.met .v { font-size: 1.2rem; font-weight: 700; color: var(--accent); letter-spacing: 0.3px; margin-top: 4px; }
+.met span { color: var(--muted); font-size: 0.7rem; font-weight: 500; text-transform: uppercase; letter-spacing: 0.8px; }
+
+#sess { display: flex; align-items: center; gap: 16px; padding: 10px 20px; background: rgba(8,8,8,0.6); border-bottom: 1px solid var(--border); font-size: 0.72rem; flex-wrap: wrap; }
+.sd { display: inline-block; width: 6px; height: 6px; border-radius: 50%; margin-right: 4px; }
+.so { background: var(--success); } 
+.sc { background: #ff4d4d; }
+
+#tkbar { display: flex; flex-wrap: nowrap; overflow-x: auto; background: rgba(10,10,10,0.8); border-bottom: 1px solid var(--border); padding: 6px 12px; gap: 6px; }
+.tkbtn { padding: 6px 12px; background: var(--glass); border: 1px solid var(--border); color: var(--muted); cursor: pointer; white-space: nowrap; transition: all 0.2s; font-size: 0.78rem; font-weight: 500; flex-shrink: 0; border-radius: 6px; margin: 0; }
+.tkbtn:hover { background: rgba(255,255,255,0.06); color: var(--text); }
+.tkbtn.active { background: rgba(212,175,55,0.1); color: var(--accent); border-color: rgba(212,175,55,0.25); font-weight: 600; }
+
+#chart-c { flex: 1; min-height: 0; background: #080808; }
+
+.sitem { display: flex; justify-content: space-between; padding: 10px 18px; border-bottom: 1px solid var(--border); font-size: 0.8rem; transition: background 0.15s; }
+.sitem:hover { background: var(--glass); }
+.buy { color: var(--accent); font-weight: 600; } .sell { color: #ff6b6b; font-weight: 600; }
+.empty-placeholder { color: var(--muted); text-align: center; padding: 30px; font-size: 0.85rem; }
+
+#toasts { position: fixed; top: 20px; right: 20px; z-index: 9999; display: flex; flex-direction: column; gap: 8px; pointer-events: none; }
+.toast { padding: 12px 20px; border-radius: 8px; font-weight: 500; box-shadow: 0 8px 30px rgba(0,0,0,0.5); animation: si 0.35s cubic-bezier(0.16, 1, 0.3, 1); max-width: 360px; font-size: 0.82rem; backdrop-filter: blur(16px); display: flex; align-items: center; gap: 8px; border: 1px solid var(--border); pointer-events: auto; }
+.toast.success { background: rgba(15,25,15,0.9); color: var(--success); }
+.toast.error { background: rgba(25,10,10,0.9); color: #ff4d4d; }
+.toast.info { background: rgba(25,20,8,0.9); color: var(--accent); }
+@keyframes si { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+
+#upd { display: none; position: fixed; bottom: 20px; right: 20px; z-index: 9999; background: linear-gradient(135deg, var(--accent), var(--accent2)); color: #000; padding: 12px 20px; border-radius: 8px; font-weight: 600; font-size: 0.82rem; }
+#upd a { color: #000; text-decoration: underline; margin-left: 6px; }
+.btp { flex: 1; display: flex; flex-direction: column; background: var(--bg); }
+.btr { flex: 1; overflow: auto; padding: 16px; }
+.ph { color: var(--muted); text-align: center; padding: 30px 16px; font-size: 0.85rem; }
+.bttbl { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 0.74rem; margin-bottom: 20px; border-radius: 8px; overflow: hidden; border: 1px solid var(--border); }
+.bttbl th, .bttbl td { padding: 8px 12px; border-bottom: 1px solid var(--border); text-align: left; }
+.bttbl th { color: var(--accent); background: rgba(15,15,15,0.8); font-weight: 600; text-transform: uppercase; letter-spacing: 0.4px; font-size: 0.65rem; }
+.bttbl tr:hover td { background: var(--glass); }
+.bttbl tr:last-child td { border-bottom: none; }
+
+#logbar { height: 100px; overflow-y: auto; background: rgba(3,3,3,0.95); padding: 10px 14px; font-size: 0.72rem; border-top: 1px solid var(--border); color: var(--muted); flex-shrink: 0; font-family: 'SF Mono', Consolas, monospace; line-height: 1.5; }
+
+.hb { padding: 24px; overflow: auto; height: 100%; max-width: 860px; margin: 0 auto; }
+.hb h3 { color: var(--accent); margin-top: 0; font-size: 1.3rem; font-weight: 700; letter-spacing: -0.3px; }
+.hb h4 { color: var(--text); margin: 20px 0 8px; font-size: 0.95rem; font-weight: 600; border-left: 3px solid var(--accent); padding-left: 10px; }
+.hb p, .hb ul { font-size: 0.82rem; line-height: 1.6; color: #ccc; }
+.hb ul { padding-left: 18px; } .hb li { margin-bottom: 4px; }
+.hb a { color: var(--accent); text-decoration: none; font-weight: 500; } .hb a:hover { text-decoration: underline; }
+.hb details { background: var(--glass); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 8px; padding: 10px; }
+.hb summary { font-weight: 600; color: var(--accent); cursor: pointer; outline: none; font-size: 0.85rem; }
+
+.istat { background: var(--glass); border-radius: 8px; padding: 16px; margin: 10px 0; border: 1px solid var(--border); }
+
+#aichat-wrap { display: flex; height: 100%; }
+#chat-sessions-panel { width: 220px; background: rgba(8,8,8,0.8); border-right: 1px solid var(--border); display: flex; flex-direction: column; overflow-y: auto; }
+#chat-sessions-panel h3 { padding: 14px; margin: 0; border-bottom: 1px solid var(--border); font-size: 0.82rem; font-weight: 600; display: flex; align-items: center; gap: 6px; color: var(--accent); }
+#chat-sessions-list { flex: 1; overflow-y: auto; padding: 6px; }
+.chat-session-item { padding: 8px 12px; cursor: pointer; border-radius: 6px; font-size: 0.78rem; color: var(--muted); transition: 0.15s; display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-bottom: 2px; border: 1px solid transparent; }
+.chat-session-item:hover { background: var(--glass); color: var(--text); }
+.chat-session-item.active { background: rgba(212,175,55,0.08); color: var(--text); border-color: rgba(212,175,55,0.15); }
+.chat-session-item .chat-actions { display: none; gap: 4px; align-items: center; }
+.chat-session-item:hover .chat-actions { display: inline-flex; }
+
+#chat-new-session-btn { margin: 10px; padding: 8px; font-size: 0.78rem; background: linear-gradient(135deg, var(--accent), var(--accent2)); color: #000; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; transition: all 0.2s; width: auto; }
+#chat-new-session-btn:hover { opacity: 0.9; }
+
+#chat-main { flex: 1; display: flex; flex-direction: column; background: var(--bg); position: relative; }
+#chat-topbar { padding: 12px 18px; background: rgba(10,10,10,0.9); border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; flex-shrink: 0; }
+#chat-topbar .title { color: var(--text); font-weight: 600; font-size: 0.85rem; display: flex; align-items: center; gap: 6px; }
+#chat-limit { font-size: 0.7rem; color: var(--muted); background: var(--glass); padding: 3px 8px; border-radius: 4px; }
+#chat-messages { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 12px; }
+.cmsg { max-width: 78%; padding: 12px 16px; border-radius: 12px; font-size: 0.82rem; line-height: 1.5; word-break: break-word; }
+.cmsg.bot { background: rgba(30,25,10,0.5); border: 1px solid rgba(212,175,55,0.1); color: var(--text); align-self: flex-start; border-bottom-left-radius: 2px; }
+.cmsg.user { background: rgba(35,35,35,0.6); border: 1px solid var(--border); color: var(--text); align-self: flex-end; border-bottom-right-radius: 2px; }
+.cmsg .msender { font-size: 0.65rem; color: var(--accent); margin-bottom: 4px; font-weight: 700; letter-spacing: 0.4px; display: flex; align-items: center; gap: 4px; text-transform: uppercase; }
+.cmsg.user .msender { color: var(--muted); }
+.cmsg .mbody { white-space: pre-wrap; }
+.cmsg .mbody code { background: rgba(0,0,0,0.4); padding: 1px 5px; border-radius: 3px; font-family: 'SF Mono', Consolas, monospace; font-size: 0.8rem; color: #ffb86c; border: 1px solid rgba(255,255,255,0.08); }
+.cmsg .mbody p { margin-top: 0; margin-bottom: 8px; }
+.cmsg .mbody p:last-child { margin-bottom: 0; }
+.cmsg .mbody strong { color: var(--accent); font-weight: 600; }
+
+.chat-typing { color: var(--muted); font-size: 0.78rem; padding: 6px 10px; font-style: italic; align-self: flex-start; display: flex; align-items: center; gap: 4px; }
+.dot-flashing { position: relative; width: 5px; height: 5px; border-radius: 50%; background-color: var(--accent); animation: dot-flashing 0.8s infinite linear alternate; animation-delay: 0.4s; margin-left: 8px; display: inline-block; }
+.dot-flashing::before, .dot-flashing::after { content: ''; display: inline-block; position: absolute; top: 0; width: 5px; height: 5px; border-radius: 50%; background-color: var(--accent); animation: dot-flashing 0.8s infinite alternate; }
+.dot-flashing::before { left: -8px; animation-delay: 0s; } .dot-flashing::after { left: 8px; animation-delay: 0.8s; }
+@keyframes dot-flashing { 0% { background-color: var(--accent); } 50%, 100% { background-color: rgba(212,175,55,0.15); } }
+
+#chat-input-row { display: flex; gap: 10px; padding: 14px 18px; border-top: 1px solid var(--border); background: rgba(10,10,10,0.9); flex-shrink: 0; }
+#chat-input { flex: 1; resize: none; height: 42px; padding: 11px 14px; font-size: 0.82rem; border-radius: 8px; background: rgba(255,255,255,0.03); border: 1px solid var(--border); transition: all 0.2s; }
+#chat-input:focus { border-color: var(--accent); }
+#chat-send { width: auto; margin-top: 0; padding: 0 18px; flex-shrink: 0; font-size: 0.82rem; border-radius: 8px; height: 42px; }
 </style>
 </head>
 <body>
@@ -3141,6 +3237,10 @@ hr{border:0;height:1px;background:linear-gradient(90deg,transparent,var(--border
   <symbol id="i-robot" viewBox="0 0 24 24"><path d="M20 9V7c0-1.1-.9-2-2-2h-3c0-1.66-1.34-3-3-3S9 3.34 9 5H6c-1.1 0-2 .9-2 2v2c-1.66 0-3 1.34-3 3s1.34 3 3 3v4c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2v-4c1.66 0 3-1.34 3-3s-1.34-3-3-3zm-2 10H6V7h12v12zm-9-6c-.83 0-1.5-.67-1.5-1.5S8.17 10 9 10s1.5.67 1.5 1.5S9.83 13 9 13zm7.5-1.5c0 .83-.67 1.5-1.5 1.5s-1.5-.67-1.5-1.5.67-1.5 1.5-1.5 1.5.67 1.5 1.5zM8 15h8v2H8v-2z"/></symbol>
   <symbol id="i-send" viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></symbol>
   <symbol id="i-lightning" viewBox="0 0 24 24"><path d="M13 3h-2v10h2V3zm4.83 2.17l-1.42 1.42A6.92 6.92 0 0119 12c0 3.87-3.13 7-7 7A6.995 6.995 0 017.58 5.58L6.17 4.17A8.932 8.932 0 003 12a9 9 0 0018 0c0-2.74-1.23-5.18-3.17-6.83z"/></symbol>
+  <symbol id="i-flask" viewBox="0 0 24 24"><path d="M6 2c-1.1 0-2 .9-2 2v2c0 .6.4 1 1 1h.3l4.7 6.6V20h-2v2h8v-2h-2v-6.4L18.7 7H19c.6 0 1-.4 1-1V4c0-1.1-.9-2-2-2H6zm.5 3h11l-.5.8L12 12.4 7.8 5.8 6.5 5zm4.5 7.6V20h2v-5.4l1-1.4-2-3-2 3 1 1.4z"/></symbol>
+  <symbol id="i-edit" viewBox="0 0 24 24"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></symbol>
+  <symbol id="i-close" viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></symbol>
 </svg>
 
 <div id="toasts"></div>
@@ -3149,17 +3249,17 @@ hr{border:0;height:1px;background:linear-gradient(90deg,transparent,var(--border
 <!-- ════ SIDEBAR ════════════════════════════════════════════════ -->
 <div id="sb">
   <h2>
-    <svg class="icon"><use href="#i-lightning"/></svg>
+    <svg class="icon" style="width:18px;height:18px;"><use href="#i-lightning"/></svg>
     TraderMoney
     <span id="lbadge" class="lbadge li">FREE</span>
-    <small style="color:var(--muted);font-size:.58rem;margin-left:4px;">v2.2.0</small>
+    <span style="color:var(--muted);font-size:.55rem;margin-left:2px;">v2.3.0</span>
   </h2>
   <label>License Key</label>
   <input type="password" id="lickey" placeholder="Paste Gumroad key">
-  <button onclick="validateLicense()" style="margin-top:4px;font-size:.8rem;">
+  <button onclick="validateLicense()" style="margin-top:2px;">
     <svg class="icon"><use href="#i-key"/></svg> Validate
   </button>
-  <p style="font-size:.67rem;color:var(--muted);margin:3px 0 0;">
+  <p style="font-size:.62rem;color:var(--muted);margin:2px 0 0;">
     <a href="https://shafayrich.gumroad.com/l/ykaoov" style="color:var(--accent)">Buy license</a>
   </p>
   <div id="free-notice" class="free-notice">
@@ -3209,7 +3309,7 @@ hr{border:0;height:1px;background:linear-gradient(90deg,transparent,var(--border
   <label><span class="cb"><input type="checkbox" id="unews" disabled><span class="cm"></span></span> News Sentiment <span style="font-size:.62rem;color:var(--accent)">[PRO]</span></label>
 
   <details id="thesis-builder" style="margin-top:10px;">
-    <summary style="cursor:pointer;color:var(--accent);font-size:.82rem;font-weight:bold;">🧪 Thesis Builder</summary>
+    <summary style="cursor:pointer;color:var(--accent);font-size:.82rem;font-weight:bold;"><svg class="icon"><use href="#i-flask"/></svg> Thesis Builder</summary>
     <div style="margin-top:6px;">
       <label style="font-size:.7rem;">Thesis Name</label>
       <input id="thesis-name" placeholder="e.g., Momentum RSI" style="font-size:.78rem;">
@@ -3233,12 +3333,14 @@ hr{border:0;height:1px;background:linear-gradient(90deg,transparent,var(--border
       <div class="r2"><input id="tp-stoch-k" type="number" value="14"><input id="tp-stoch-d" type="number" value="3"></div>
       <label style="font-size:.7rem;">ATR Period</label>
       <input id="tp-atr-per" type="number" value="14">
+      <label style="font-size:.7rem;">ATR Stop/TP Mult</label>
+      <div class="r2"><input id="tp-atr-stop" type="number" value="2.0" step="0.1"><input id="tp-atr-tp" type="number" value="3.0" step="0.1"></div>
       <div style="display:flex;gap:5px;margin-top:6px;">
-        <button onclick="saveThesis()" style="padding:6px;font-size:.75rem;">💾 Save</button>
-        <button onclick="applyThesis()" style="padding:6px;font-size:.75rem;">▶ Apply</button>
+        <button onclick="saveThesis()" style="padding:6px;font-size:.75rem;"><svg class="icon"><use href="#i-save"/></svg> Save</button>
+        <button onclick="applyThesis()" style="padding:6px;font-size:.75rem;"><svg class="icon"><use href="#i-start"/></svg> Apply</button>
       </div>
       <div id="saved-theses" style="margin-top:6px;"></div>
-      <button class="ghost" onclick="loadSavedTheses()" style="font-size:.72rem;padding:5px;">🔄 Refresh List</button>
+      <button class="ghost" onclick="loadSavedTheses()" style="font-size:.72rem;padding:5px;"><svg class="icon"><use href="#i-refresh"/></svg> Refresh List</button>
     </div>
   </details>
 
@@ -3340,7 +3442,7 @@ hr{border:0;height:1px;background:linear-gradient(90deg,transparent,var(--border
   <!-- Help tab -->
   <div id="tab-help" class="tab">
     <div class="hb">
-      <h3>TraderMoney v2.2.0 – Complete Help Guide</h3>
+      <h3>TraderMoney v2.3.0 – Complete Help Guide</h3>
       <p style="font-size:.82rem;color:var(--muted);margin-top:-4px;">Your desktop algorithmic trading terminal. All features documented below.</p>
 
       <details>
@@ -3845,6 +3947,8 @@ function collectIndicatorParams(){
     stoch_k_period:parseInt(gv('tp-stoch-k','14'))||14,
     stoch_d_period:parseInt(gv('tp-stoch-d','3'))||3,
     atr_period:parseInt(gv('tp-atr-per','14'))||14,
+    atr_stop_mult:parseFloat(gv('tp-atr-stop','2.0'))||2.0,
+    atr_tp_mult:parseFloat(gv('tp-atr-tp','3.0'))||3.0,
   };
 }
 
@@ -3955,6 +4059,8 @@ async function applyThesis(){
   sv('tp-st-per',params.supertrend_period||10);sv('tp-st-mult',params.supertrend_multiplier||3);
   sv('tp-stoch-k',params.stoch_k_period||14);sv('tp-stoch-d',params.stoch_d_period||3);
   sv('tp-atr-per',params.atr_period||14);
+  sv('tp-atr-stop',params.atr_stop_mult||2.0);
+  sv('tp-atr-tp',params.atr_tp_mult||3.0);
   toast('Thesis applied! Save config to persist.','success');
 }
 async function loadSavedTheses(){
@@ -3964,7 +4070,7 @@ async function loadSavedTheses(){
     if(list.length){
       html+='<select id="thesis-select" style="font-size:.76rem;">';
       list.forEach(t=>{html+=`<option value="${t.name}">${t.name}</option>`;});
-      html+='</select><div style="display:flex;gap:5px;margin-top:4px;"><button onclick="applyThesis()" style="padding:4px;font-size:.7rem;">▶ Apply Selected</button><button onclick="deleteThesis()" style="padding:4px;font-size:.7rem;background:var(--danger);color:#fff;">🗑</button></div>';
+      html+='</select><div style="display:flex;gap:5px;margin-top:4px;"><button onclick="applyThesis()" style="padding:4px;font-size:.7rem;"><svg class="icon" style="width:12px;height:12px"><use href="#i-start"/></svg> Apply</button><button onclick="deleteThesis()" style="padding:4px;font-size:.7rem;background:var(--danger);color:#fff;"><svg class="icon" style="width:12px;height:12px"><use href="#i-trash"/></svg></button></div>';
     }else html+='<p style="font-size:.7rem;color:var(--muted)">No saved theses</p>';
     $('saved-theses').innerHTML=html;
   }catch(e){}
@@ -4095,8 +4201,11 @@ async function runBT(){
         </div>`;
         const exits=sim.trades.filter(t=>t.type==='exit');
         if(exits.length){
-          html+=`<table class="bttbl"><tr><th>Entry</th><th>Exit</th><th>Sym</th><th>Side</th><th>Shares</th><th>Entry $</th><th>Exit $</th><th>P&L</th><th>Why Open</th><th>Why Close</th></tr>`;
-          exits.forEach(t=>{html+=`<tr><td>${String(t.entry_time).slice(0,12)}</td><td>${String(t.exit_time).slice(0,12)}</td><td>${t.symbol||''}</td><td style="color:${t.side==='LONG'?'var(--accent)':'var(--danger)'}">${t.side}</td><td>${t.shares?t.shares.toFixed(2):''}</td><td>$${t.entry_price.toFixed(2)}</td><td>$${t.exit_price.toFixed(2)}</td><td style="color:${t.pnl>=0?'var(--accent)':'var(--danger)'}">${t.pnl>=0?'+':''}$${t.pnl.toFixed(2)}</td><td style="font-size:.7rem;max-width:120px;overflow:hidden;text-overflow:ellipsis;">${t.reason_open||''}</td><td style="font-size:.7rem;max-width:120px;overflow:hidden;text-overflow:ellipsis;">${t.reason_close||''}</td></tr>`;});
+          html+=`<table class="bttbl"><tr><th>Entry</th><th>Exit</th><th>Sym</th><th>Side</th><th>Shares</th><th>Entry $</th><th>Exit $</th><th>P&L</th><th>Why Open</th><th>Why Close</th><th>Indicators</th></tr>`;
+          exits.forEach(t=>{
+            const inds = t.indicators_at_entry ? Object.entries(t.indicators_at_entry).map(([k,v])=>`${k}:${typeof v==='number'?v.toFixed(2):v}`).join(', ') : '';
+            html+=`<tr><td>${String(t.entry_time).slice(0,12)}</td><td>${String(t.exit_time).slice(0,12)}</td><td>${t.symbol||''}</td><td style="color:${t.side==='LONG'?'var(--accent)':'var(--danger)'}">${t.side}</td><td>${t.shares?t.shares.toFixed(2):''}</td><td>$${t.entry_price.toFixed(2)}</td><td>$${t.exit_price.toFixed(2)}</td><td style="color:${t.pnl>=0?'var(--accent)':'var(--danger)'}">${t.pnl>=0?'+':''}$${t.pnl.toFixed(2)}</td><td style="font-size:.7rem;max-width:120px;overflow:hidden;text-overflow:ellipsis;" title="${t.reason_open||''}">${t.reason_open||''}</td><td style="font-size:.7rem;max-width:120px;overflow:hidden;text-overflow:ellipsis;" title="${t.reason_close||''}">${t.reason_close||''}</td><td style="font-size:.7rem;max-width:100px;overflow:hidden;text-overflow:ellipsis;" title="${inds}">${inds}</td></tr>`;
+          });
           html+=`</table>`;
         }
       }
@@ -4180,8 +4289,8 @@ async function loadLeaderboard(){
 function renderMarkdown(text){
   let s=text
     .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
-    .replace(/\*\*(.+?)\*\*/g,'<b>$1</b>')
-    .replace(/\*(.+?)\*/g,'<i>$1</i>')
+    .replace(/\*\*([\s\S]+?)\*\*/g,'<b>$1</b>')
+    .replace(/\*([\s\S]+?)\*/g,'<i>$1</i>')
     .replace(/`([^`]+)`/g,'<code>$1</code>')
     .replace(/\n/g,'<br>');
   return s;
@@ -4206,9 +4315,9 @@ function renderSessionList(sessions){
     const titleSpan=document.createElement('span');titleSpan.textContent=s.title;titleSpan.style.flex='1';
     item.appendChild(titleSpan);
     const actions=document.createElement('span');actions.className='chat-actions';actions.style.display='none';actions.style.gap='4px';
-    const renBtn=document.createElement('button');renBtn.innerHTML='✏️';renBtn.style.background='none';renBtn.style.border='none';renBtn.style.cursor='pointer';renBtn.style.padding='2px 4px';renBtn.style.fontSize='.7rem';renBtn.title='Rename';
+    const renBtn=document.createElement('button');renBtn.innerHTML='<svg class="icon" style="width:12px;height:12px"><use href="#i-edit"/></svg>';renBtn.style.background='none';renBtn.style.border='none';renBtn.style.cursor='pointer';renBtn.style.padding='2px 4px';renBtn.style.fontSize='.7rem';renBtn.title='Rename';
     renBtn.onclick=async(e)=>{e.stopPropagation();const t=prompt('Session name:',s.title);if(t&&t.trim()){await fetch(`/api/chat/sessions/${s.id}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({title:t.trim()})});await loadSessions();}};
-    const delBtn=document.createElement('button');delBtn.innerHTML='🗑️';delBtn.style.background='none';delBtn.style.border='none';delBtn.style.cursor='pointer';delBtn.style.padding='2px 4px';delBtn.style.fontSize='.7rem';delBtn.title='Delete';
+    const delBtn=document.createElement('button');delBtn.innerHTML='<svg class="icon" style="width:12px;height:12px"><use href="#i-trash"/></svg>';delBtn.style.background='none';delBtn.style.border='none';delBtn.style.cursor='pointer';delBtn.style.padding='2px 4px';delBtn.style.fontSize='.7rem';delBtn.title='Delete';
     delBtn.onclick=async(e)=>{e.stopPropagation();if(!confirm('Delete this chat?'))return;await fetch(`/api/chat/sessions/${s.id}`,{method:'DELETE'});if(s.id===curSessionId){curSessionId=null;$('chat-messages').innerHTML='';}await loadSessions();};
     actions.appendChild(renBtn);actions.appendChild(delBtn);item.appendChild(actions);
     item.onmouseenter=()=>actions.style.display='inline-flex';item.onmouseleave=()=>actions.style.display='none';
@@ -4301,7 +4410,7 @@ if __name__ == "__main__":
     time.sleep(1.2)
 
     window = webview.create_window(
-        "TraderMoney 2.2.0",
+        "TraderMoney 2.3.0",
         "http://127.0.0.1:5050",
         width=1440,
         height=880,

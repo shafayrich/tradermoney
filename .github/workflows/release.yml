@@ -33,12 +33,16 @@ jobs:
           pip install python-binance pybit okx
           pip install fpdf2 websocket-client
 
+      - name: Inject API Key
+        shell: pwsh
+        run: (Get-Content app.py) -replace 'INJECT_OPENROUTER_API_KEY', '${{ secrets.OPENROUTER_API_KEY }}' | Set-Content app.py
+
       - name: Build with PyInstaller (Windows)
         shell: pwsh
         run: |
           $iconArg = ""
           if (Test-Path "icon.ico") { $iconArg = "--icon=icon.ico" }
-          pyinstaller --onedir --windowed --name "TraderMoney" --add-data "app.py;." --collect-all pywebview --collect-all yfinance --collect-all pandas --collect-all cryptography $iconArg `
+          pyinstaller --onedir --windowed --name "TraderMoney" --add-data "app.py;." --collect-all webview --collect-all yfinance --collect-all pandas --collect-all cryptography $iconArg `
             --hidden-import=alpaca_trade_api --hidden-import=ib_insync --hidden-import=binance.client `
             --hidden-import=pybit.unified_trading --hidden-import=okx.Account --hidden-import=okx.Trade `
             --hidden-import=flask --hidden-import=flask_cors --hidden-import=cryptography.fernet `
@@ -77,11 +81,14 @@ jobs:
           pip install python-binance pybit okx
           pip install fpdf2 websocket-client
 
+      - name: Inject API Key
+        run: sed -i '' "s/INJECT_OPENROUTER_API_KEY/${{ secrets.OPENROUTER_API_KEY }}/g" app.py
+
       - name: Build with PyInstaller (macOS x86_64)
         run: |
           ICON=""
           if [ -f icon.icns ]; then ICON="--icon=icon.icns"; fi
-          pyinstaller --onedir --windowed --name "TraderMoney" --add-data "app.py:." --collect-all pywebview --collect-all yfinance --collect-all pandas --collect-all cryptography --target-architecture x86_64 --codesign-identity - --osx-bundle-identifier com.tradermoney.app $ICON \
+          pyinstaller --onedir --windowed --name "TraderMoney" --add-data "app.py:." --collect-all webview --collect-all yfinance --collect-all pandas --collect-all cryptography --target-architecture x86_64 --codesign-identity - --osx-bundle-identifier com.tradermoney.app $ICON \
             --hidden-import=alpaca_trade_api --hidden-import=ib_insync --hidden-import=binance.client \
             --hidden-import=pybit.unified_trading --hidden-import=okx.Account --hidden-import=okx.Trade \
             --hidden-import=flask --hidden-import=flask_cors --hidden-import=cryptography.fernet \
@@ -124,11 +131,14 @@ jobs:
           pip install python-binance pybit okx
           pip install fpdf2 websocket-client
 
+      - name: Inject API Key
+        run: sed -i '' "s/INJECT_OPENROUTER_API_KEY/${{ secrets.OPENROUTER_API_KEY }}/g" app.py
+
       - name: Build with PyInstaller (macOS arm64)
         run: |
           ICON=""
           if [ -f icon.icns ]; then ICON="--icon=icon.icns"; fi
-          pyinstaller --onedir --windowed --name "TraderMoney" --add-data "app.py:." --collect-all pywebview --collect-all yfinance --collect-all pandas --collect-all cryptography --target-architecture arm64 --codesign-identity - --osx-bundle-identifier com.tradermoney.app $ICON \
+          pyinstaller --onedir --windowed --name "TraderMoney" --add-data "app.py:." --collect-all webview --collect-all yfinance --collect-all pandas --collect-all cryptography --target-architecture arm64 --codesign-identity - --osx-bundle-identifier com.tradermoney.app $ICON \
             --hidden-import=alpaca_trade_api --hidden-import=ib_insync --hidden-import=binance.client \
             --hidden-import=pybit.unified_trading --hidden-import=okx.Account --hidden-import=okx.Trade \
             --hidden-import=flask --hidden-import=flask_cors --hidden-import=cryptography.fernet \
