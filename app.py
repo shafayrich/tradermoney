@@ -2360,33 +2360,49 @@ def api_backtest():
     portfolio = data.get("portfolio", False)
     try:
         import yfinance as yf
+        from concurrent.futures import ThreadPoolExecutor, as_completed
         raw_list = [s.strip() for s in config.get("tickers", "AAPL").split(",") if s.strip()]
         symbols = list(dict.fromkeys(clean_symbol(e) for e in raw_list))
         results: dict = {}
         all_trades: List[dict] = []
         initial_cash = 100_000 if portfolio else 10_000
-        portfolio_equity = float(initial_cash)   # used only in portfolio mode
-
+        portfolio_equity = float(initial_cash)
         bt_direction = config.get("direction", "both")
+        ef, es = config.get("emas", [9, 50])
+        ind_params = config.get("indicator_params", {})
+        min_period = max(ef, es, 20)
+
+        # Parallel download all symbols
+        downloaded: dict = {}
+        with ThreadPoolExecutor(max_workers=min(len(symbols), 8)) as executor:
+            fut_map = {
+                executor.submit(
+                    yf.download, sym, period=f"{days}d",
+                    interval=config.get("timeframe", "1m"),
+                    progress=False, auto_adjust=True
+                ): sym for sym in symbols
+            }
+            for fut in as_completed(fut_map):
+                sym = fut_map[fut]
+                try:
+                    df = fut.result()
+                    if df is None or df.empty:
+                        df = yf.download(sym, period=f"{days}d", interval="1d", progress=False, auto_adjust=True)
+                    downloaded[sym] = df
+                except Exception:
+                    downloaded[sym] = None
+
         for sym in symbols:
             sym_results: dict = {}
             try:
-                df = yf.download(sym, period=f"{days}d",
-                                  interval=config.get("timeframe", "1m"),
-                                  progress=False, auto_adjust=True)
-                if df is None or df.empty:
-                    df = yf.download(sym, period=f"{days}d", interval="1d",
-                                      progress=False, auto_adjust=True)
+                df = downloaded.get(sym)
                 if df is None or df.empty:
                     results[sym] = {"error": "No data returned"}
                     continue
                 if isinstance(df.columns, pd.MultiIndex):
                     df.columns = df.columns.get_level_values(0)
-                ef, es = config.get("emas", [9, 50])
-                ind_params = config.get("indicator_params", {})
                 df = IndicatorCalculator.compute_all(df, ef, es, indicator_params=ind_params)
                 sigs: List[dict] = []
-                min_period = max(ef, es, 20)
                 for i in range(1, len(df)):
                     if i < min_period:
                         continue
@@ -2398,7 +2414,6 @@ def api_backtest():
                         df.iloc[:i + 1], pf, ps, config,
                         indicator_params=ind_params)
                     if sig:
-                        # Apply direction filter
                         if bt_direction == "long" and sig == "SELL":
                             continue
                         if bt_direction == "short" and sig == "BUY":
@@ -2415,15 +2430,12 @@ def api_backtest():
                             reasons.append(f"ADX={SignalAnalyzer._sf(row.get('ADX',0)):.1f}")
                         sigs.append({
                             "time": str(df.index[i]),
-                            "signal": sig,
-                            "symbol": sym,
+                            "signal": sig, "symbol": sym,
                             "price": round(SignalAnalyzer._sf(curr["Close"]), 2),
-                            "shares": 0,
-                            "confidence": conf,
+                            "shares": 0, "confidence": conf,
                             "reason": "; ".join(reasons) if reasons else "EMA crossover",
                             "indicators": {
-                                "rsi": round(rsi_v, 1),
-                                "macd": round(macd_v, 2),
+                                "rsi": round(rsi_v, 1), "macd": round(macd_v, 2),
                                 "adx": round(SignalAnalyzer._sf(row.get("ADX", 0)), 1),
                                 "vol_ratio": round(SignalAnalyzer._sf(row.get("Vol_ratio", 1)), 2),
                                 "bb_upper": round(SignalAnalyzer._sf(row.get("BB_upper", 0)), 2),
@@ -2432,14 +2444,6 @@ def api_backtest():
                         })
                 sym_results["signals"] = sigs
 
-                # ── FIXED simulation ──────────────────────────────────────────
-                # equity tracks current total value; cash is liquid (0 when invested).
-                # position > 0 = long shares, position < 0 = short shares (abs = count).
-                # Long entry:  cash → shares; cash = 0
-                # Long exit:   shares → cash = shares * exit_price
-                # Short entry: cash → short; cash = 0 (collateral locked)
-                # Short exit:  cash = abs(pos) * entry_price + pnl
-                #              (= principal ± profit from short)
                 equity: float = float(initial_cash)
                 cash: float = float(initial_cash)
                 position: float = 0.0
@@ -2452,9 +2456,7 @@ def api_backtest():
 
                 for s in sigs:
                     price = float(s["price"])
-
                     if s["signal"] == "BUY" and position <= 0:
-                        # Close any open short first
                         if position < 0:
                             pnl = (entry_price - price) * abs(position)
                             cash = abs(position) * entry_price + pnl
@@ -2467,7 +2469,6 @@ def api_backtest():
                                 "reason_open": entry_reason, "reason_close": "BUY signal closed short",
                                 "indicators_at_entry": entry_indicators,
                             })
-                        # Open long
                         entry_shares = cash / price
                         position = entry_shares
                         entry_price = price
@@ -2483,9 +2484,7 @@ def api_backtest():
                             "reason_open": entry_reason, "reason_close": "",
                             "indicators_at_entry": entry_indicators,
                         })
-
                     elif s["signal"] == "SELL" and position >= 0:
-                        # Close any open long first
                         if position > 0:
                             pnl = (price - entry_price) * position
                             cash = position * price
@@ -2498,9 +2497,8 @@ def api_backtest():
                                 "reason_open": entry_reason, "reason_close": s.get("reason", "EMA crossover bearish"),
                                 "indicators_at_entry": entry_indicators,
                             })
-                        # Open short
                         entry_shares = cash / price
-                        position = -(entry_shares)   # negative = short shares
+                        position = -(entry_shares)
                         entry_price = price
                         entry_time = s["time"]
                         entry_reason = s.get("reason", "EMA crossover bearish")
@@ -2515,7 +2513,6 @@ def api_backtest():
                             "indicators_at_entry": entry_indicators,
                         })
 
-                # Mark-to-market any open position at the last signal price
                 if position != 0 and sigs:
                     last_price = float(sigs[-1]["price"])
                     if position > 0:
@@ -2543,8 +2540,6 @@ def api_backtest():
                 wins = sum(1 for t in exits if t["pnl"] > 0)
                 losses = sum(1 for t in exits if t["pnl"] < 0)
                 win_rate = (wins / len(exits) * 100) if exits else 0
-
-                # Advanced metrics
                 pnl_list = [t["pnl"] for t in exits]
                 avg_trade = float(np.mean(pnl_list)) if pnl_list else 0.0
                 best_trade = max(pnl_list) if pnl_list else 0.0
@@ -2555,15 +2550,11 @@ def api_backtest():
                 avg_win = (gross_profit / wins) if wins > 0 else 0.0
                 avg_loss = (gross_loss / losses) if losses > 0 else 0.0
                 expectancy = avg_trade
-
-                # Equity curve
                 eq_curve = [{"time": "Start", "equity": float(initial_cash)}]
                 running_eq = float(initial_cash)
                 for t in exits:
                     running_eq += t["pnl"]
                     eq_curve.append({"time": t["exit_time"], "equity": round(running_eq, 2)})
-
-                # Max drawdown
                 peak = float(initial_cash)
                 max_dd = 0.0
                 max_dd_pct = 0.0
@@ -2576,8 +2567,6 @@ def api_backtest():
                         max_dd = dd
                     if dd_pct > max_dd_pct:
                         max_dd_pct = dd_pct
-
-                # Sharpe ratio (annualized, using trade returns)
                 if len(pnl_list) >= 2:
                     returns = [p / initial_cash for p in pnl_list]
                     avg_ret = float(np.mean(returns))
@@ -2585,8 +2574,6 @@ def api_backtest():
                     sharpe = (avg_ret / std_ret * math.sqrt(252)) if std_ret > 0 else 0.0
                 else:
                     sharpe = 0.0
-
-                # Return on investment
                 roi = ((final_cash - initial_cash) / initial_cash * 100) if initial_cash > 0 else 0.0
 
                 sym_results["simulation"] = {
@@ -2595,8 +2582,7 @@ def api_backtest():
                     "total_pnl": round(total_pnl, 2),
                     "win_rate": round(win_rate, 1),
                     "total_trades": len(exits),
-                    "wins": wins,
-                    "losses": losses,
+                    "wins": wins, "losses": losses,
                     "avg_trade": round(avg_trade, 2),
                     "best_trade": round(best_trade, 2),
                     "worst_trade": round(worst_trade, 2),
@@ -2612,7 +2598,6 @@ def api_backtest():
                     "trades": trades,
                 }
                 all_trades.extend(trades)
-                # carry equity forward for portfolio mode
                 portfolio_equity = final_cash
 
             except Exception as e:
@@ -3057,163 +3042,211 @@ FRONTEND_HTML = r"""
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root {
-  --bg: #030303; --bg2: #0a0a0a; --card: rgba(26,26,26,0.6);
-  --text: #eaeaea; --accent: #D4AF37; --accent2: #b8962e;
-  --danger: #B22222; --success: #00e6c3;
-  --border: rgba(255,255,255,0.06); --border2: rgba(255,255,255,0.1);
-  --muted: #8b8e98; --sw: 260px; --radius: 12px;
-  --shadow: 0 8px 32px rgba(0,0,0,0.5);
-  --glow: 0 0 20px rgba(212,175,55,0.15);
-  --glass: rgba(255,255,255,0.03);
+  --bg: #030303; --bg2: #080808; --card: rgba(14,14,14,0.85);
+  --text: #e8e8e8; --text2: #c8c8c8;
+  --accent: #D4AF37; --accent2: #b8962e; --accent-dim: rgba(212,175,55,0.12);
+  --danger: #B22222; --danger-dim: rgba(178,34,34,0.12);
+  --success: #00e6c3; --success-dim: rgba(0,230,195,0.1);
+  --border: rgba(255,255,255,0.04); --border2: rgba(255,255,255,0.1);
+  --muted: #7a7d88; --sw: 280px; --radius: 8px; --radius-sm: 5px;
+  --glass: rgba(255,255,255,0.02);
+  --gold-glass: rgba(212,175,55,0.06);
+  --shadow: 0 2px 12px rgba(0,0,0,0.3);
 }
-::-webkit-scrollbar { width: 6px; height: 6px; }
+
+::-webkit-scrollbar { width: 3px; height: 3px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 4px; }
-::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.2); }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.06); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.12); }
+
 * { box-sizing: border-box; -webkit-user-select: text; user-select: text; }
 html,body { height: 100%; margin: 0; padding: 0; overflow: hidden; }
-body { font-family: 'Inter', -apple-system, sans-serif; background: var(--bg); color: var(--text); display: flex; height: 100vh; overflow: hidden; color-scheme: dark; font-weight: 400; font-size: 14px; line-height: 1.5; }
-svg.icon { width: 14px; height: 14px; fill: currentColor; vertical-align: middle; margin-right: 5px; flex-shrink: 0; }
+body { font-family: 'Inter', -apple-system, sans-serif; background: var(--bg); color: var(--text); display: flex; height: 100vh; overflow: hidden; color-scheme: dark; font-weight: 400; font-size: 12.5px; line-height: 1.5; -webkit-font-smoothing: antialiased; }
+svg.icon { width: 12px; height: 12px; fill: currentColor; vertical-align: middle; margin-right: 3px; flex-shrink: 0; }
 
-#sb { width: var(--sw); background: linear-gradient(180deg, rgba(10,10,10,0.95), rgba(5,5,5,0.98)); border-right: 1px solid var(--border); display: flex; flex-direction: column; overflow-y: auto; overflow-x: hidden; padding: 16px 14px; flex-shrink: 0; }
-#sb h2 { color: var(--accent); margin: 0 0 12px; font-size: 1.15rem; font-weight: 700; letter-spacing: -0.3px; display: flex; align-items: center; gap: 6px; }
+/* ── Sidebar ── */
+#sb { width: var(--sw); background: #070707; border-right: 1px solid var(--border); display: flex; flex-direction: column; overflow-y: auto; overflow-x: hidden; padding: 16px 14px; flex-shrink: 0; }
+#sb h2 { color: var(--accent); margin: 0 0 12px; font-size: 1.05rem; font-weight: 700; letter-spacing: -0.3px; display: flex; align-items: center; gap: 4px; }
+#sb .sg { color: var(--accent); font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.8px; margin: 18px 0 8px; padding: 0 0 4px; border-bottom: 1px solid var(--gold-glass); opacity: 0.85; }
+#sb .sg:first-of-type { margin-top: 0; }
 
-.lbadge { display: inline-block; padding: 2px 10px; border-radius: 20px; font-size: 0.6rem; font-weight: 700; vertical-align: middle; letter-spacing: 0.6px; text-transform: uppercase; }
+.lbadge { display: inline-flex; padding: 1px 7px; border-radius: 20px; font-size: 0.5rem; font-weight: 700; letter-spacing: 0.4px; text-transform: uppercase; align-items: center; }
 .lv { background: linear-gradient(135deg, #D4AF37, #b8962e); color: #000; }
 .li { background: linear-gradient(135deg, #B22222, #8b1a1a); color: #fff; }
 
-label { display: block; font-size: 0.7rem; font-weight: 500; margin: 8px 0 4px; color: var(--muted); cursor: pointer; letter-spacing: 0.2px; transition: color 0.2s; }
+label { display: block; font-size: 0.68rem; font-weight: 500; margin: 8px 0 4px; color: var(--muted); cursor: pointer; letter-spacing: 0.2px; transition: color 0.2s; }
 label:hover { color: var(--text); }
 .cb input { display: none; }
-.cb .cm { display: inline-block; width: 16px; height: 16px; border: 1.5px solid rgba(255,255,255,0.15); border-radius: 4px; margin-right: 6px; vertical-align: middle; position: relative; transition: all 0.2s; background: rgba(0,0,0,0.3); }
-.cb:hover .cm { border-color: rgba(255,255,255,0.3); }
+.cb .cm { display: inline-flex; width: 13px; height: 13px; border: 1.5px solid rgba(255,255,255,0.1); border-radius: 3px; margin-right: 4px; vertical-align: middle; position: relative; transition: all 0.2s; background: rgba(0,0,0,0.3); align-items: center; justify-content: center; }
+.cb:hover .cm { border-color: rgba(255,255,255,0.2); }
 .cb input:checked+.cm { background: var(--accent); border-color: var(--accent); }
-.cb input:checked+.cm::after { content: ""; position: absolute; left: 4px; top: 1px; width: 4px; height: 7px; border: solid #000; border-width: 0 2px 2px 0; transform: rotate(45deg); }
+.cb input:checked+.cm::after { content: ""; width: 4px; height: 6px; border: solid #000; border-width: 0 1.5px 1.5px 0; transform: rotate(45deg) translateY(-1px); }
 
+/* ── Inputs (text bubble style) ── */
 select, input[type="text"], input[type="password"], input[type="number"], textarea {
-  background: rgba(0,0,0,0.3); color: var(--text); border: 1px solid var(--border);
-  padding: 7px 10px; border-radius: 8px; width: 100%; font-size: 0.78rem; font-family: 'Inter', sans-serif;
-  transition: all 0.2s;
+  background: rgba(0,0,0,0.35); color: var(--text); border: 1px solid var(--border2);
+  padding: 7px 10px; border-radius: 6px; width: 100%; font-size: 0.78rem; font-family: 'Inter', sans-serif;
+  transition: border 0.2s, background 0.2s;
 }
-select { -webkit-appearance: none; appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10'%3E%3Cpolygon fill='%23D4AF37' points='0,3 10,3 5,8'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 10px center; background-size: 8px; cursor: pointer; padding-right: 28px; }
-select:focus, input:focus, textarea:focus { border-color: var(--accent); outline: none; }
-select:disabled { opacity: 0.4; cursor: not-allowed; }
-input:-webkit-autofill { -webkit-text-fill-color: var(--text); -webkit-box-shadow: 0 0 0 30px #1A1A1A inset; }
+select:focus, input:focus, textarea:focus { border-color: var(--accent); background: rgba(0,0,0,0.45); outline: none; }
+select { -webkit-appearance: none; appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='7' height='7' viewBox='0 0 8 8'%3E%3Cpath fill='%23D4AF37' d='M0 2h8L4 7z'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 8px center; background-size: 6px; cursor: pointer; padding-right: 20px; }
+select:disabled { opacity: 0.3; cursor: not-allowed; }
+input:-webkit-autofill { -webkit-text-fill-color: var(--text); -webkit-box-shadow: 0 0 0 30px #111 inset; }
 
-button { cursor: pointer; background: linear-gradient(135deg, var(--accent), var(--accent2)); color: #000; border: none; padding: 7px 14px; border-radius: 8px; width: 100%; font-weight: 600; margin-top: 8px; font-size: 0.78rem; font-family: 'Inter', sans-serif; transition: all 0.2s; display: flex; align-items: center; justify-content: center; gap: 5px; }
-button:hover { opacity: 0.92; }
-button:active { transform: scale(0.98); }
+/* ── Buttons ── */
+button { cursor: pointer; background: linear-gradient(135deg, var(--accent), var(--accent2)); color: #000; border: none; padding: 5px 12px; border-radius: 5px; font-weight: 600; font-size: 0.72rem; font-family: 'Inter', sans-serif; transition: all 0.2s; display: inline-flex; align-items: center; justify-content: center; gap: 3px; width: auto; margin: 0; }
+button:hover { opacity: 0.9; }
+button:active { transform: scale(0.97); }
+button.sb { width: 100%; margin-top: 8px; padding: 5px 10px; }
 button.ghost { background: var(--glass); border: 1px solid var(--border); color: var(--text); }
-button.ghost:hover { background: rgba(255,255,255,0.06); border-color: var(--border2); }
+button.ghost:hover { background: rgba(255,255,255,0.035); border-color: var(--border2); color: var(--text2); }
 button.danger { background: linear-gradient(135deg, var(--danger), #8b1a1a); color: #fff; }
-hr { border: 0; height: 1px; background: linear-gradient(90deg, transparent, rgba(255,255,255,0.06), transparent); margin: 12px 0; }
-.r2 { display: flex; gap: 8px; } .r2 input { width: 100%; }
-#bstatus { font-size: 0.68rem; margin-top: 4px; min-height: 16px; word-break: break-word; padding: 3px 0; font-weight: 500; }
+button.danger:hover { opacity: 0.9; }
+button:disabled { opacity: 0.35; cursor: not-allowed; pointer-events: none; }
+
+hr { border: 0; height: 1px; background: linear-gradient(90deg, transparent, rgba(255,255,255,0.03), transparent); margin: 12px 0; }
+.r2 { display: flex; gap: 5px; } .r2 input { width: 100%; }
+#bstatus { font-size: 0.6rem; margin-top: 2px; min-height: 12px; word-break: break-word; padding: 1px 0; font-weight: 500; }
 #bstatus.ok { color: var(--success); } #bstatus.err { color: #ff4d4d; }
-.free-notice { background: rgba(178,34,34,0.08); color: #ff9090; border: 1px solid rgba(178,34,34,0.2); padding: 10px; border-radius: 8px; font-size: 0.7rem; margin-top: 10px; display: none; line-height: 1.5; }
-.bt-days-input { width: 60px; display: inline-block; margin-left: 6px; }
+.free-notice { background: rgba(178,34,34,0.05); color: #ff8a8a; border: 1px solid rgba(178,34,34,0.12); padding: 6px 8px; border-radius: 5px; font-size: 0.62rem; margin-top: 6px; display: none; line-height: 1.4; }
+.bt-days-input { width: 48px; display: inline-block; margin-left: 3px; }
 
+/* ── Main layout ── */
 #main { flex: 1; display: flex; flex-direction: column; min-width: 0; overflow: hidden; position: relative; z-index: 1; }
-.tab-bar { display: flex; background: rgba(8,8,8,0.9); border-bottom: 1px solid var(--border); overflow-x: auto; flex-shrink: 0; gap: 4px; padding: 8px 14px; }
-.tbtn { flex: 0 0 auto; background: transparent; border: none; color: var(--muted); padding: 6px 14px; cursor: pointer; font-weight: 500; transition: all 0.2s; min-width: auto; font-size: 0.78rem; display: flex; align-items: center; gap: 5px; margin: 0; border-radius: 6px; }
-.tbtn:hover { background: var(--glass); color: var(--text); }
-.tbtn.active { background: rgba(212,175,55,0.1); color: var(--accent); }
+
+/* ── Tab bar ── */
+.tab-bar { display: flex; background: #080808; border-bottom: 1px solid var(--border); overflow-x: auto; flex-shrink: 0; gap: 0; padding: 0 6px; }
+.tbtn { background: transparent; border: none; color: var(--muted); padding: 4px 8px; cursor: pointer; font-weight: 500; transition: all 0.2s; font-size: 0.68rem; display: flex; align-items: center; gap: 3px; border-bottom: 1.5px solid transparent; margin-bottom: -1px; border-radius: 0; min-width: 0; flex: 0 0 auto; letter-spacing: 0.1px; }
+.tbtn:hover { color: var(--text2); background: rgba(255,255,255,0.02); }
+.tbtn.active { color: var(--accent); border-bottom-color: var(--accent); background: transparent; }
 .tab { flex: 1; display: none; overflow: auto; flex-direction: column; }
-.tab.active { display: flex; animation: fadeIn 0.25s ease; }
-@keyframes fadeIn { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: translateY(0); } }
+.tab.active { display: flex; animation: fadeIn 0.15s ease; }
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 
-#metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; padding: 16px 20px; background: linear-gradient(180deg, rgba(15,15,15,0.9), rgba(8,8,8,0.95)); border-bottom: 1px solid var(--border); }
-.met { text-align: center; padding: 12px; border-radius: 10px; background: var(--glass); border: 1px solid var(--border); }
-.met .v { font-size: 1.2rem; font-weight: 700; color: var(--accent); letter-spacing: 0.3px; margin-top: 4px; }
-.met span { color: var(--muted); font-size: 0.7rem; font-weight: 500; text-transform: uppercase; letter-spacing: 0.8px; }
+/* ── Metrics bar ── */
+#metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; padding: 8px 12px; background: #080808; border-bottom: 1px solid var(--border); }
+.met { text-align: center; padding: 6px 8px; border-radius: 6px; background: var(--glass); border: 1px solid var(--border); }
+.met .v { font-size: 1rem; font-weight: 700; color: var(--accent); letter-spacing: 0.1px; margin-top: 1px; }
+.met span { color: var(--muted); font-size: 0.58rem; font-weight: 500; text-transform: uppercase; letter-spacing: 0.5px; }
 
-#sess { display: flex; align-items: center; gap: 16px; padding: 10px 20px; background: rgba(8,8,8,0.6); border-bottom: 1px solid var(--border); font-size: 0.72rem; flex-wrap: wrap; }
-.sd { display: inline-block; width: 6px; height: 6px; border-radius: 50%; margin-right: 4px; }
-.so { background: var(--success); } 
-.sc { background: #ff4d4d; }
+/* ── Session bar ── */
+#sess { display: flex; align-items: center; gap: 10px; padding: 5px 12px; background: rgba(6,6,6,0.5); border-bottom: 1px solid var(--border); font-size: 0.64rem; flex-wrap: wrap; }
+.sd { display: inline-block; width: 4px; height: 4px; border-radius: 50%; margin-right: 2px; }
+.so { background: var(--success); } .sc { background: #ff4d4d; }
 
-#tkbar { display: flex; flex-wrap: nowrap; overflow-x: auto; background: rgba(10,10,10,0.8); border-bottom: 1px solid var(--border); padding: 6px 12px; gap: 6px; }
-.tkbtn { padding: 6px 12px; background: var(--glass); border: 1px solid var(--border); color: var(--muted); cursor: pointer; white-space: nowrap; transition: all 0.2s; font-size: 0.78rem; font-weight: 500; flex-shrink: 0; border-radius: 6px; margin: 0; }
-.tkbtn:hover { background: rgba(255,255,255,0.06); color: var(--text); }
-.tkbtn.active { background: rgba(212,175,55,0.1); color: var(--accent); border-color: rgba(212,175,55,0.25); font-weight: 600; }
+/* ── Ticker bar ── */
+#tkbar { display: flex; flex-wrap: nowrap; overflow-x: auto; background: rgba(6,6,6,0.6); border-bottom: 1px solid var(--border); padding: 3px 8px; gap: 3px; }
+.tkbtn { padding: 3px 8px; background: transparent; border: 1px solid transparent; color: var(--muted); cursor: pointer; white-space: nowrap; transition: all 0.2s; font-size: 0.68rem; font-weight: 500; flex-shrink: 0; border-radius: 3px; }
+.tkbtn:hover { background: rgba(255,255,255,0.03); color: var(--text2); border-color: var(--border); }
+.tkbtn.active { background: var(--gold-glass); color: var(--accent); border-color: rgba(212,175,55,0.15); font-weight: 600; }
 
-#chart-c { flex: 1; min-height: 0; background: #080808; }
+#chart-c { flex: 1; min-height: 0; background: #050505; }
 
-.sitem { display: flex; justify-content: space-between; padding: 10px 18px; border-bottom: 1px solid var(--border); font-size: 0.8rem; transition: background 0.15s; }
+/* ── Signal/History items ── */
+.sitem { display: flex; justify-content: space-between; padding: 5px 12px; border-bottom: 1px solid var(--border); font-size: 0.72rem; transition: background 0.15s; }
 .sitem:hover { background: var(--glass); }
 .buy { color: var(--accent); font-weight: 600; } .sell { color: #ff6b6b; font-weight: 600; }
-.empty-placeholder { color: var(--muted); text-align: center; padding: 30px; font-size: 0.85rem; }
+.empty-placeholder { color: var(--muted); text-align: center; padding: 20px 12px; font-size: 0.75rem; }
 
-#toasts { position: fixed; top: 20px; right: 20px; z-index: 9999; display: flex; flex-direction: column; gap: 8px; pointer-events: none; }
-.toast { padding: 12px 20px; border-radius: 8px; font-weight: 500; box-shadow: 0 8px 30px rgba(0,0,0,0.5); animation: si 0.35s cubic-bezier(0.16, 1, 0.3, 1); max-width: 360px; font-size: 0.82rem; backdrop-filter: blur(16px); display: flex; align-items: center; gap: 8px; border: 1px solid var(--border); pointer-events: auto; }
-.toast.success { background: rgba(15,25,15,0.9); color: var(--success); }
-.toast.error { background: rgba(25,10,10,0.9); color: #ff4d4d; }
-.toast.info { background: rgba(25,20,8,0.9); color: var(--accent); }
+/* ── Toasts ── */
+#toasts { position: fixed; top: 12px; right: 12px; z-index: 9999; display: flex; flex-direction: column; gap: 5px; pointer-events: none; }
+.toast { padding: 7px 14px; border-radius: 5px; font-weight: 500; box-shadow: 0 4px 20px rgba(0,0,0,0.5); animation: si 0.25s cubic-bezier(0.16, 1, 0.3, 1); max-width: 320px; font-size: 0.72rem; backdrop-filter: blur(16px); display: flex; align-items: center; gap: 5px; border: 1px solid var(--border); pointer-events: auto; }
+.toast.success { background: rgba(8,18,12,0.92); color: var(--success); }
+.toast.error { background: rgba(18,6,6,0.92); color: #ff4d4d; }
+.toast.info { background: rgba(18,14,6,0.92); color: var(--accent); }
 @keyframes si { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
 
-#upd { display: none; position: fixed; bottom: 20px; right: 20px; z-index: 9999; background: linear-gradient(135deg, var(--accent), var(--accent2)); color: #000; padding: 12px 20px; border-radius: 8px; font-weight: 600; font-size: 0.82rem; }
-#upd a { color: #000; text-decoration: underline; margin-left: 6px; }
+#upd { display: none; position: fixed; bottom: 12px; right: 12px; z-index: 9999; background: linear-gradient(135deg, var(--accent), var(--accent2)); color: #000; padding: 8px 16px; border-radius: 5px; font-weight: 600; font-size: 0.72rem; }
+#upd a { color: #000; text-decoration: underline; margin-left: 4px; }
+
+/* ── Backtest panel ── */
 .btp { flex: 1; display: flex; flex-direction: column; background: var(--bg); }
-.btr { flex: 1; overflow: auto; padding: 16px; }
-.ph { color: var(--muted); text-align: center; padding: 30px 16px; font-size: 0.85rem; }
-.bttbl { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 0.74rem; margin-bottom: 20px; border-radius: 8px; overflow: hidden; border: 1px solid var(--border); }
-.bttbl th, .bttbl td { padding: 8px 12px; border-bottom: 1px solid var(--border); text-align: left; }
-.bttbl th { color: var(--accent); background: rgba(15,15,15,0.8); font-weight: 600; text-transform: uppercase; letter-spacing: 0.4px; font-size: 0.65rem; }
-.bttbl tr:hover td { background: var(--glass); }
+.btr { flex: 1; overflow: auto; padding: 12px; }
+.ph { color: var(--muted); text-align: center; padding: 20px 12px; font-size: 0.75rem; }
+.bttbl { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 0.66rem; margin-bottom: 12px; border-radius: 5px; overflow: hidden; border: 1px solid var(--border); }
+.bttbl th, .bttbl td { padding: 5px 8px; border-bottom: 1px solid var(--border); text-align: left; }
+.bttbl th { color: var(--accent); background: rgba(10,10,10,0.8); font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px; font-size: 0.57rem; }
+.bttbl tr:hover td { background: rgba(255,255,255,0.02); }
 .bttbl tr:last-child td { border-bottom: none; }
 
-#logbar { height: 100px; overflow-y: auto; background: rgba(3,3,3,0.95); padding: 10px 14px; font-size: 0.72rem; border-top: 1px solid var(--border); color: var(--muted); flex-shrink: 0; font-family: 'SF Mono', Consolas, monospace; line-height: 1.5; }
+/* ── Log bar ── */
+#logbar { height: 72px; overflow-y: auto; background: rgba(2,2,2,0.96); padding: 6px 10px; font-size: 0.64rem; border-top: 1px solid var(--border); color: var(--muted); flex-shrink: 0; font-family: 'SF Mono', Consolas, monospace; line-height: 1.35; }
 
-.hb { padding: 24px; overflow: auto; height: 100%; max-width: 860px; margin: 0 auto; }
-.hb h3 { color: var(--accent); margin-top: 0; font-size: 1.3rem; font-weight: 700; letter-spacing: -0.3px; }
-.hb h4 { color: var(--text); margin: 20px 0 8px; font-size: 0.95rem; font-weight: 600; border-left: 3px solid var(--accent); padding-left: 10px; }
-.hb p, .hb ul { font-size: 0.82rem; line-height: 1.6; color: #ccc; }
-.hb ul { padding-left: 18px; } .hb li { margin-bottom: 4px; }
+/* ── Help tab ── */
+.hb { padding: 16px; overflow: auto; height: 100%; max-width: 780px; margin: 0 auto; }
+.hb h3 { color: var(--accent); margin-top: 0; font-size: 1.1rem; font-weight: 700; letter-spacing: -0.2px; }
+.hb h4 { color: var(--text); margin: 14px 0 5px; font-size: 0.84rem; font-weight: 600; border-left: 2px solid var(--accent); padding-left: 7px; }
+.hb p, .hb ul { font-size: 0.75rem; line-height: 1.5; color: #c0c0c0; }
+.hb ul { padding-left: 14px; } .hb li { margin-bottom: 2px; }
 .hb a { color: var(--accent); text-decoration: none; font-weight: 500; } .hb a:hover { text-decoration: underline; }
-.hb details { background: var(--glass); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 8px; padding: 10px; }
-.hb summary { font-weight: 600; color: var(--accent); cursor: pointer; outline: none; font-size: 0.85rem; }
+.hb details { background: var(--glass); border: 1px solid var(--border); border-radius: 5px; margin-bottom: 5px; padding: 6px 8px; }
+.hb summary { font-weight: 600; color: var(--accent); cursor: pointer; outline: none; font-size: 0.76rem; }
+.istat { background: var(--glass); border-radius: 5px; padding: 12px; margin: 6px 0; border: 1px solid var(--border); }
 
-.istat { background: var(--glass); border-radius: 8px; padding: 16px; margin: 10px 0; border: 1px solid var(--border); }
+/* ── Backtest loading spinner ── */
+.bt-loader { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 30px; gap: 12px; }
+.bt-spinner { width: 28px; height: 28px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.7s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.bt-loader-text { color: var(--muted); font-size: 0.72rem; }
 
+/* ── Backtest mini-game ── */
+.bt-game { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 20px; gap: 10px; height: 100%; }
+.bt-game-header { display: flex; justify-content: space-between; width: 100%; max-width: 380px; font-size: 0.72rem; color: var(--muted); align-items: center; }
+.bt-game-title { font-weight: 500; }
+.bt-game-score { color: var(--accent); font-weight: 700; font-size: 0.85rem; }
+.bt-game-hiscore { color: var(--muted); font-size: 0.65rem; }
+.bt-game-area { position: relative; width: 100%; max-width: 380px; height: 200px; background: rgba(0,0,0,0.25); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; cursor: default; }
+.bt-game-coin { position: absolute; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 0.9rem; border-radius: 50%; cursor: pointer; user-select: none; -webkit-user-select: none; pointer-events: auto; animation: coinAppear 0.2s ease-out; }
+.bt-game-coin.gold { width: 36px; height: 36px; background: radial-gradient(circle at 35% 35%, #f0d060, var(--accent), #8a6f1e); color: #000; box-shadow: 0 0 10px rgba(212,175,55,0.35); }
+.bt-game-coin.super { width: 42px; height: 42px; background: radial-gradient(circle at 35% 35%, #fff5a0, #ffd700, #b8860b); color: #000; box-shadow: 0 0 16px rgba(255,215,0,0.5); font-size: 1rem; border: 1px solid rgba(255,215,0,0.3); }
+.bt-game-coin.bomb { width: 36px; height: 36px; background: radial-gradient(circle at 35% 35%, #ff6b6b, #cc0000, #660000); color: #fff; box-shadow: 0 0 10px rgba(255,0,0,0.35); }
+.bt-game-coin:hover { transform: scale(1.15); z-index: 10; }
+.bt-game-coin:active { transform: scale(0.85); }
+.bt-game-coin.fade { opacity: 0; transition: opacity 0.3s; pointer-events: none; }
+@keyframes coinAppear { 0% { transform: scale(0); opacity: 0; } 100% { transform: scale(1); opacity: 1; } }
+.bt-game-hint { font-size: 0.62rem; color: var(--muted); font-style: italic; }
+.bt-game-ticker { font-family: 'SF Mono', Consolas, monospace; width: 100%; max-width: 380px; height: 22px; background: rgba(0,0,0,0.3); border: 1px solid var(--border); border-radius: 4px; overflow: hidden; position: relative; }
+.bt-game-ticker div { white-space: nowrap; position: absolute; top: 3px; left: 100%; font-size: 0.72rem; color: var(--muted); animation: tickerScroll 8s linear infinite; }
+@keyframes tickerScroll { 0% { transform: translateX(0); } 100% { transform: translateX(-100%); } }
+.bt-game-combo { font-size: 0.72rem; font-weight: 700; color: var(--accent); opacity: 0.8; min-height: 18px; }
+.bt-particle { position: absolute; width: 4px; height: 4px; border-radius: 50%; pointer-events: none; animation: particleFly 0.5s ease-out forwards; }
+@keyframes particleFly { 0% { opacity: 1; transform: translate(0,0) scale(1); } 100% { opacity: 0; transform: translate(var(--dx), var(--dy)) scale(0); } }
+
+/* ── AI Chat ── */
 #aichat-wrap { display: flex; height: 100%; }
-#chat-sessions-panel { width: 220px; background: rgba(8,8,8,0.8); border-right: 1px solid var(--border); display: flex; flex-direction: column; overflow-y: auto; }
-#chat-sessions-panel h3 { padding: 14px; margin: 0; border-bottom: 1px solid var(--border); font-size: 0.82rem; font-weight: 600; display: flex; align-items: center; gap: 6px; color: var(--accent); }
-#chat-sessions-list { flex: 1; overflow-y: auto; padding: 6px; }
-.chat-session-item { padding: 8px 12px; cursor: pointer; border-radius: 6px; font-size: 0.78rem; color: var(--muted); transition: 0.15s; display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-bottom: 2px; border: 1px solid transparent; }
-.chat-session-item:hover { background: var(--glass); color: var(--text); }
-.chat-session-item.active { background: rgba(212,175,55,0.08); color: var(--text); border-color: rgba(212,175,55,0.15); }
-.chat-session-item .chat-actions { display: none; gap: 4px; align-items: center; }
+#chat-sessions-panel { width: 190px; background: rgba(5,5,5,0.8); border-right: 1px solid var(--border); display: flex; flex-direction: column; overflow-y: auto; }
+#chat-sessions-panel h3 { padding: 10px 12px; margin: 0; border-bottom: 1px solid var(--border); font-size: 0.72rem; font-weight: 600; display: flex; align-items: center; gap: 4px; color: var(--accent); }
+#chat-sessions-list { flex: 1; overflow-y: auto; padding: 3px; }
+.chat-session-item { padding: 5px 8px; cursor: pointer; border-radius: 3px; font-size: 0.68rem; color: var(--muted); transition: 0.1s; display: flex; align-items: center; justify-content: space-between; gap: 3px; margin-bottom: 1px; border: 1px solid transparent; }
+.chat-session-item:hover { background: var(--glass); color: var(--text2); }
+.chat-session-item.active { background: var(--gold-glass); color: var(--text); border-color: rgba(212,175,55,0.1); }
+.chat-session-item .chat-actions { display: none; gap: 1px; align-items: center; }
 .chat-session-item:hover .chat-actions { display: inline-flex; }
-
-#chat-new-session-btn { margin: 10px; padding: 8px; font-size: 0.78rem; background: linear-gradient(135deg, var(--accent), var(--accent2)); color: #000; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; transition: all 0.2s; width: auto; }
-#chat-new-session-btn:hover { opacity: 0.9; }
-
+#chat-new-session-btn { margin: 6px 8px; padding: 5px; font-size: 0.68rem; background: linear-gradient(135deg, var(--accent), var(--accent2)); color: #000; border: none; border-radius: 3px; cursor: pointer; font-weight: 600; transition: all 0.15s; width: auto; }
 #chat-main { flex: 1; display: flex; flex-direction: column; background: var(--bg); position: relative; }
-#chat-topbar { padding: 12px 18px; background: rgba(10,10,10,0.9); border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; flex-shrink: 0; }
-#chat-topbar .title { color: var(--text); font-weight: 600; font-size: 0.85rem; display: flex; align-items: center; gap: 6px; }
-#chat-limit { font-size: 0.7rem; color: var(--muted); background: var(--glass); padding: 3px 8px; border-radius: 4px; }
-#chat-messages { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 12px; }
-.cmsg { max-width: 78%; padding: 12px 16px; border-radius: 12px; font-size: 0.82rem; line-height: 1.5; word-break: break-word; }
-.cmsg.bot { background: rgba(30,25,10,0.5); border: 1px solid rgba(212,175,55,0.1); color: var(--text); align-self: flex-start; border-bottom-left-radius: 2px; }
-.cmsg.user { background: rgba(35,35,35,0.6); border: 1px solid var(--border); color: var(--text); align-self: flex-end; border-bottom-right-radius: 2px; }
-.cmsg .msender { font-size: 0.65rem; color: var(--accent); margin-bottom: 4px; font-weight: 700; letter-spacing: 0.4px; display: flex; align-items: center; gap: 4px; text-transform: uppercase; }
+#chat-topbar { padding: 8px 14px; background: rgba(6,6,6,0.9); border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; flex-shrink: 0; }
+#chat-topbar .title { color: var(--text); font-weight: 600; font-size: 0.74rem; display: flex; align-items: center; gap: 4px; }
+#chat-limit { font-size: 0.6rem; color: var(--muted); background: var(--glass); padding: 1px 5px; border-radius: 3px; }
+#chat-messages { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+.cmsg { max-width: 80%; padding: 8px 12px; border-radius: 8px; font-size: 0.74rem; line-height: 1.45; word-break: break-word; }
+.cmsg.bot { background: rgba(24,20,8,0.4); border: 1px solid rgba(212,175,55,0.06); color: var(--text); align-self: flex-start; border-bottom-left-radius: 2px; }
+.cmsg.user { background: rgba(26,26,26,0.6); border: 1px solid var(--border); color: var(--text); align-self: flex-end; border-bottom-right-radius: 2px; }
+.cmsg .msender { font-size: 0.55rem; color: var(--accent); margin-bottom: 2px; font-weight: 700; letter-spacing: 0.3px; display: flex; align-items: center; gap: 2px; text-transform: uppercase; }
 .cmsg.user .msender { color: var(--muted); }
 .cmsg .mbody { white-space: pre-wrap; }
-.cmsg .mbody code { background: rgba(0,0,0,0.4); padding: 1px 5px; border-radius: 3px; font-family: 'SF Mono', Consolas, monospace; font-size: 0.8rem; color: #ffb86c; border: 1px solid rgba(255,255,255,0.08); }
-.cmsg .mbody p { margin-top: 0; margin-bottom: 8px; }
+.cmsg .mbody code { background: rgba(0,0,0,0.3); padding: 1px 3px; border-radius: 2px; font-family: 'SF Mono', Consolas, monospace; font-size: 0.72rem; color: #ffb86c; border: 1px solid rgba(255,255,255,0.04); }
+.cmsg .mbody p { margin-top: 0; margin-bottom: 4px; }
 .cmsg .mbody p:last-child { margin-bottom: 0; }
 .cmsg .mbody strong { color: var(--accent); font-weight: 600; }
-
-.chat-typing { color: var(--muted); font-size: 0.78rem; padding: 6px 10px; font-style: italic; align-self: flex-start; display: flex; align-items: center; gap: 4px; }
-.dot-flashing { position: relative; width: 5px; height: 5px; border-radius: 50%; background-color: var(--accent); animation: dot-flashing 0.8s infinite linear alternate; animation-delay: 0.4s; margin-left: 8px; display: inline-block; }
-.dot-flashing::before, .dot-flashing::after { content: ''; display: inline-block; position: absolute; top: 0; width: 5px; height: 5px; border-radius: 50%; background-color: var(--accent); animation: dot-flashing 0.8s infinite alternate; }
-.dot-flashing::before { left: -8px; animation-delay: 0s; } .dot-flashing::after { left: 8px; animation-delay: 0.8s; }
-@keyframes dot-flashing { 0% { background-color: var(--accent); } 50%, 100% { background-color: rgba(212,175,55,0.15); } }
-
-#chat-input-row { display: flex; gap: 10px; padding: 14px 18px; border-top: 1px solid var(--border); background: rgba(10,10,10,0.9); flex-shrink: 0; }
-#chat-input { flex: 1; resize: none; height: 42px; padding: 11px 14px; font-size: 0.82rem; border-radius: 8px; background: rgba(255,255,255,0.03); border: 1px solid var(--border); transition: all 0.2s; }
+.chat-typing { color: var(--muted); font-size: 0.68rem; padding: 3px 6px; font-style: italic; align-self: flex-start; display: flex; align-items: center; gap: 2px; }
+.dot-flashing { position: relative; width: 3px; height: 3px; border-radius: 50%; background-color: var(--accent); animation: dot-flashing 0.7s infinite linear alternate; animation-delay: 0.35s; margin-left: 5px; display: inline-block; }
+.dot-flashing::before, .dot-flashing::after { content: ''; display: inline-block; position: absolute; top: 0; width: 3px; height: 3px; border-radius: 50%; background-color: var(--accent); animation: dot-flashing 0.7s infinite alternate; }
+.dot-flashing::before { left: -6px; animation-delay: 0s; } .dot-flashing::after { left: 6px; animation-delay: 0.7s; }
+@keyframes dot-flashing { 0% { background-color: var(--accent); } 50%, 100% { background-color: rgba(212,175,55,0.08); } }
+#chat-input-row { display: flex; gap: 6px; padding: 10px 14px; border-top: 1px solid var(--border); background: rgba(6,6,6,0.9); flex-shrink: 0; }
+#chat-input { flex: 1; resize: none; height: 34px; padding: 8px 10px; font-size: 0.74rem; border-radius: 5px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.06); transition: border 0.2s; }
 #chat-input:focus { border-color: var(--accent); }
-#chat-send { width: auto; margin-top: 0; padding: 0 18px; flex-shrink: 0; font-size: 0.82rem; border-radius: 8px; height: 42px; }
+#chat-send { width: auto; margin-top: 0; padding: 0 14px; flex-shrink: 0; font-size: 0.74rem; border-radius: 5px; height: 34px; }
 </style>
 </head>
 <body>
@@ -3267,7 +3300,7 @@ hr { border: 0; height: 1px; background: linear-gradient(90deg, transparent, rgb
     <b>License session-only – re-enter each restart.</b>
   </div>
 
-  <hr>
+  <div class="sg">Connection</div>
   <label>Broker</label>
   <select id="broker" onchange="onBrokerChange()"></select>
   <div id="bstatus" class="ok"></div>
@@ -3275,6 +3308,7 @@ hr { border: 0; height: 1px; background: linear-gradient(90deg, transparent, rgb
 
   <label>Telegram Token (opt)</label><input type="password" id="tgt">
   <label>Telegram Chat ID (opt)</label><input id="tgc">
+  <div class="sg">Strategy</div>
   <label>Tickers (e.g. AAPL:5, BTC/USD:0.1)</label>
   <input id="tickers" value="AAPL">
 
@@ -3358,7 +3392,7 @@ hr { border: 0; height: 1px; background: linear-gradient(90deg, transparent, rgb
       <option value="swing">Swing</option>
       <option value="breakout">Breakout</option>
     </select>
-    <button onclick="loadPreset()" style="width:auto;margin-top:0;padding:7px 10px;">
+    <button onclick="loadPreset()" style="margin-top:0;">
       <svg class="icon"><use href="#i-preset"/></svg> Load
     </button>
   </div>
@@ -3418,12 +3452,12 @@ hr { border: 0; height: 1px; background: linear-gradient(90deg, transparent, rgb
   <!-- Backtest tab -->
   <div id="tab-backtest" class="tab">
     <div class="btp">
-      <div style="display:flex;gap:7px;padding:10px;flex-wrap:wrap;">
-        <button class="ghost" style="width:auto;padding:9px 16px;" onclick="runBT()"><svg class="icon"><use href="#i-backtest"/></svg> Run Backtest</button>
-        <button class="ghost" style="width:auto;padding:9px 16px;" id="mc-btn" onclick="runMC()" disabled>Monte Carlo</button>
-        <button class="ghost" style="width:auto;padding:9px 14px;" id="csv-btn" onclick="exportCSV()" disabled><svg class="icon"><use href="#i-export"/></svg> CSV</button>
-        <button class="ghost" style="width:auto;padding:9px 14px;" id="pdf-btn" onclick="exportPDF()" disabled><svg class="icon"><use href="#i-export"/></svg> PDF</button>
-        <button class="ghost" style="width:auto;padding:9px 14px;" id="tune-btn" onclick="autoTune()" disabled><svg class="icon"><use href="#i-robot"/></svg> AI Auto-Tune</button>
+      <div style="display:flex;gap:5px;padding:8px 10px;flex-wrap:wrap;align-items:center;">
+        <button class="ghost" onclick="runBT()"><svg class="icon"><use href="#i-backtest"/></svg> Run Backtest</button>
+        <button class="ghost" id="mc-btn" onclick="runMC()" disabled><svg class="icon"><use href="#i-flask"/></svg> MC</button>
+        <button class="ghost" id="csv-btn" onclick="exportCSV()" disabled>CSV</button>
+        <button class="ghost" id="pdf-btn" onclick="exportPDF()" disabled>PDF</button>
+        <button class="ghost" id="tune-btn" onclick="autoTune()" disabled><svg class="icon"><use href="#i-robot"/></svg> Tune</button>
       </div>
       <div id="btres" class="btr"><p class="ph">Click <b>Run Backtest</b> to begin.</p></div>
     </div>
@@ -3431,8 +3465,8 @@ hr { border: 0; height: 1px; background: linear-gradient(90deg, transparent, rgb
 
   <!-- Analysis tab -->
   <div id="tab-analysis" class="tab">
-    <div style="padding:10px;flex-shrink:0;">
-      <button class="ghost" style="width:auto;padding:8px 16px;" onclick="loadCorr()"><svg class="icon"><use href="#i-refresh"/></svg> Refresh Correlation Matrix (30 days)</button>
+    <div style="padding:8px 10px;flex-shrink:0;">
+      <button class="ghost" onclick="loadCorr()"><svg class="icon"><use href="#i-refresh"/></svg> Correlation Matrix</button>
     </div>
     <div style="overflow:auto;flex:1;padding:10px;" id="corr-content">
       <p class="ph">Click Refresh to load the correlation matrix for your tickers.</p>
@@ -4171,16 +4205,125 @@ function loadPreset(){
   toast('Preset loaded – click Save to persist','success');
 }
 
+/* ── Backtest mini-game ── */
+let _btGameRun=false,_btGameScore=0,_btGameHiScore=0,_btGameCombo=0,_btGameSpawnTimer=null,_btGameTickerTimer=null,_btGameSpeed=1;
+
+function stopBTGame(){
+  _btGameRun=false;
+  if(_btGameSpawnTimer){clearTimeout(_btGameSpawnTimer);_btGameSpawnTimer=null;}
+  if(_btGameTickerTimer){clearInterval(_btGameTickerTimer);_btGameTickerTimer=null;}
+  const area=$('bt-game-area');
+  if(area)area.innerHTML='';
+}
+
+function _spawnCoin(){
+  if(!_btGameRun)return;
+  const area=$('bt-game-area');
+  if(!area){_btGameRun=false;return;}
+  const r=area.getBoundingClientRect();
+  const coin=document.createElement('div');
+  const roll=Math.random();
+  let type='gold',char='$',val=1;
+  if(roll<0.08&&_btGameScore>8){type='bomb';char='X';val=-2;}
+  else if(roll<0.18){type='super';char='*';val=3;}
+  coin.className='bt-game-coin '+type;
+  coin.textContent=char;
+  coin.dataset.val=val;
+  const s=type==='super'?42:36;
+  const x=Math.random()*(r.width-s-10)+5;
+  const y=Math.random()*(r.height-s-10)+5;
+  coin.style.left=x+'px';coin.style.top=y+'px';
+  coin.onclick=function(){_clickCoin(this);};
+  area.appendChild(coin);
+  const lifetime=Math.max(1200,2400-300*_btGameSpeed);
+  setTimeout(()=>{
+    if(coin.parentNode){
+      coin.classList.add('fade');
+      setTimeout(()=>{if(coin.parentNode)coin.remove();},300);
+    }
+  },lifetime);
+  const delay=Math.max(400,1000-120*_btGameSpeed+Math.random()*300);
+  _btGameSpawnTimer=setTimeout(_spawnCoin,delay);
+}
+
+function _clickCoin(el){
+  if(!_btGameRun)return;
+  const val=parseInt(el.dataset.val);
+  _btGameScore+=val;
+  if(_btGameScore<0)_btGameScore=0;
+  if(_btGameScore>_btGameHiScore)_btGameHiScore=_btGameScore;
+  if(val>0){_btGameCombo++;_btGameSpeed=1+Math.floor(_btGameScore/12);}
+  else{_btGameCombo=0;}
+  const pts=$('bt-game-pts');
+  if(pts)pts.textContent=_btGameScore;
+  const hi=$('bt-game-hi');
+  if(hi)hi.textContent='Best: '+_btGameHiScore;
+  const co=$('bt-game-combo');
+  if(co)co.textContent=_btGameCombo>=3?'Combo x'+_btGameCombo+'!':'';
+  _particleEffect(el,val>0?'#D4AF37':'#ff4d4d');
+  el.remove();
+}
+
+function _particleEffect(el,color){
+  const area=$('bt-game-area');
+  if(!area)return;
+  const aRect=area.getBoundingClientRect();
+  const rect=el.getBoundingClientRect();
+  const cx=rect.left-aRect.left+rect.width/2;
+  const cy=rect.top-aRect.top+rect.height/2;
+  for(let i=0;i<8;i++){
+    const p=document.createElement('div');p.className='bt-particle';
+    p.style.left=cx+'px';p.style.top=cy+'px';
+    p.style.background=color;
+    p.style.setProperty('--dx',(Math.random()*50-25)+'px');
+    p.style.setProperty('--dy',(Math.random()*50-25)+'px');
+    area.appendChild(p);
+    setTimeout(()=>{if(p.parentNode)p.remove();},500);
+  }
+}
+
+function _updateTicker(){
+  const t=$('bt-game-ticker-text');
+  if(!t)return;
+  const price=(Math.random()*900+100).toFixed(2);
+  const chg=(Math.random()*6-3).toFixed(2);
+  const syms=['AAPL','TSLA','SPY','BTC','ETH','GOOG','MSFT','AMZN','NVDA','META'];
+  const sym=syms[Math.floor(Math.random()*syms.length)];
+  const dir=chg>=0?'+':'';
+  t.textContent=sym+' $'+price+' '+dir+chg+' ('+dir+(chg/(price-chg)*100).toFixed(2)+'%)';
+}
+
+function startBTGame(){
+  stopBTGame();
+  _btGameRun=true;_btGameScore=0;_btGameCombo=0;_btGameSpeed=1;
+  $('btres').innerHTML=`
+    <div class="bt-game">
+      <div class="bt-game-header">
+        <span class="bt-game-title">Market is loading...</span>
+        <span class="bt-game-score">$<span id="bt-game-pts">0</span></span>
+        <span class="bt-game-hiscore" id="bt-game-hi">Best: `+_btGameHiScore+`</span>
+      </div>
+      <div class="bt-game-ticker"><div id="bt-game-ticker-text">Loading...</div></div>
+      <div class="bt-game-area" id="bt-game-area"></div>
+      <div class="bt-game-combo" id="bt-game-combo"></div>
+      <div class="bt-game-hint">Click $ coins &star; avoid X!</div>
+    </div>
+  `;
+  _btGameTickerTimer=setInterval(_updateTicker,2500);_updateTicker();
+  _btGameSpawnTimer=setTimeout(_spawnCoin,800);
+}
+
 /* ── Backtest ── */
 async function runBT(){
   const days=parseInt($('btDays').value)||5;
   toast('Running backtest...','info');
-  $('btres').innerHTML='<p class="ph">Loading...</p>';
+  startBTGame();
   switchTab('backtest');
   $('mc-btn').disabled=true;$('csv-btn').disabled=true;$('pdf-btn').disabled=true;$('tune-btn').disabled=true;
   try{
     const r=await fetch('/api/backtest',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({config:buildCfg(),days})});
     const data=await r.json();lastBTData=data;
+    stopBTGame();
     if(data.error){toast('Backtest error: '+data.error,'error');$('btres').innerHTML=`<p class="ph" style="color:var(--danger)">${data.error}</p>`;return;}
     let html='';
     for(const sym in data.results){
@@ -4222,7 +4365,7 @@ async function runBT(){
     $('btres').innerHTML=html||'<p class="ph">No results.</p>';
     $('mc-btn').disabled=false;$('csv-btn').disabled=false;$('pdf-btn').disabled=false;$('tune-btn').disabled=false;
     loadLeaderboard();
-  }catch(e){toast('Backtest failed: '+e,'error');}
+  }catch(e){stopBTGame();toast('Backtest failed: '+e,'error');}
 }
 
 async function runMC(){
