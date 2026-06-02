@@ -42,7 +42,7 @@ import webview
 from flask import Flask, Response, jsonify, request, send_file
 from flask_cors import CORS
 
-APP_VERSION = "2.3.0"
+APP_VERSION = "2.4.0"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # AI CONFIGURATION
@@ -2824,38 +2824,60 @@ def export_backtest_pdf_file():
     trades = (request.json or {}).get("trades", [])
     pdf = FPDF()
     pdf.add_page()
-    pdf.set_font("Arial", "B", 14)
-    pdf.cell(0, 10, "TraderMoney - Backtest Report", ln=True, align="C")
+    pdf.set_fill_color(212, 175, 55)
+    pdf.rect(0, 0, 210, 16, "F")
+    pdf.set_text_color(0, 0, 0)
+    pdf.set_font("Arial", "B", 16)
+    pdf.set_y(4)
+    pdf.cell(0, 10, "TraderMoney Backtest Report", ln=True, align="C")
+    pdf.ln(8)
+    pdf.set_text_color(200, 200, 200)
+    pdf.set_font("Arial", "", 8)
+    pdf.cell(0, 6, f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} UTC", ln=True, align="R")
     pdf.ln(3)
-    pdf.set_font("Arial", size=9)
-    pdf.cell(0, 7, f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} UTC", ln=True)
-    pdf.ln(4)
     exits = [t for t in trades if t.get("type") == "exit"]
     if exits:
         total_pnl = sum(t["pnl"] for t in exits)
         wins = sum(1 for t in exits if t["pnl"] > 0)
+        win_rate = (wins / len(exits) * 100) if exits else 0
+        avg_pnl = total_pnl / len(exits) if exits else 0
+
+        pdf.set_fill_color(10, 10, 10)
+        pdf.rect(10, pdf.get_y(), 190, 18, "F")
+        pdf.set_text_color(212, 175, 55)
         pdf.set_font("Arial", "B", 10)
-        pdf.cell(0, 7, f"Total Trades: {len(exits)} | Win Rate: {(wins/len(exits)*100):.1f}% | P&L: ${total_pnl:.2f}", ln=True)
-        pdf.ln(4)
-        pdf.set_font("Arial", "B", 9)
-        col_widths = [36, 36, 18, 16, 16, 22, 22, 22]
-        headers = ["Entry", "Exit", "Sym", "Side", "Shrs", "Entry $", "Exit $", "P&L"]
+        pdf.set_xy(12, pdf.get_y()+3)
+        pdf.cell(0, 6, f"Total Trades: {len(exits)}", ln=False)
+        pdf.cell(0, 6, f"Win Rate: {win_rate:.1f}%", ln=True, align="C")
+        pdf.set_xy(12, pdf.get_y()+6)
+        pdf.cell(0, 6, f"Total P&L: ${total_pnl:.2f}", ln=False)
+        pdf.cell(0, 6, f"Avg Trade: ${avg_pnl:.2f}", ln=True, align="C")
+        pdf.ln(8)
+
+        pdf.set_text_color(0, 0, 0)
+        pdf.set_font("Arial", "B", 8)
+        pdf.set_fill_color(212, 175, 55)
+        col_widths = [32, 32, 16, 14, 14, 20, 20, 20]
+        headers = ["Entry", "Exit", "Symbol", "Side", "Shares", "Entry $", "Exit $", "P&L"]
         aligns = ["L","L","C","C","R","R","R","R"]
-        for w, h, a in zip(col_widths, headers, aligns):
-            pdf.cell(w, 7, h, 1, 0, a)
+        for i, (w, h, a) in enumerate(zip(col_widths, headers, aligns)):
+            pdf.cell(w, 7, h, 1, 0, a, fill=True)
         pdf.ln()
-        pdf.set_font("Arial", size=7)
+        pdf.set_text_color(220, 220, 220)
+        pdf.set_font("Arial", "", 7)
         for t in exits:
-            pdf.cell(36, 5, str(t.get("entry_time",""))[:14], 1)
-            pdf.cell(36, 5, str(t.get("exit_time",""))[:14], 1)
-            pdf.cell(18, 5, str(t.get("symbol","")), 1, 0, "C")
-            pdf.cell(16, 5, t.get("side",""), 1, 0, "C")
-            pdf.cell(16, 5, str(t.get("shares","")), 1, 0, "R")
-            pdf.cell(22, 5, f"${t.get('entry_price',0):.2f}", 1, 0, "R")
-            pdf.cell(22, 5, f"${t.get('exit_price',0):.2f}", 1, 0, "R")
-            pdf.set_text_color(*(0,150,0) if t.get("pnl",0) >= 0 else (180,0,0))
-            pdf.cell(22, 5, f"${t.get('pnl',0):.2f}", 1, 0, "R")
-            pdf.set_text_color(0,0,0)
+            pnl = t.get("pnl", 0)
+            pdf.set_fill_color(18, 30, 18) if pnl >= 0 else pdf.set_fill_color(30, 12, 12)
+            pdf.cell(32, 5, str(t.get("entry_time",""))[:12], 1, 0, "L", fill=True)
+            pdf.cell(32, 5, str(t.get("exit_time",""))[:12], 1, 0, "L", fill=True)
+            pdf.cell(16, 5, str(t.get("symbol","")), 1, 0, "C", fill=True)
+            pdf.cell(14, 5, t.get("side",""), 1, 0, "C", fill=True)
+            pdf.cell(14, 5, str(t.get("shares","")), 1, 0, "R", fill=True)
+            pdf.cell(20, 5, f"${t.get('entry_price',0):.2f}", 1, 0, "R", fill=True)
+            pdf.cell(20, 5, f"${t.get('exit_price',0):.2f}", 1, 0, "R", fill=True)
+            pdf.set_text_color(*(0, 200, 0) if pnl >= 0 else (220, 50, 50))
+            pdf.cell(20, 5, f"${pnl:.2f}", 1, 0, "R", fill=True)
+            pdf.set_text_color(220, 220, 220)
             pdf.ln()
     raw = pdf.output()
     pdf_bytes = bytes(raw) if isinstance(raw, (bytes, bytearray)) else raw.encode("latin-1")
@@ -3038,7 +3060,7 @@ FRONTEND_HTML = r"""
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>TraderMoney 2.3.0</title>
+<title>TraderMoney 2.4.0</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root {
@@ -3052,6 +3074,12 @@ FRONTEND_HTML = r"""
   --glass: rgba(255,255,255,0.02);
   --gold-glass: rgba(212,175,55,0.06);
   --shadow: 0 2px 12px rgba(0,0,0,0.3);
+  /* Spacing tokens */
+  --sp-xs: 4px; --sp-sm: 8px; --sp-md: 14px; --sp-lg: 20px; --sp-xl: 28px;
+  /* Typography tokens */
+  --fs-xs: 0.65rem; --fs-sm: 0.72rem; --fs-md: 0.8rem; --fs-lg: 0.9rem; --fs-xl: 1.05rem;
+  /* Input height */
+  --input-h: 34px;
 }
 
 ::-webkit-scrollbar { width: 3px; height: 3px; }
@@ -3065,16 +3093,17 @@ body { font-family: 'Inter', -apple-system, sans-serif; background: var(--bg); c
 svg.icon { width: 12px; height: 12px; fill: currentColor; vertical-align: middle; margin-right: 3px; flex-shrink: 0; }
 
 /* ── Sidebar ── */
-#sb { width: var(--sw); background: #070707; border-right: 1px solid var(--border); display: flex; flex-direction: column; overflow-y: auto; overflow-x: hidden; padding: 16px 14px; flex-shrink: 0; }
-#sb h2 { color: var(--accent); margin: 0 0 12px; font-size: 1.05rem; font-weight: 700; letter-spacing: -0.3px; display: flex; align-items: center; gap: 4px; }
-#sb .sg { color: var(--accent); font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.8px; margin: 18px 0 8px; padding: 0 0 4px; border-bottom: 1px solid var(--gold-glass); opacity: 0.85; }
+#sb { width: var(--sw); background: #070707; border-right: 1px solid var(--border); display: flex; flex-direction: column; overflow-y: auto; overflow-x: hidden; padding: var(--sp-lg) var(--sp-md); flex-shrink: 0; }
+#sb h2 { color: var(--accent); margin: 0 0 var(--sp-md); font-size: var(--fs-xl); font-weight: 700; letter-spacing: -0.3px; display: flex; align-items: center; gap: 6px; }
+#sb .sg { color: var(--accent); font-size: var(--fs-xs); font-weight: 600; text-transform: uppercase; letter-spacing: 0.8px; margin: var(--sp-lg) 0 var(--sp-sm); padding: 0 0 var(--sp-xs); border-bottom: 1px solid var(--gold-glass); opacity: 0.85; }
 #sb .sg:first-of-type { margin-top: 0; }
+#sb .sb-footer { margin-top: auto; padding-top: var(--sp-md); border-top: 1px solid var(--border); }
 
 .lbadge { display: inline-flex; padding: 1px 7px; border-radius: 20px; font-size: 0.5rem; font-weight: 700; letter-spacing: 0.4px; text-transform: uppercase; align-items: center; }
 .lv { background: linear-gradient(135deg, #D4AF37, #b8962e); color: #000; }
 .li { background: linear-gradient(135deg, #B22222, #8b1a1a); color: #fff; }
 
-label { display: block; font-size: 0.68rem; font-weight: 500; margin: 8px 0 4px; color: var(--muted); cursor: pointer; letter-spacing: 0.2px; transition: color 0.2s; }
+label { display: block; font-size: var(--fs-sm); font-weight: 500; margin: var(--sp-sm) 0 var(--sp-xs); color: var(--muted); cursor: pointer; letter-spacing: 0.2px; transition: color 0.2s; }
 label:hover { color: var(--text); }
 .cb input { display: none; }
 .cb .cm { display: inline-flex; width: 13px; height: 13px; border: 1.5px solid rgba(255,255,255,0.1); border-radius: 3px; margin-right: 4px; vertical-align: middle; position: relative; transition: all 0.2s; background: rgba(0,0,0,0.3); align-items: center; justify-content: center; }
@@ -3082,29 +3111,32 @@ label:hover { color: var(--text); }
 .cb input:checked+.cm { background: var(--accent); border-color: var(--accent); }
 .cb input:checked+.cm::after { content: ""; width: 4px; height: 6px; border: solid #000; border-width: 0 1.5px 1.5px 0; transform: rotate(45deg) translateY(-1px); }
 
-/* ── Inputs (text bubble style) ── */
+/* ── Inputs (consistent text bubble style) ── */
 select, input[type="text"], input[type="password"], input[type="number"], textarea {
   background: rgba(0,0,0,0.35); color: var(--text); border: 1px solid var(--border2);
-  padding: 7px 10px; border-radius: 6px; width: 100%; font-size: 0.78rem; font-family: 'Inter', sans-serif;
+  height: var(--input-h); padding: 0 10px; border-radius: 6px; width: 100%;
+  font-size: var(--fs-md); font-family: 'Inter', sans-serif;
   transition: border 0.2s, background 0.2s;
+  box-sizing: border-box;
 }
+textarea { height: auto; padding: 7px 10px; line-height: 1.4; }
 select:focus, input:focus, textarea:focus { border-color: var(--accent); background: rgba(0,0,0,0.45); outline: none; }
 select { -webkit-appearance: none; appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='7' height='7' viewBox='0 0 8 8'%3E%3Cpath fill='%23D4AF37' d='M0 2h8L4 7z'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 8px center; background-size: 6px; cursor: pointer; padding-right: 20px; }
 select:disabled { opacity: 0.3; cursor: not-allowed; }
 input:-webkit-autofill { -webkit-text-fill-color: var(--text); -webkit-box-shadow: 0 0 0 30px #111 inset; }
 
 /* ── Buttons ── */
-button { cursor: pointer; background: linear-gradient(135deg, var(--accent), var(--accent2)); color: #000; border: none; padding: 5px 12px; border-radius: 5px; font-weight: 600; font-size: 0.72rem; font-family: 'Inter', sans-serif; transition: all 0.2s; display: inline-flex; align-items: center; justify-content: center; gap: 3px; width: auto; margin: 0; }
+button { cursor: pointer; background: linear-gradient(135deg, var(--accent), var(--accent2)); color: #000; border: none; height: var(--input-h); padding: 0 14px; border-radius: 5px; font-weight: 600; font-size: var(--fs-sm); font-family: 'Inter', sans-serif; transition: all 0.2s; display: inline-flex; align-items: center; justify-content: center; gap: 4px; width: auto; margin: 0; box-sizing: border-box; }
 button:hover { opacity: 0.9; }
 button:active { transform: scale(0.97); }
-button.sb { width: 100%; margin-top: 8px; padding: 5px 10px; }
+button.sb { width: 100%; margin-top: var(--sp-sm); }
 button.ghost { background: var(--glass); border: 1px solid var(--border); color: var(--text); }
 button.ghost:hover { background: rgba(255,255,255,0.035); border-color: var(--border2); color: var(--text2); }
 button.danger { background: linear-gradient(135deg, var(--danger), #8b1a1a); color: #fff; }
 button.danger:hover { opacity: 0.9; }
 button:disabled { opacity: 0.35; cursor: not-allowed; pointer-events: none; }
 
-hr { border: 0; height: 1px; background: linear-gradient(90deg, transparent, rgba(255,255,255,0.03), transparent); margin: 12px 0; }
+hr { border: 0; height: 1px; background: linear-gradient(90deg, transparent, rgba(255,255,255,0.03), transparent); margin: var(--sp-md) 0; }
 .r2 { display: flex; gap: 5px; } .r2 input { width: 100%; }
 #bstatus { font-size: 0.6rem; margin-top: 2px; min-height: 12px; word-break: break-word; padding: 1px 0; font-weight: 500; }
 #bstatus.ok { color: var(--success); } #bstatus.err { color: #ff4d4d; }
@@ -3112,7 +3144,7 @@ hr { border: 0; height: 1px; background: linear-gradient(90deg, transparent, rgb
 .bt-days-input { width: 48px; display: inline-block; margin-left: 3px; }
 
 /* ── Main layout ── */
-#main { flex: 1; display: flex; flex-direction: column; min-width: 0; overflow: hidden; position: relative; z-index: 1; }
+#main { flex: 1; display: flex; flex-direction: column; min-width: 0; overflow: hidden; position: relative; z-index: 1; background: radial-gradient(ellipse at 50% 0%, rgba(212,175,55,0.008) 0%, transparent 60%); }
 
 /* ── Tab bar ── */
 .tab-bar { display: flex; background: #080808; border-bottom: 1px solid var(--border); overflow-x: auto; flex-shrink: 0; gap: 0; padding: 0 6px; }
@@ -3124,15 +3156,15 @@ hr { border: 0; height: 1px; background: linear-gradient(90deg, transparent, rgb
 @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 
 /* ── Metrics bar ── */
-#metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; padding: 8px 12px; background: #080808; border-bottom: 1px solid var(--border); }
-.met { text-align: center; padding: 6px 8px; border-radius: 6px; background: var(--glass); border: 1px solid var(--border); }
-.met .v { font-size: 1rem; font-weight: 700; color: var(--accent); letter-spacing: 0.1px; margin-top: 1px; }
-.met span { color: var(--muted); font-size: 0.58rem; font-weight: 500; text-transform: uppercase; letter-spacing: 0.5px; }
+#metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--sp-sm); padding: var(--sp-sm) var(--sp-md); background: rgba(6,6,6,0.5); border-bottom: 1px solid var(--border); }
+.met { text-align: center; padding: var(--sp-sm) var(--sp-xs); border-radius: var(--radius); background: var(--card); border: 1px solid var(--border); }
+.met .v { font-size: var(--fs-lg); font-weight: 700; color: var(--accent); letter-spacing: 0.1px; margin-top: 1px; }
+.met .l { color: var(--muted); font-size: var(--fs-xs); font-weight: 500; text-transform: uppercase; letter-spacing: 0.5px; }
 
 /* ── Session bar ── */
-#sess { display: flex; align-items: center; gap: 10px; padding: 5px 12px; background: rgba(6,6,6,0.5); border-bottom: 1px solid var(--border); font-size: 0.64rem; flex-wrap: wrap; }
-.sd { display: inline-block; width: 4px; height: 4px; border-radius: 50%; margin-right: 2px; }
-.so { background: var(--success); } .sc { background: #ff4d4d; }
+#sess { display: flex; align-items: center; gap: var(--sp-md); padding: var(--sp-xs) var(--sp-md); background: rgba(6,6,6,0.5); border-bottom: 1px solid var(--border); font-size: var(--fs-xs); flex-wrap: wrap; }
+.sd { display: inline-block; width: 5px; height: 5px; border-radius: 50%; margin-right: 3px; transition: background 0.3s; }
+.so { background: var(--success); box-shadow: 0 0 6px rgba(0,230,195,0.3); } .sc { background: #ff4d4d; }
 
 /* ── Ticker bar ── */
 #tkbar { display: flex; flex-wrap: nowrap; overflow-x: auto; background: rgba(6,6,6,0.6); border-bottom: 1px solid var(--border); padding: 3px 8px; gap: 3px; }
@@ -3161,7 +3193,8 @@ hr { border: 0; height: 1px; background: linear-gradient(90deg, transparent, rgb
 
 /* ── Backtest panel ── */
 .btp { flex: 1; display: flex; flex-direction: column; background: var(--bg); }
-.btr { flex: 1; overflow: auto; padding: 12px; }
+.btr { flex: 1; overflow: auto; padding: var(--sp-md); }
+.bt-controls { display: flex; gap: var(--sp-sm); padding: var(--sp-sm) var(--sp-md); flex-wrap: wrap; align-items: center; border-bottom: 1px solid var(--border); }
 .ph { color: var(--muted); text-align: center; padding: 20px 12px; font-size: 0.75rem; }
 .bttbl { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 0.66rem; margin-bottom: 12px; border-radius: 5px; overflow: hidden; border: 1px solid var(--border); }
 .bttbl th, .bttbl td { padding: 5px 8px; border-bottom: 1px solid var(--border); text-align: left; }
@@ -3244,9 +3277,48 @@ hr { border: 0; height: 1px; background: linear-gradient(90deg, transparent, rgb
 .dot-flashing::before { left: -6px; animation-delay: 0s; } .dot-flashing::after { left: 6px; animation-delay: 0.7s; }
 @keyframes dot-flashing { 0% { background-color: var(--accent); } 50%, 100% { background-color: rgba(212,175,55,0.08); } }
 #chat-input-row { display: flex; gap: 6px; padding: 10px 14px; border-top: 1px solid var(--border); background: rgba(6,6,6,0.9); flex-shrink: 0; }
-#chat-input { flex: 1; resize: none; height: 34px; padding: 8px 10px; font-size: 0.74rem; border-radius: 5px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.06); transition: border 0.2s; }
+#chat-input { flex: 1; resize: none; height: var(--input-h); padding: 6px 10px; font-size: var(--fs-md); border-radius: 5px; background: rgba(0,0,0,0.35); border: 1px solid var(--border2); transition: border 0.2s; font-family: 'Inter', sans-serif; color: var(--text); }
 #chat-input:focus { border-color: var(--accent); }
 #chat-send { width: auto; margin-top: 0; padding: 0 14px; flex-shrink: 0; font-size: 0.74rem; border-radius: 5px; height: 34px; }
+
+/* ── Professional card system ── */
+.card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: var(--sp-md); }
+.card-glow { border-color: var(--gold-glass); }
+.result-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: var(--sp-sm); }
+.result-metric { text-align: center; padding: var(--sp-sm) var(--sp-xs); background: var(--glass); border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.result-metric .v { font-size: var(--fs-lg); font-weight: 700; color: var(--accent); }
+.result-metric .l { font-size: var(--fs-xs); color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; margin-top: 1px; }
+.badge { display: inline-flex; align-items: center; padding: 1px 8px; border-radius: 20px; font-size: var(--fs-xs); font-weight: 700; letter-spacing: 0.4px; text-transform: uppercase; }
+.badge-gold { background: linear-gradient(135deg, var(--accent), var(--accent2)); color: #000; }
+.badge-red { background: linear-gradient(135deg, var(--danger), #8b1a1a); color: #fff; }
+
+/* ── Settings panel ── */
+#settings-panel { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: var(--sp-md); margin-top: var(--sp-sm); display: none; }
+#settings-panel.open { display: block; }
+#settings-panel h3 { color: var(--accent); font-size: var(--fs-md); font-weight: 600; margin: 0 0 var(--sp-sm); display: flex; align-items: center; gap: 4px; }
+#settings-panel label { margin: var(--sp-xs) 0; font-size: var(--fs-sm); }
+.settings-row { display: flex; align-items: center; justify-content: space-between; padding: var(--sp-xs) 0; }
+.settings-row span { font-size: var(--fs-sm); color: var(--text); }
+
+/* ── Toggle switch ── */
+.toggle { position: relative; display: inline-block; width: 36px; height: 20px; flex-shrink: 0; }
+.toggle input { opacity: 0; width: 0; height: 0; }
+.toggle .slider { position: absolute; cursor: pointer; inset: 0; background: rgba(255,255,255,0.06); border-radius: 20px; transition: 0.3s; }
+.toggle .slider::before { content: ""; position: absolute; height: 14px; width: 14px; left: 3px; bottom: 3px; background: var(--text); border-radius: 50%; transition: 0.3s; }
+.toggle input:checked + .slider { background: var(--accent); }
+.toggle input:checked + .slider::before { transform: translateX(16px); background: #000; }
+
+/* ── Hide in simple mode ── */
+.simple-hidden { display: block; }
+body.simple .simple-hidden { display: none !important; }
+
+/* ── AI suggest button ── */
+.ai-suggest { background: linear-gradient(135deg, #6c5ce7, #a29bfe); color: #fff; border: none; height: var(--input-h); padding: 0 12px; border-radius: 5px; font-weight: 600; font-size: var(--fs-xs); font-family: 'Inter', sans-serif; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; transition: opacity 0.2s; }
+.ai-suggest:hover { opacity: 0.9; }
+
+/* ── Section container ── */
+.section { margin-bottom: var(--sp-md); }
+.section:last-child { margin-bottom: 0; }
 </style>
 </head>
 <body>
@@ -3274,6 +3346,7 @@ hr { border: 0; height: 1px; background: linear-gradient(90deg, transparent, rgb
   <symbol id="i-edit" viewBox="0 0 24 24"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></symbol>
   <symbol id="i-trash" viewBox="0 0 24 24"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></symbol>
   <symbol id="i-close" viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></symbol>
+  <symbol id="i-gear" viewBox="0 0 24 24"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 00.12-.61l-1.92-3.32a.488.488 0 00-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 00-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.07.62-.07.94s.02.64.07.94l-2.03 1.58a.49.49 0 00-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6A3.6 3.6 0 1115.6 12 3.611 3.611 0 0112 15.6z"/></symbol>
 </svg>
 
 <div id="toasts"></div>
@@ -3284,9 +3357,23 @@ hr { border: 0; height: 1px; background: linear-gradient(90deg, transparent, rgb
   <h2>
     <svg class="icon" style="width:18px;height:18px;"><use href="#i-lightning"/></svg>
     TraderMoney
-    <span id="lbadge" class="lbadge li">FREE</span>
-    <span style="color:var(--muted);font-size:.55rem;margin-left:2px;">v2.3.0</span>
+    <span id="lbadge" class="badge badge-red">FREE</span>
+    <span style="color:var(--muted);font-size:.55rem;margin-left:2px;">v2.4.0</span>
+    <button onclick="toggleSettings()" title="Settings" style="margin-left:auto;background:none;color:var(--muted);padding:2px;height:auto;width:auto;border:none;cursor:pointer;"><svg class="icon" style="width:14px;height:14px;"><use href="#i-gear"/></svg></button>
   </h2>
+  <div id="settings-panel">
+    <h3><svg class="icon"><use href="#i-key"/></svg> Settings</h3>
+    <div class="settings-row"><span>Mode</span><label class="toggle"><input type="checkbox" id="mode-toggle" onchange="toggleSimpleMode()"><span class="slider"></span></label></div>
+    <div style="font-size:var(--fs-xs);color:var(--muted);margin-top:var(--sp-xs);">
+      <span id="mode-label">Complex</span> mode
+    </div>
+    <hr style="margin:var(--sp-sm) 0;">
+    <label>Layout</label>
+    <select id="layout-select" onchange="applyLayout()" style="height:28px;font-size:var(--fs-xs);padding:0 8px;">
+      <option value="default">Default</option>
+      <option value="compact">Compact</option>
+    </select>
+  </div>
   <label>License Key</label>
   <input type="password" id="lickey" placeholder="Paste Gumroad key">
   <button onclick="validateLicense()" style="margin-top:2px;">
@@ -3306,8 +3393,10 @@ hr { border: 0; height: 1px; background: linear-gradient(90deg, transparent, rgb
   <div id="bstatus" class="ok"></div>
   <div id="creds"></div>
 
+  <div class="simple-hidden">
   <label>Telegram Token (opt)</label><input type="password" id="tgt">
   <label>Telegram Chat ID (opt)</label><input id="tgc">
+  </div>
   <div class="sg">Strategy</div>
   <label>Tickers (e.g. AAPL:5, BTC/USD:0.1)</label>
   <input id="tickers" value="AAPL">
@@ -3324,24 +3413,29 @@ hr { border: 0; height: 1px; background: linear-gradient(90deg, transparent, rgb
 
   <label>Mode</label>
   <select id="mode"><option value="signal">Signal Only</option><option value="auto">Auto Trade</option></select>
-  <label>Direction</label>
-  <select id="dir"><option value="both">Both</option><option value="long">Long Only</option><option value="short">Short Only</option></select>
+  <label class="simple-hidden">Direction</label>
+  <select id="dir" class="simple-hidden"><option value="both">Both</option><option value="long">Long Only</option><option value="short">Short Only</option></select>
 
+  <div class="simple-hidden">
   <label><span class="cb"><input type="checkbox" id="ubracket"><span class="cm"></span></span> Bracket SL/TP</label>
   <div class="r2"><input id="slp" value="2" placeholder="SL %"><input id="tpp" value="4" placeholder="TP %"></div>
   <label><span class="cb"><input type="checkbox" id="uatr" checked><span class="cm"></span></span> ATR Stops</label>
+  </div>
 
-  <label style="margin-top:12px;font-weight:bold;color:var(--accent)">Indicators</label>
+  <label style="margin-top:12px;font-weight:bold;color:var(--accent)" class="simple-hidden">Indicators</label>
+  <div class="simple-hidden">
   <label><span class="cb"><input type="checkbox" id="ursi" checked><span class="cm"></span></span> RSI</label>
   <label><span class="cb"><input type="checkbox" id="umacd" checked><span class="cm"></span></span> MACD</label>
   <label><span class="cb"><input type="checkbox" id="uvwap" checked><span class="cm"></span></span> VWAP</label>
   <label><span class="cb"><input type="checkbox" id="uboll" checked><span class="cm"></span></span> Bollinger</label>
-  <label><span class="cb"><input type="checkbox" id="uadx" checked><span class="cm"></span></span> ADX <span style="font-size:.62rem;color:var(--accent)">[PRO]</span></label>
-  <label><span class="cb"><input type="checkbox" id="uvol" checked><span class="cm"></span></span> Volume <span style="font-size:.62rem;color:var(--accent)">[PRO]</span></label>
-  <label><span class="cb"><input type="checkbox" id="ust" checked><span class="cm"></span></span> SuperTrend <span style="font-size:.62rem;color:var(--accent)">[PRO]</span></label>
-  <label><span class="cb"><input type="checkbox" id="ustoch" checked><span class="cm"></span></span> Stochastic <span style="font-size:.62rem;color:var(--accent)">[PRO]</span></label>
-  <label><span class="cb"><input type="checkbox" id="unews" disabled><span class="cm"></span></span> News Sentiment <span style="font-size:.62rem;color:var(--accent)">[PRO]</span></label>
+  <label><span class="cb"><input type="checkbox" id="uadx" checked><span class="cm"></span></span> ADX <span class="badge badge-gold" style="font-size:.5rem;padding:0 5px;">PRO</span></label>
+  <label><span class="cb"><input type="checkbox" id="uvol" checked><span class="cm"></span></span> Volume <span class="badge badge-gold" style="font-size:.5rem;padding:0 5px;">PRO</span></label>
+  <label><span class="cb"><input type="checkbox" id="ust" checked><span class="cm"></span></span> SuperTrend <span class="badge badge-gold" style="font-size:.5rem;padding:0 5px;">PRO</span></label>
+  <label><span class="cb"><input type="checkbox" id="ustoch" checked><span class="cm"></span></span> Stochastic <span class="badge badge-gold" style="font-size:.5rem;padding:0 5px;">PRO</span></label>
+  <label><span class="cb"><input type="checkbox" id="unews" disabled><span class="cm"></span></span> News <span class="badge badge-gold" style="font-size:.5rem;padding:0 5px;">PRO</span></label>
+  </div>
 
+  <div class="simple-hidden">
   <details id="thesis-builder" style="margin-top:10px;">
     <summary style="cursor:pointer;color:var(--accent);font-size:.82rem;font-weight:bold;"><svg class="icon"><use href="#i-flask"/></svg> Thesis Builder</summary>
     <div style="margin-top:6px;">
@@ -3375,8 +3469,10 @@ hr { border: 0; height: 1px; background: linear-gradient(90deg, transparent, rgb
       </div>
       <div id="saved-theses" style="margin-top:6px;"></div>
       <button class="ghost" onclick="loadSavedTheses()" style="font-size:.72rem;padding:5px;"><svg class="icon"><use href="#i-refresh"/></svg> Refresh List</button>
+      <button class="ai-suggest" onclick="aiSuggestThesis()" style="margin-top:6px;"><svg class="icon"><use href="#i-robot"/></svg> AI Suggest</button>
     </div>
   </details>
+  </div>
 
   <button onclick="saveConfig()"><svg class="icon"><use href="#i-save"/></svg> Save Config</button>
   <button class="ghost" onclick="refreshTickers()"><svg class="icon"><use href="#i-refresh"/></svg> Refresh Tickers</button>
@@ -3385,6 +3481,7 @@ hr { border: 0; height: 1px; background: linear-gradient(90deg, transparent, rgb
   <button class="danger" onclick="killSwitch()"><svg class="icon"><use href="#i-warn"/></svg> Kill Switch</button>
   <button class="ghost" style="margin-top:5px;" onclick="resetDef()"><svg class="icon"><use href="#i-refresh"/></svg> Reset Defaults</button>
 
+  <div class="simple-hidden">
   <label style="margin-top:12px;font-weight:bold;color:var(--accent)">Strategy Presets</label>
   <div class="r2">
     <select id="preset-select">
@@ -3396,8 +3493,9 @@ hr { border: 0; height: 1px; background: linear-gradient(90deg, transparent, rgb
       <svg class="icon"><use href="#i-preset"/></svg> Load
     </button>
   </div>
+  </div>
 
-  <button class="ghost" style="margin-top:14px;" onclick="checkUpdate()"><svg class="icon"><use href="#i-update"/></svg> Check Updates</button>
+  <button class="ghost" style="margin-top:8px;" onclick="checkUpdate()"><svg class="icon"><use href="#i-update"/></svg> Check Updates</button>
   <button class="ghost" style="margin-top:6px;" onclick="runBT()"><svg class="icon"><use href="#i-backtest"/></svg> Backtest All</button>
   <div style="margin-top:7px;font-size:.74rem;color:var(--muted);">
     Days: <input type="number" id="btDays" value="5" min="1" max="365" class="bt-days-input">
@@ -3420,10 +3518,10 @@ hr { border: 0; height: 1px; background: linear-gradient(90deg, transparent, rgb
   <div id="tab-charts" class="tab active">
     <div id="tkbar"></div>
     <div id="metrics">
-      <div class="met"><div class="v" id="v-eq">--</div><div>Equity</div></div>
-      <div class="met"><div class="v" id="v-bp">--</div><div>Buy Power</div></div>
-      <div class="met"><div class="v" id="v-pl">--</div><div>P&amp;L</div></div>
-      <div class="met"><div class="v" id="v-pos">--</div><div>Positions</div></div>
+      <div class="met"><div class="v" id="v-eq">--</div><div class="l">Equity</div></div>
+      <div class="met"><div class="v" id="v-bp">--</div><div class="l">Buy Power</div></div>
+      <div class="met"><div class="v" id="v-pl">--</div><div class="l">P&amp;L</div></div>
+      <div class="met"><div class="v" id="v-pos">--</div><div class="l">Positions</div></div>
     </div>
     <div id="sess">
       <span style="color:var(--accent)">Markets</span>
@@ -3452,7 +3550,7 @@ hr { border: 0; height: 1px; background: linear-gradient(90deg, transparent, rgb
   <!-- Backtest tab -->
   <div id="tab-backtest" class="tab">
     <div class="btp">
-      <div style="display:flex;gap:5px;padding:8px 10px;flex-wrap:wrap;align-items:center;">
+      <div class="bt-controls">
         <button class="ghost" onclick="runBT()"><svg class="icon"><use href="#i-backtest"/></svg> Run Backtest</button>
         <button class="ghost" id="mc-btn" onclick="runMC()" disabled><svg class="icon"><use href="#i-flask"/></svg> MC</button>
         <button class="ghost" id="csv-btn" onclick="exportCSV()" disabled>CSV</button>
@@ -3465,10 +3563,10 @@ hr { border: 0; height: 1px; background: linear-gradient(90deg, transparent, rgb
 
   <!-- Analysis tab -->
   <div id="tab-analysis" class="tab">
-    <div style="padding:8px 10px;flex-shrink:0;">
+    <div class="bt-controls">
       <button class="ghost" onclick="loadCorr()"><svg class="icon"><use href="#i-refresh"/></svg> Correlation Matrix</button>
     </div>
-    <div style="overflow:auto;flex:1;padding:10px;" id="corr-content">
+    <div style="overflow:auto;flex:1;padding:var(--sp-md);" id="corr-content">
       <p class="ph">Click Refresh to load the correlation matrix for your tickers.</p>
     </div>
   </div>
@@ -3476,7 +3574,7 @@ hr { border: 0; height: 1px; background: linear-gradient(90deg, transparent, rgb
   <!-- Help tab -->
   <div id="tab-help" class="tab">
     <div class="hb">
-      <h3>TraderMoney v2.3.0 – Complete Help Guide</h3>
+      <h3>TraderMoney v2.4.0 – Complete Help Guide</h3>
       <p style="font-size:.82rem;color:var(--muted);margin-top:-4px;">Your desktop algorithmic trading terminal. All features documented below.</p>
 
       <details>
@@ -3931,6 +4029,48 @@ function updateBrokerOptions(){
 function onBrokerChange(){cfg.broker=$('broker').value;updateCreds();}
 function toggleDefQty(){$('defqty-box').style.display=gc('udefqty')?'block':'none';}
 
+/* ── Settings / Simple Mode ── */
+function toggleSettings(){const p=$('settings-panel');p.classList.toggle('open');}
+function toggleSimpleMode(){
+  const simple=gc('mode-toggle');
+  document.body.classList.toggle('simple',simple);
+  $('mode-label').textContent=simple?'Simple':'Complex';
+  const saved=JSON.parse(localStorage.getItem('tm_settings')||'{}');
+  saved.simple=simple;localStorage.setItem('tm_settings',JSON.stringify(saved));
+  toast(simple?'Simple mode: fewer options, clean focus':'Complex mode: all features shown','info');
+}
+function applyLayout(){
+  const layout=$('layout-select').value;
+  const saved=JSON.parse(localStorage.getItem('tm_settings')||'{}');
+  saved.layout=layout;localStorage.setItem('tm_settings',JSON.stringify(saved));
+  if(layout==='compact'){$('sb').style.setProperty('--sw','240px');}
+  else{$('sb').style.setProperty('--sw','280px');}
+}
+function loadSettings(){
+  try{
+    const saved=JSON.parse(localStorage.getItem('tm_settings')||'{}');
+    if(saved.simple){sc('mode-toggle',true);document.body.classList.add('simple');$('mode-label').textContent='Simple';}
+    if(saved.layout){$('layout-select').value=saved.layout;applyLayout();}
+  }catch(e){}
+}
+
+/* ── AI Thesis Suggest ── */
+async function aiSuggestThesis(){
+  const name=$('thesis-name').value.trim()||'Custom Strategy';
+  const params=collectIndicatorParams();
+  const desc=prompt('Describe your trading strategy briefly (e.g., "quick scalping on 1m charts"):','');
+  if(!desc)return;
+  const msg='I need help configuring a thesis called "'+name+'". My strategy: '+desc+'. Current settings: RSI period='+params.rsi_period+', MACD fast/slow/signal='+params.macd_fast+'/'+params.macd_slow+'/'+params.macd_signal+', BB period='+params.bb_period+', ADX period='+params.adx_period+', SuperTrend period='+params.supertrend_period+'. Please suggest optimal indicator parameter values for this strategy and explain why each helps.';
+  switchTab('aichat');
+  const input=$('chat-input');
+  if(input){input.value='';}
+  setTimeout(async()=>{
+    await initAIChat();
+    $('chat-input').value=msg;
+    await sendChat();
+  },500);
+}
+
 /* ── Tier UI ── */
 function applyFreeTierUI(){
   updateBrokerOptions();$('broker').disabled=true;sv('broker','Alpaca');cfg.broker='Alpaca';
@@ -4331,16 +4471,16 @@ async function runBT(){
       if(info.error){html+=`<p style="color:var(--danger)">${info.error}</p>`;continue;}
       if(info.simulation){
         const sim=info.simulation;
-        html+=`<div style="background:var(--card);padding:10px;border-radius:8px;margin-bottom:10px;display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:6px;font-size:.78rem;">
-          <div><b>Initial</b><br>$${sim.initial_cash.toLocaleString()}</div>
-          <div><b>Final</b><br>$${sim.final_cash.toFixed(2)}</div>
-          <div><b>P&L</b><br><span style="color:${sim.total_pnl>=0?'var(--accent)':'var(--danger)'}">${sim.total_pnl>=0?'+':''}$${sim.total_pnl.toFixed(2)}</span></div>
-          <div><b>ROI</b><br>${sim.roi}%</div>
-          <div><b>Win Rate</b><br>${sim.win_rate}%</div>
-          <div><b>Trades</b><br>${sim.total_trades}</div>
-          <div><b>Profit Factor</b><br>${sim.profit_factor}</div>
-          <div><b>Sharpe</b><br>${sim.sharpe_ratio}</div>
-          <div><b>Max DD</b><br>${sim.max_drawdown_pct}%</div>
+        html+=`<div class="card card-glow section result-grid" style="font-size:var(--fs-md);">
+          <div class="result-metric"><div class="v">$${sim.initial_cash.toLocaleString()}</div><div class="l">Initial</div></div>
+          <div class="result-metric"><div class="v">$${sim.final_cash.toFixed(2)}</div><div class="l">Final</div></div>
+          <div class="result-metric"><div class="v" style="color:${sim.total_pnl>=0?'var(--accent)':'var(--danger)'}">${sim.total_pnl>=0?'+':''}$${sim.total_pnl.toFixed(2)}</div><div class="l">P&amp;L</div></div>
+          <div class="result-metric"><div class="v">${sim.roi}%</div><div class="l">ROI</div></div>
+          <div class="result-metric"><div class="v">${sim.win_rate}%</div><div class="l">Win Rate</div></div>
+          <div class="result-metric"><div class="v">${sim.total_trades}</div><div class="l">Trades</div></div>
+          <div class="result-metric"><div class="v">${sim.profit_factor}</div><div class="l">PF</div></div>
+          <div class="result-metric"><div class="v">${sim.sharpe_ratio}</div><div class="l">Sharpe</div></div>
+          <div class="result-metric"><div class="v">${sim.max_drawdown_pct}%</div><div class="l">Max DD</div></div>
         </div>`;
         const exits=sim.trades.filter(t=>t.type==='exit');
         if(exits.length){
@@ -4360,7 +4500,7 @@ async function runBT(){
     }
     if(data.portfolio){
       const p=data.portfolio;
-      html+=`<div style="background:var(--card);padding:12px;border-radius:8px;margin-top:12px;"><b style="color:var(--accent)">Portfolio</b><br>Init: $${p.initial_cash.toLocaleString()} | Final: $${p.final_cash.toFixed(2)} | P&L: <span style="color:${p.total_pnl>=0?'var(--accent)':'var(--danger)'}">${p.total_pnl>=0?'+':''}$${p.total_pnl.toFixed(2)}</span> | Trades: ${p.total_trades}</div>`;
+      html+=`<div class="card section"><b style="color:var(--accent)">Portfolio</b><br><span style="font-size:var(--fs-md);">Init: $${p.initial_cash.toLocaleString()} | Final: $${p.final_cash.toFixed(2)} | P&L: <span style="color:${p.total_pnl>=0?'var(--accent)':'var(--danger)'}">${p.total_pnl>=0?'+':''}$${p.total_pnl.toFixed(2)}</span> | Trades: ${p.total_trades}</span></div>`;
     }
     $('btres').innerHTML=html||'<p class="ph">No results.</p>';
     $('mc-btn').disabled=false;$('csv-btn').disabled=false;$('pdf-btn').disabled=false;$('tune-btn').disabled=false;
@@ -4373,7 +4513,7 @@ async function runMC(){
   const r=await fetch('/api/backtest/montecarlo',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({config:buildCfg(),days:parseInt($('btDays').value)||5})});
   const d=await r.json();
   if(d.error){toast(d.error,'error');return;}
-  $('btres').innerHTML+=`<div style="background:var(--card);padding:12px;border-radius:8px;margin-top:12px;"><b style="color:var(--accent)">Monte Carlo (1000 runs)</b><br>Prob. Profit: <b>${d.prob_profit}%</b> | Best: +$${d.best} | Avg: $${d.average} | Worst: $${d.worst}</div>`;
+  $('btres').innerHTML+=`<div class="card section"><b style="color:var(--accent)">Monte Carlo (1000 runs)</b><br><span style="font-size:var(--fs-md);">Prob. Profit: <b>${d.prob_profit}%</b> | Best: +$${d.best} | Avg: $${d.average} | Worst: $${d.worst}</span></div>`;
 }
 
 function getAllExitTrades(){
@@ -4531,7 +4671,7 @@ document.addEventListener('keydown',e=>{
 });
 
 /* ── Boot ── */
-updateBrokerOptions();updateCreds();loadConfig();
+updateBrokerOptions();updateCreds();loadConfig();loadSettings();
 </script>
 </body>
 </html>
@@ -4553,7 +4693,7 @@ if __name__ == "__main__":
     time.sleep(1.2)
 
     window = webview.create_window(
-        "TraderMoney 2.3.0",
+        "TraderMoney 2.4.0",
         "http://127.0.0.1:5050",
         width=1440,
         height=880,
