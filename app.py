@@ -443,6 +443,7 @@ class AppState:
         self.last_bt_data: dict = {}
         self.signal_history: List[dict] = []
         self.monitor_cache: dict = {}
+        self.telegram_log: List[dict] = []
 
 state = AppState()
 
@@ -1701,6 +1702,10 @@ class TradingEngine(threading.Thread):
         db.insert_log(msg)
 
     def _telegram(self, msg: str):
+        _ts = datetime.now().strftime("%H:%M:%S")
+        state.telegram_log.append({"time": _ts, "msg": msg})
+        if len(state.telegram_log) > 100:
+            state.telegram_log = state.telegram_log[-50:]
         if not self.is_licensed:
             return
         tg = self.config.get("telegram", {})
@@ -1860,6 +1865,7 @@ class TradingEngine(threading.Thread):
                                         state.signal_history = state.signal_history[-500:]
                                 except Exception:
                                     pass
+                                self._telegram(f"<b>Signal</b> {sig} {s} @ ${price:.2f} (conf: {conf:.2f})")
 
                                 if (mode == "auto"
                                         and self.is_licensed
@@ -3031,8 +3037,8 @@ def api_monitor():
                         continue
                 per_ticker_data[sym] = {"error": err_msg, "price": 0, "change": 0, "change_pct": 0, "position": "flat", "quantity": 0, "signal": None, "confidence": 0, "rationale": "", "signal_history": [], "trend_dir": "flat", "indicators": {"rsi": 0, "rsi_label": "—", "macd": 0, "macd_signal": 0, "macd_label": "—", "adx": 0, "adx_label": "—", "bb_upper": 0, "bb_lower": 0, "bb_pos_pct": 50, "bb_label": "—", "vwap": 0, "atr": 0, "ema_fast": 0, "ema_slow": 0}}
     except Exception as e:
-        return jsonify({"tickers": per_ticker_data, "running": state.engine.running if state.engine else False, "error": str(e)})
-    return jsonify({"tickers": per_ticker_data, "running": state.engine.running if state.engine else False})
+        return jsonify({"tickers": per_ticker_data, "running": state.engine.running if state.engine else False, "error": str(e), "telegram_log": state.telegram_log[-50:]})
+    return jsonify({"tickers": per_ticker_data, "running": state.engine.running if state.engine else False, "telegram_log": state.telegram_log[-50:]})
 
 @app.route("/api/correlation", methods=["GET"])
 def correlation_matrix():
@@ -5294,6 +5300,30 @@ async function refreshMonitor(){
           </div>
         </div>`;
     }else{$('monitor-signals').style.display='none';$('monitor-signals').innerHTML='';}
+    // telegram event log
+    const telog=m.telegram_log||[];
+    if(running&&telog.length){
+      $('monitor-signals').style.display=''; // reuse signals slot if it was hidden
+      const telenav=telog.slice(-30).reverse();
+      const telHtml=telenav.map(e=>{
+        const isBuy=e.msg.includes('BUY'), isSell=e.msg.includes('SELL');
+        const clr=isBuy?'var(--accent)':isSell?'var(--danger)':'var(--muted)';
+        return `<div style="display:flex;align-items:flex-start;gap:6px;font-size:var(--fs-xs);padding:3px 6px;border-radius:4px;background:var(--glass);">
+          <span style="color:${clr};font-weight:600;white-space:nowrap;">${isBuy?'▲ BUY':isSell?'▼ SELL':'○'}</span>
+          <span style="flex:1;color:var(--text2);word-break:break-word;">${e.msg.replace(/<[^>]*>/g,'')}</span>
+          <span style="color:var(--muted);white-space:nowrap;font-size:9px;">${e.time}</span>
+        </div>`;
+      }).join('');
+      $('monitor-signals').innerHTML=`
+        <div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:var(--sp-md);margin-bottom:var(--sp-sm);">
+          <div style="font-size:var(--fs-xs);font-weight:600;color:var(--muted);margin-bottom:6px;display:flex;align-items:center;gap:6px;">
+            <svg class="icon" style="width:12px;height:12px;"><use href="#i-chat"/></svg> EVENT LOG
+          </div>
+          <div style="max-height:260px;overflow-y:auto;display:flex;flex-direction:column;gap:2px;">${telHtml}</div>
+        </div>`;
+    }else if(!$('monitor-signals').innerHTML.includes('LIVE SIGNAL FEED')){
+      $('monitor-signals').style.display='none';
+    }
     // ticker cards
     if(m.error){$('monitor-content').innerHTML=`<p class="ph" style="color:var(--danger)">${m.error}</p>`;return;}
     let html='';
@@ -5305,6 +5335,8 @@ async function refreshMonitor(){
       const posCls=t.position;
       const confPct=t.confidence>0?' ('+(t.confidence*100).toFixed(0)+'%)':'';
       const ind=t.indicators;
+      const emaCross=ind.ema_fast>0&&ind.ema_slow>0?(ind.ema_fast>ind.ema_slow?'Bullish Crossover':'Bearish Crossover'):'—';
+      const emaCrossColor=ind.ema_fast>ind.ema_slow?'var(--accent)':'var(--danger)';
       const trdLabel=ind.ema_fast>0?`<span style="color:${t.trend_dir==='up'?'var(--accent)':t.trend_dir==='down'?'var(--danger)':'var(--muted)'}">${_trdArrow(t.trend_dir)} ${t.trend_dir.toUpperCase()}</span>`:'—';
       const bbRange=ind.bb_upper>ind.bb_lower?`<span style="color:var(--muted)">$${ind.bb_lower}</span> – <span style="color:var(--muted)">$${ind.bb_upper}</span>`:'—';
       const rsiColor=ind.rsi>=70?'var(--danger)':ind.rsi<=30?'var(--accent)':'var(--text)';
@@ -5318,6 +5350,7 @@ async function refreshMonitor(){
         <div class="monitor-card-body">
           <div class="row"><span class="label">Signal</span><span class="value" style="font-weight:700;${t.signal==='BUY'?'color:var(--accent)':t.signal==='SELL'?'color:var(--danger)':''}">${t.signal||'—'}${confPct}</span></div>
           <div class="row"><span class="label">Trend</span><span class="value">${trdLabel}</span></div>
+          <div class="row"><span class="label">EMA ${_ind(ind.ema_fast)} / ${_ind(ind.ema_slow)}</span><span class="value" style="color:${emaCrossColor};font-weight:600;">${emaCross}</span></div>
           <div class="row"><span class="label">Rationale</span><span class="value" style="font-size:var(--fs-xs)">${t.rationale||'—'}</span></div>
           <hr style="border:none;border-top:1px solid var(--border);margin:6px 0;">
           <div style="font-size:var(--fs-xs);font-weight:600;color:var(--muted);margin-bottom:4px;">INDICATORS</div>
