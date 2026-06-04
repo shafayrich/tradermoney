@@ -42,7 +42,7 @@ import webview
 from flask import Flask, Response, jsonify, request, send_file
 from flask_cors import CORS
 
-APP_VERSION = "2.5.0"
+APP_VERSION = "3.0.0"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # AI CONFIGURATION
@@ -2363,6 +2363,18 @@ def api_backtest():
         from concurrent.futures import ThreadPoolExecutor, as_completed
         raw_list = [s.strip() for s in config.get("tickers", "AAPL").split(",") if s.strip()]
         symbols = list(dict.fromkeys(clean_symbol(e) for e in raw_list))
+        default_qty = config.get("quantity", 1)
+        per_ticker_qty: dict = {}
+        for e in raw_list:
+            cs = clean_symbol(e)
+            if ":" in e:
+                try:
+                    q = float(e.split(":")[1])
+                    per_ticker_qty[cs] = int(q) if q == int(q) else q
+                except Exception:
+                    per_ticker_qty[cs] = default_qty
+            else:
+                per_ticker_qty[cs] = default_qty
         results: dict = {}
         all_trades: List[dict] = []
         initial_cash = 100_000 if portfolio else 10_000
@@ -2444,6 +2456,7 @@ def api_backtest():
                         })
                 sym_results["signals"] = sigs
 
+                qty = per_ticker_qty.get(sym, default_qty)
                 equity: float = float(initial_cash)
                 cash: float = float(initial_cash)
                 position: float = 0.0
@@ -2459,7 +2472,7 @@ def api_backtest():
                     if s["signal"] == "BUY" and position <= 0:
                         if position < 0:
                             pnl = (entry_price - price) * abs(position)
-                            cash = abs(position) * entry_price + pnl
+                            cash -= abs(position) * price
                             equity = cash
                             trades.append({
                                 "entry_time": entry_time, "exit_time": s["time"],
@@ -2469,13 +2482,13 @@ def api_backtest():
                                 "reason_open": entry_reason, "reason_close": "BUY signal closed short",
                                 "indicators_at_entry": entry_indicators,
                             })
-                        entry_shares = cash / price
-                        position = entry_shares
+                        entry_shares = qty
+                        cash -= qty * price
+                        position = qty
                         entry_price = price
                         entry_time = s["time"]
                         entry_reason = s.get("reason", "EMA crossover bullish")
                         entry_indicators = s.get("indicators", {})
-                        cash = 0.0
                         trades.append({
                             "entry_time": s["time"], "exit_time": "",
                             "side": "LONG", "symbol": sym,
@@ -2487,7 +2500,7 @@ def api_backtest():
                     elif s["signal"] == "SELL" and position >= 0:
                         if position > 0:
                             pnl = (price - entry_price) * position
-                            cash = position * price
+                            cash += position * price
                             equity = cash
                             trades.append({
                                 "entry_time": entry_time, "exit_time": s["time"],
@@ -2497,13 +2510,13 @@ def api_backtest():
                                 "reason_open": entry_reason, "reason_close": s.get("reason", "EMA crossover bearish"),
                                 "indicators_at_entry": entry_indicators,
                             })
-                        entry_shares = cash / price
-                        position = -(entry_shares)
+                        entry_shares = qty
+                        cash += qty * price
+                        position = -(qty)
                         entry_price = price
                         entry_time = s["time"]
                         entry_reason = s.get("reason", "EMA crossover bearish")
                         entry_indicators = s.get("indicators", {})
-                        cash = 0.0
                         trades.append({
                             "entry_time": s["time"], "exit_time": "",
                             "side": "SHORT", "symbol": sym,
@@ -2517,11 +2530,11 @@ def api_backtest():
                     last_price = float(sigs[-1]["price"])
                     if position > 0:
                         pnl = (last_price - entry_price) * position
-                        cash = position * last_price
+                        cash += position * last_price
                         side_label = "LONG"
                     else:
                         pnl = (entry_price - last_price) * abs(position)
-                        cash = abs(position) * entry_price + pnl
+                        cash -= abs(position) * last_price
                         side_label = "SHORT"
                     equity = cash
                     trades.append({
@@ -2742,21 +2755,27 @@ def export_backtest_pdf():
     trades = (request.json or {}).get("trades", [])
     pdf = FPDF("P", "mm", "A4")
     pdf.add_page()
-    # Thin gold accent line at top
-    pdf.set_fill_color(212, 175, 55)
+    # Primary accent colors
+    ACCENT = (0, 201, 167)
+    ACCENT_DIM = (0, 161, 134)
+    DARK_BG = (11, 14, 20)
+    SURFACE = (17, 24, 39)
+    MUTED = (100, 116, 139)
+    LIGHT_TEXT = (226, 232, 240)
+    RED = (239, 68, 68)
+    GREEN = (0, 201, 167)
+    # Top accent bar
+    pdf.set_fill_color(*ACCENT)
     pdf.rect(0, 0, 210, 2.5, "F")
-    # Title
-    pdf.set_text_color(212, 175, 55)
-    pdf.set_font("Helvetica", "B", 18)
     pdf.set_y(8)
+    pdf.set_text_color(*ACCENT)
+    pdf.set_font("Helvetica", "B", 20)
     pdf.cell(0, 8, "TraderMoney Backtest Report", ln=True, align="L")
-    # Subtitle line
-    pdf.set_draw_color(212, 175, 55)
+    pdf.set_draw_color(*ACCENT_DIM)
     pdf.set_line_width(0.3)
     pdf.line(10, pdf.get_y() + 1, 200, pdf.get_y() + 1)
-    pdf.ln(4)
-    # Timestamp
-    pdf.set_text_color(140, 140, 140)
+    pdf.ln(3)
+    pdf.set_text_color(*MUTED)
     pdf.set_font("Helvetica", "", 8)
     pdf.cell(0, 5, f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} UTC", ln=True, align="R")
     pdf.ln(5)
@@ -2766,60 +2785,72 @@ def export_backtest_pdf():
         wins = sum(1 for t in exits if t["pnl"] > 0)
         win_rate = (wins / len(exits) * 100) if exits else 0
         avg_pnl = total_pnl / len(exits) if exits else 0
-        # Summary cards
+        max_win = max((t["pnl"] for t in exits), default=0)
+        max_loss = min((t["pnl"] for t in exits), default=0)
         pdf.set_font("Helvetica", "B", 9)
         summary_items = [
             ("Trades", str(len(exits))),
             ("Win Rate", f"{win_rate:.1f}%"),
             ("Total P&L", f"${total_pnl:.2f}"),
             ("Avg Trade", f"${avg_pnl:.2f}"),
+            ("Best", f"${max_win:.2f}"),
+            ("Worst", f"${max_loss:.2f}"),
         ]
-        card_w = 44
-        start_x = 14
+        card_w = 30
+        gap = 3
+        total_w = len(summary_items) * card_w + (len(summary_items) - 1) * gap
+        start_x = (210 - total_w) / 2
         for i, (label, value) in enumerate(summary_items):
-            x = start_x + i * (card_w + 4)
+            x = start_x + i * (card_w + gap)
             y = pdf.get_y()
-            pdf.set_fill_color(12, 12, 12)
+            pdf.set_fill_color(*SURFACE)
             pdf.rect(x, y, card_w, 14, "F")
-            pdf.set_draw_color(212, 175, 55)
-            pdf.set_line_width(0.15)
+            pdf.set_draw_color(*ACCENT_DIM)
+            pdf.set_line_width(0.12)
             pdf.rect(x, y, card_w, 14, "D")
-            pdf.set_text_color(140, 140, 140)
-            pdf.set_font("Helvetica", "", 6.5)
+            pdf.set_text_color(*MUTED)
+            pdf.set_font("Helvetica", "", 6)
             pdf.set_xy(x, y + 1)
             pdf.cell(card_w, 5, label, align="C")
-            color = (212, 175, 55) if label != "Total P&L" or total_pnl >= 0 else (200, 50, 50)
-            pdf.set_text_color(*color)
-            pdf.set_font("Helvetica", "B", 10)
-            pdf.set_xy(x, y + 6)
+            if label == "Total P&L":
+                c = GREEN if total_pnl >= 0 else RED
+            elif label == "Best":
+                c = GREEN
+            elif label == "Worst":
+                c = RED
+            else:
+                c = LIGHT_TEXT
+            pdf.set_text_color(*c)
+            pdf.set_font("Helvetica", "B", 9)
+            pdf.set_xy(x, y + 6.5)
             pdf.cell(card_w, 6, value, align="C")
         pdf.set_y(pdf.get_y() + 20)
         # Table header
-        pdf.set_text_color(0, 0, 0)
+        pdf.set_text_color(*DARK_BG)
         pdf.set_font("Helvetica", "B", 7.5)
-        pdf.set_fill_color(212, 175, 55)
-        col_widths = [30, 30, 16, 12, 12, 20, 20, 18]
-        headers = ["Entry", "Exit", "Symbol", "Side", "Shrs", "Entry $", "Exit $", "P&L"]
+        pdf.set_fill_color(*ACCENT)
+        col_widths = [28, 28, 14, 10, 10, 18, 18, 16]
+        headers = ["Entry", "Exit", "Sym", "Side", "Shrs", "Entry $", "Exit $", "P&L"]
         aligns = ["L", "L", "C", "C", "R", "R", "R", "R"]
         for w, h, a in zip(col_widths, headers, aligns):
             pdf.cell(w, 6.5, h, 1, 0, a, fill=True)
         pdf.ln()
-        pdf.set_text_color(200, 200, 200)
+        pdf.set_text_color(*LIGHT_TEXT)
         pdf.set_font("Helvetica", "", 6.5)
         for t in exits:
             pnl = t.get("pnl", 0)
-            fill = (14, 14, 14) if pnl >= 0 else (18, 10, 10)
+            fill = SURFACE if pnl >= 0 else (24, 14, 14)
             pdf.set_fill_color(*fill)
-            pdf.cell(30, 5, str(t.get("entry_time", ""))[:10], 1, 0, "L", fill=True)
-            pdf.cell(30, 5, str(t.get("exit_time", ""))[:10], 1, 0, "L", fill=True)
-            pdf.cell(16, 5, str(t.get("symbol", "")), 1, 0, "C", fill=True)
-            pdf.cell(12, 5, t.get("side", ""), 1, 0, "C", fill=True)
-            pdf.cell(12, 5, str(t.get("shares", "")), 1, 0, "R", fill=True)
-            pdf.cell(20, 5, f"${t.get('entry_price', 0):.2f}", 1, 0, "R", fill=True)
-            pdf.cell(20, 5, f"${t.get('exit_price', 0):.2f}", 1, 0, "R", fill=True)
-            pdf.set_text_color(*(0, 180, 0) if pnl >= 0 else (200, 40, 40))
-            pdf.cell(18, 5, f"${pnl:.2f}", 1, 0, "R", fill=True)
-            pdf.set_text_color(200, 200, 200)
+            pdf.cell(28, 5, str(t.get("entry_time", ""))[:10], 1, 0, "L", fill=True)
+            pdf.cell(28, 5, str(t.get("exit_time", ""))[:10], 1, 0, "L", fill=True)
+            pdf.cell(14, 5, str(t.get("symbol", "")), 1, 0, "C", fill=True)
+            pdf.cell(10, 5, t.get("side", ""), 1, 0, "C", fill=True)
+            pdf.cell(10, 5, str(t.get("shares", "")), 1, 0, "R", fill=True)
+            pdf.cell(18, 5, f"${t.get('entry_price', 0):.2f}", 1, 0, "R", fill=True)
+            pdf.cell(18, 5, f"${t.get('exit_price', 0):.2f}", 1, 0, "R", fill=True)
+            pdf.set_text_color(*(GREEN if pnl >= 0 else RED))
+            pdf.cell(16, 5, f"${pnl:.2f}", 1, 0, "R", fill=True)
+            pdf.set_text_color(*LIGHT_TEXT)
             pdf.ln()
     raw = pdf.output()
     pdf_bytes = bytes(raw) if isinstance(raw, (bytes, bytearray)) else raw.encode("latin-1")
@@ -2859,21 +2890,27 @@ def export_backtest_pdf_file():
     trades = (request.json or {}).get("trades", [])
     pdf = FPDF("P", "mm", "A4")
     pdf.add_page()
-    # Thin gold accent line at top
-    pdf.set_fill_color(212, 175, 55)
+    # Primary accent colors
+    ACCENT = (0, 201, 167)
+    ACCENT_DIM = (0, 161, 134)
+    DARK_BG = (11, 14, 20)
+    SURFACE = (17, 24, 39)
+    MUTED = (100, 116, 139)
+    LIGHT_TEXT = (226, 232, 240)
+    RED = (239, 68, 68)
+    GREEN = (0, 201, 167)
+    # Top accent bar
+    pdf.set_fill_color(*ACCENT)
     pdf.rect(0, 0, 210, 2.5, "F")
-    # Title
-    pdf.set_text_color(212, 175, 55)
-    pdf.set_font("Helvetica", "B", 18)
     pdf.set_y(8)
+    pdf.set_text_color(*ACCENT)
+    pdf.set_font("Helvetica", "B", 20)
     pdf.cell(0, 8, "TraderMoney Backtest Report", ln=True, align="L")
-    # Subtitle line
-    pdf.set_draw_color(212, 175, 55)
+    pdf.set_draw_color(*ACCENT_DIM)
     pdf.set_line_width(0.3)
     pdf.line(10, pdf.get_y() + 1, 200, pdf.get_y() + 1)
-    pdf.ln(4)
-    # Timestamp
-    pdf.set_text_color(140, 140, 140)
+    pdf.ln(3)
+    pdf.set_text_color(*MUTED)
     pdf.set_font("Helvetica", "", 8)
     pdf.cell(0, 5, f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} UTC", ln=True, align="R")
     pdf.ln(5)
@@ -2884,64 +2921,72 @@ def export_backtest_pdf_file():
         win_rate = (wins / len(exits) * 100) if exits else 0
         avg_pnl = total_pnl / len(exits) if exits else 0
         loss_rate = 100 - win_rate
-        # Summary cards
+        max_win = max((t["pnl"] for t in exits), default=0)
+        max_loss = min((t["pnl"] for t in exits), default=0)
         pdf.set_font("Helvetica", "B", 9)
         summary_items = [
             ("Trades", str(len(exits))),
             ("Win Rate", f"{win_rate:.1f}%"),
             ("Total P&L", f"${total_pnl:.2f}"),
             ("Avg Trade", f"${avg_pnl:.2f}"),
+            ("Best", f"${max_win:.2f}"),
+            ("Worst", f"${max_loss:.2f}"),
         ]
-        card_w = 44
-        start_x = 14
+        card_w = 30
+        gap = 3
+        total_w = len(summary_items) * card_w + (len(summary_items) - 1) * gap
+        start_x = (210 - total_w) / 2
         for i, (label, value) in enumerate(summary_items):
-            x = start_x + i * (card_w + 4)
+            x = start_x + i * (card_w + gap)
             y = pdf.get_y()
-            # Card background
-            pdf.set_fill_color(12, 12, 12)
+            pdf.set_fill_color(*SURFACE)
             pdf.rect(x, y, card_w, 14, "F")
-            pdf.set_draw_color(212, 175, 55)
-            pdf.set_line_width(0.15)
+            pdf.set_draw_color(*ACCENT_DIM)
+            pdf.set_line_width(0.12)
             pdf.rect(x, y, card_w, 14, "D")
-            # Label
-            pdf.set_text_color(140, 140, 140)
-            pdf.set_font("Helvetica", "", 6.5)
+            pdf.set_text_color(*MUTED)
+            pdf.set_font("Helvetica", "", 6)
             pdf.set_xy(x, y + 1)
             pdf.cell(card_w, 5, label, align="C")
-            # Value
-            color = (212, 175, 55) if label != "Total P&L" or total_pnl >= 0 else (200, 50, 50)
-            pdf.set_text_color(*color)
-            pdf.set_font("Helvetica", "B", 10)
-            pdf.set_xy(x, y + 6)
+            if label == "Total P&L":
+                c = GREEN if total_pnl >= 0 else RED
+            elif label == "Best":
+                c = GREEN
+            elif label == "Worst":
+                c = RED
+            else:
+                c = LIGHT_TEXT
+            pdf.set_text_color(*c)
+            pdf.set_font("Helvetica", "B", 9)
+            pdf.set_xy(x, y + 6.5)
             pdf.cell(card_w, 6, value, align="C")
         pdf.set_y(pdf.get_y() + 20)
         # Table header
-        pdf.set_text_color(0, 0, 0)
+        pdf.set_text_color(*DARK_BG)
         pdf.set_font("Helvetica", "B", 7.5)
-        pdf.set_fill_color(212, 175, 55)
-        col_widths = [30, 30, 16, 12, 12, 20, 20, 18]
-        headers = ["Entry", "Exit", "Symbol", "Side", "Shrs", "Entry $", "Exit $", "P&L"]
+        pdf.set_fill_color(*ACCENT)
+        col_widths = [28, 28, 14, 10, 10, 18, 18, 16]
+        headers = ["Entry", "Exit", "Sym", "Side", "Shrs", "Entry $", "Exit $", "P&L"]
         aligns = ["L", "L", "C", "C", "R", "R", "R", "R"]
         for w, h, a in zip(col_widths, headers, aligns):
             pdf.cell(w, 6.5, h, 1, 0, a, fill=True)
         pdf.ln()
-        # Table rows
-        pdf.set_text_color(200, 200, 200)
+        pdf.set_text_color(*LIGHT_TEXT)
         pdf.set_font("Helvetica", "", 6.5)
         for t in exits:
             pnl = t.get("pnl", 0)
-            fill = (14, 14, 14) if pnl >= 0 else (18, 10, 10)
+            fill = SURFACE if pnl >= 0 else (24, 14, 14)
             pdf.set_fill_color(*fill)
-            pdf.cell(30, 5, str(t.get("entry_time", ""))[:10], 1, 0, "L", fill=True)
-            pdf.cell(30, 5, str(t.get("exit_time", ""))[:10], 1, 0, "L", fill=True)
-            pdf.cell(16, 5, str(t.get("symbol", "")), 1, 0, "C", fill=True)
-            pdf.cell(12, 5, t.get("side", ""), 1, 0, "C", fill=True)
-            pdf.cell(12, 5, str(t.get("shares", "")), 1, 0, "R", fill=True)
-            pdf.cell(20, 5, f"${t.get('entry_price', 0):.2f}", 1, 0, "R", fill=True)
-            pdf.cell(20, 5, f"${t.get('exit_price', 0):.2f}", 1, 0, "R", fill=True)
-            pdf.set_text_color(*(0, 180, 0) if pnl >= 0 else (200, 40, 40))
-            pdf.cell(18, 5, f"${pnl:.2f}", 1, 0, "R", fill=True)
-            pdf.set_text_color(200, 200, 200)
+            pdf.cell(28, 5, str(t.get("entry_time", ""))[:10], 1, 0, "L", fill=True)
+            pdf.cell(28, 5, str(t.get("exit_time", ""))[:10], 1, 0, "L", fill=True)
+            pdf.cell(14, 5, str(t.get("symbol", "")), 1, 0, "C", fill=True)
+            pdf.cell(10, 5, t.get("side", ""), 1, 0, "C", fill=True)
+            pdf.cell(10, 5, str(t.get("shares", "")), 1, 0, "R", fill=True)
+            pdf.cell(18, 5, f"${t.get('entry_price', 0):.2f}", 1, 0, "R", fill=True)
+            pdf.cell(18, 5, f"${t.get('exit_price', 0):.2f}", 1, 0, "R", fill=True)
+            pdf.set_text_color(*(GREEN if pnl >= 0 else RED))
+            pdf.cell(16, 5, f"${pnl:.2f}", 1, 0, "R", fill=True)
+            pdf.set_text_color(*LIGHT_TEXT)
             pdf.ln()
     raw = pdf.output()
     pdf_bytes = bytes(raw) if isinstance(raw, (bytes, bytearray)) else raw.encode("latin-1")
@@ -3124,7 +3169,7 @@ FRONTEND_HTML = r"""
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>TraderMoney 2.5.0</title>
+<title>TraderMoney 3.0</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root {
@@ -3597,7 +3642,7 @@ body.light .istat { background: var(--surface); border: 1px solid var(--border2)
 @keyframes spin { to { transform: rotate(360deg); } }
 .bt-loader-text { color: var(--muted); font-size: 0.72rem; }
 
-/* ── Market Ticker (Wolf of Wall Street style) ── */
+/* ── Market Ticker ── */
 .bt-ticker-wrap {
   display: flex; flex-direction: column; height: 100%;
   padding: var(--sp-md); gap: var(--sp-sm);
@@ -3982,7 +4027,7 @@ button.ghost:hover { box-shadow: none; }
     <span class="sidebar-logo">TM</span>
     <div class="sidebar-title">
       <span class="sidebar-name">TraderMoney</span>
-      <span class="sidebar-version">v2.5.0</span>
+      <span class="sidebar-version">v3.0</span>
     </div>
     <div class="sidebar-actions">
       <button onclick="location.reload()" title="Refresh"><svg class="icon" style="width:13px;height:13px;" viewBox="0 0 24 24"><path d="M17.65 6.35A7.958 7.958 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg></button>
@@ -4197,7 +4242,7 @@ button.ghost:hover { box-shadow: none; }
   <!-- Help tab -->
   <div id="tab-help" class="tab">
     <div class="hb">
-      <h3>TraderMoney v2.5.0 – Complete Help Guide</h3>
+      <h3>TraderMoney v3.0 – Complete Help Guide</h3>
       <p style="font-size:.82rem;color:var(--muted);margin-top:-4px;">Your desktop algorithmic trading terminal. All features documented below.</p>
 
       <details>
@@ -5031,7 +5076,7 @@ function loadPreset(){
   toast('Preset loaded – click Save to persist','success');
 }
 
-/* ── Market Ticker (Wolf of Wall Street style) ── */
+/* ── Market Ticker ── */
 const WOLF_TICKERS=[
   {sym:'AAPL',name:'Apple Inc.',price:198.43,prev:197.85},
   {sym:'TSLA',name:'Tesla Inc.',price:248.72,prev:251.10},
@@ -5071,7 +5116,7 @@ function startBTGame(){
       <div class="bt-ticker-header">
         <span class="pulse-dot"></span>
         <span style="font-weight:700;color:var(--accent);">MARKET WATCH</span>
-        <span style="color:var(--muted);font-size:var(--fs-xs);">Live prices · Wolf of Wall St.</span>
+        <span style="color:var(--muted);font-size:var(--fs-xs);">Tracking top tickers while your backtest runs</span>
       </div>
       <div class="bt-ticker-list">
         ${items}
@@ -5099,10 +5144,7 @@ async function runBT(){
   switchTab('backtest');
   $('mc-btn').disabled=true;$('csv-btn').disabled=true;$('pdf-btn').disabled=true;$('tune-btn').disabled=true;
   try{
-    const ctrl=new AbortController();
-    const to=setTimeout(()=>ctrl.abort(),30000);
-    const r=await fetch('/api/backtest',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({config:buildCfg(),days}),signal:ctrl.signal});
-    clearTimeout(to);
+    const r=await fetch('/api/backtest',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({config:buildCfg(),days})});
     const data=await r.json();lastBTData=data;
     stopBTGame();
     if(data.error){toast('Backtest error: '+data.error,'error');$('btres').innerHTML=`<p class="ph" style="color:var(--danger)">${data.error}</p>`;return;}
@@ -5346,7 +5388,7 @@ if __name__ == "__main__":
     time.sleep(1.2)
 
     window = webview.create_window(
-        "TraderMoney 2.5.0",
+        "TraderMoney 3.0",
         "http://127.0.0.1:5050",
         width=1440,
         height=880,
