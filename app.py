@@ -35,6 +35,10 @@ import uuid
 from datetime import datetime, timezone as dt_timezone, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 import numpy as np
 import pandas as pd
 import requests as http_requests
@@ -49,9 +53,9 @@ APP_VERSION = "3.0.0"
 # ═══════════════════════════════════════════════════════════════════════════════
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY") or "INJECT_OPENROUTER_API_KEY"
 AI_MODELS = [
+    "deepseek/deepseek-v4-flash:free",
     "google/gemini-2.5-flash",
     "deepseek/deepseek-chat-v3-0324",
-    "meta-llama/llama-4-maverick",
 ]
 FREE_CHAT_DAILY_LIMIT = 5
 NEWS_API_KEY = os.environ.get("NEWS_API_KEY", "")
@@ -4016,7 +4020,7 @@ button.ghost:hover { box-shadow: none; }
     <hr>
     <div class="settings-row"><span>License Key</span></div>
     <div class="r2"><input type="password" id="lickey" placeholder="Paste Gumroad key"><button onclick="validateLicense()" style="height:32px;padding:0 10px;flex-shrink:0;"><svg class="icon"><use href="#i-key"/></svg></button></div>
-    <p style="font-size:.6rem;color:var(--muted);margin:4px 0 0;"><a href="https://shafayrich.gumroad.com/l/ykaoov" style="color:var(--accent)">Buy license</a></p>
+    <p style="font-size:.6rem;color:var(--muted);margin:4px 0 0;"><a href="https://tradermoney.gumroad.com/l/ykaoov" style="color:var(--accent)">Buy license</a></p>
     <div id="free-notice" class="free-notice">Free tier: Alpaca paper only · Signal-Only · 1 ticker · Core indicators · AI: 5/day<br><b>License session-only – re-enter each restart.</b></div>
   </div>
 </div>
@@ -4498,7 +4502,7 @@ button.ghost:hover { box-shadow: none; }
       <ul>
         <li><b>Free:</b> Alpaca paper, Signal-Only, 1 ticker, core indicators (RSI/MACD/VWAP/Bollinger), 5 AI messages/day.</li>
         <li><b>Pro:</b> All 6 brokers, Auto Trade, all 9 indicators, brackets, ATR stops, Telegram, unlimited AI, direction control, multiple tickers, AI Auto-Tune, Custom Thesis Builder.</li>
-        <li>Purchase at <a href="https://shafayrich.gumroad.com/l/ykaoov">shafayrich.gumroad.com</a></li>
+        <li>Purchase at <a href="https://tradermoney.gumroad.com/l/ykaoov">tradermoney.gumroad.com</a></li>
         <li>License is session-only – re-enter each restart.</li>
       </ul>
 

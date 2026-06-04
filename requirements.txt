@@ -8,6 +8,7 @@ pywebview
 cryptography
 yfinance
 fpdf2
+python-dotenv
 
 # Optional broker SDKs (install only what you need)
 # alpaca-trade-api
