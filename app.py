@@ -33,7 +33,7 @@ import traceback
 import urllib.request
 import uuid
 from datetime import datetime, timezone as dt_timezone, timedelta
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 try:
     from dotenv import load_dotenv
@@ -48,7 +48,7 @@ import webview
 from flask import Flask, Response, jsonify, request, send_file
 from flask_cors import CORS
 
-APP_VERSION = "4.0.7"
+APP_VERSION = "5.0.0"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # AI CONFIGURATION
@@ -1767,6 +1767,14 @@ class TradingEngine(threading.Thread):
             self.ui_queue.put(("error",
                 f"Free tier: only 1 ticker allowed. Tracking {first} only."))
 
+        # Detect newly added tickers across restarts
+        prev = getattr(state, '_prev_tickers', set())
+        new_syms = [s for s in self.symbols if s not in prev]
+        if new_syms and prev:
+            for ns in new_syms:
+                self._telegram(f"<b>Ticker Added</b> {ns} — now monitoring: {', '.join(self.symbols)}")
+        state._prev_tickers = set(self.symbols)
+
         for s in self.symbols:
             self.positions[s] = 0
             self.prev_ema[s] = (None, None)
@@ -3283,7 +3291,7 @@ FRONTEND_HTML = r"""
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>TraderMoney 4.0.7</title>
+<title>TraderMoney 5.0.0</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root {
@@ -3357,7 +3365,7 @@ body.light #sb { background: var(--surface); border-right: 1px solid var(--borde
 /* ── Sidebar Brand ── */
 .sidebar-brand {
   display: flex; align-items: center; gap: 8px;
-  padding: 0 0 10px; border-bottom: 1px solid var(--border);
+  padding: 14px 0 10px; border-bottom: 1px solid var(--border);
   margin-bottom: 10px; flex-shrink: 0;
 }
 .sidebar-logo {
@@ -4242,7 +4250,7 @@ button.ghost:hover { box-shadow: none; }
     <span class="sidebar-logo">TM</span>
     <div class="sidebar-title">
       <span class="sidebar-name">TraderMoney</span>
-      <span class="sidebar-version">v4.0.7</span>
+      <span class="sidebar-version">v5.0.0</span>
     </div>
     <div class="sidebar-actions">
       <button onclick="location.reload()" title="Refresh"><svg class="icon" style="width:13px;height:13px;" viewBox="0 0 24 24"><path d="M17.65 6.35A7.958 7.958 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg></button>
@@ -4319,7 +4327,7 @@ button.ghost:hover { box-shadow: none; }
   </details>
 
   <details class="sb-section simple-hidden">
-    <summary><svg class="icon"><use href="#i-flask"/></svg> Thesis Builder</summary>
+    <summary><svg class="icon"><use href="#i-flask"/></svg> Thesis Builder <span class="badge badge-gold" style="font-size:.5rem;padding:0 5px;">PRO</span></summary>
     <div class="sb-section-body">
       <label style="font-size:.65rem;">Thesis Name</label>
       <input type="text" id="thesis-name" placeholder="e.g., Momentum RSI" style="font-size:.75rem;">
@@ -4407,12 +4415,12 @@ button.ghost:hover { box-shadow: none; }
     <button class="tbtn" data-tab="analysis"><svg class="icon"><use href="#i-analysis"/></svg>Analysis</button>
     <button class="tbtn" data-tab="help"><svg class="icon"><use href="#i-help"/></svg>Help</button>
     <button class="tbtn" data-tab="aichat"><svg class="icon"><use href="#i-chat"/></svg>AI Chat</button>
-    <button class="tbtn" data-tab="monitor" id="monitor-tab-btn" style="display:none;"><svg class="icon" style="width:12px;height:12px;"><use href="#i-chart"/></svg> Live</button>
+    <button class="tbtn" data-tab="monitor" id="monitor-tab-btn"><svg class="icon" style="width:12px;height:12px;"><use href="#i-chart"/></svg> Live</button>
   </div>
 
   <!-- Charts tab -->
   <div id="tab-charts" class="tab active">
-    <div id="tkbar"></div>
+    <div style="display:flex;align-items:center;gap:6px;"><div id="tkbar" style="flex:1;"></div><button onclick="reloadChart()" title="Reload chart for current ticker" style="background:var(--glass);border:1px solid var(--border);border-radius:6px;color:var(--muted);cursor:pointer;padding:4px 8px;font-size:11px;white-space:nowrap;"><svg class="icon" style="width:12px;height:12px;"><use href="#i-refresh"/></svg> Chart</button></div>
     <div id="metrics">
       <div class="met"><div class="v" id="v-eq">--</div><div class="l">Equity</div></div>
       <div class="met"><div class="v" id="v-bp">--</div><div class="l">Buy Power</div></div>
@@ -4470,7 +4478,8 @@ button.ghost:hover { box-shadow: none; }
   <!-- Help tab -->
   <div id="tab-help" class="tab">
     <div class="hb">
-      <h3>TraderMoney v4.0.7 – Complete Help Guide</h3>
+      <input type="text" id="help-search" placeholder="Search help... (Cmd+F)" oninput="filterHelp()" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);font-size:.82rem;margin-bottom:10px;box-sizing:border-box;">
+      <h3>TraderMoney v5.0.0 – Complete Help Guide</h3>
       <p style="font-size:.82rem;color:var(--muted);margin-top:-4px;">Your desktop algorithmic trading terminal. All features documented below.</p>
 
       <details>
@@ -4491,6 +4500,24 @@ button.ghost:hover { box-shadow: none; }
           </ol>
           <h4>Auto Trading</h4>
           <p style="font-size:.82rem;">Set Mode to "Auto Trade" (Pro only) to automatically execute trades when signals fire. Configure position sizing via quantity field or per-ticker quantity in ticker format (e.g. AAPL:10).</p>
+        </div>
+      </details>
+
+      <details>
+        <summary style="cursor:pointer;color:var(--accent);font-weight:600;">What's New in v5.0.0</summary>
+        <div style="padding:8px 0;font-size:.82rem;line-height:1.7;">
+          <ul>
+            <li><b>News Sentiment Engine</b> (Pro) – Live news headlines from NewsAPI analyzed by AI. Positive news boosts BUY confidence, negative news boosts SELL confidence. Updated every 5 minutes. Headlines shown in Monitor cards.</li>
+            <li><b>News API Key</b> – Get a free key at <a href="https://newsapi.org/register" target="_blank">newsapi.org/register</a>, add NEWS_API_KEY=your_key to .env</li>
+            <li><b>Monitor Tab</b> – Always visible even when bot is stopped. Shows clear running/stopped status.</li>
+            <li><b>Custom Thesis Builder</b> (Pro) – Save &amp; apply any combination of EMA periods, SL/TP %, RSI, MACD, BB, ADX, Volume, SuperTrend, Stochastic, ATR. Create unlimited strategies.</li>
+            <li><b>Help Search</b> – Press Cmd+F (Ctrl+F) to search all help documentation.</li>
+            <li><b>Reload Chart</b> – One-click button to reload TradingView chart for current ticker.</li>
+            <li><b>Ticker Added Alert</b> – Telegram message when a new ticker is added while bot is running.</li>
+            <li><b>EMA &amp; SL/TP in Thesis</b> – EMA Fast/Slow and Stop Loss/Take Profit % now fully configurable in the thesis builder.</li>
+            <li><b>Thesis Builder</b> – Available in Pro tier only. Create, save, and apply custom indicator configurations.</li>
+          </ul>
+          <p style="color:var(--muted);margin-top:8px;">Upgraded from v3 → v5. See Thesis Builder in sidebar to get started.</p>
         </div>
       </details>
 
@@ -4842,9 +4869,7 @@ button.ghost:hover { box-shadow: none; }
     <div style="padding:var(--sp-md);overflow:auto;flex:1;display:flex;flex-direction:column;gap:var(--sp-md);" id="monitor-scroll">
       <div id="monitor-status" style="display:none;"></div>
       <div id="monitor-signals" style="display:none;"></div>
-      <div id="monitor-content">
-        <p class="ph" style="text-align:center;">Start the bot to begin monitoring.</p>
-      </div>
+      <div id="monitor-content"></div>
     </div>
   </div>
 
@@ -4990,7 +5015,7 @@ function loadSettings(){
     else{sc('theme-toggle',false);document.body.classList.remove('light');$('theme-label').textContent='Dark';}
     if(saved.layout){$('layout-select').value=saved.layout;applyLayout();}
     if(saved.debug!==undefined){sc('debug-toggle',saved.debug);toggleDebugConsole();}
-    else{sc('debug-toggle',true);}
+    else{sc('debug-toggle',false);toggleDebugConsole();}
   }catch(e){}
 }
 
@@ -5174,6 +5199,11 @@ function loadTradingViewChart(symbol){
   setTimeout(()=>{if(tvWidget&&tvWidget.resize)tvWidget.resize();},200);
 }
 
+function reloadChart(){
+  if(lastTvSymbol)loadTradingViewChart(lastTvSymbol);
+  else{const raw=allTickers.length?allTickers:(gv('tickers','AAPL').split(',').map(s=>s.trim()).filter(s=>s));if(raw.length)loadTradingViewChart(cs(raw[0]));}
+  toast('Chart reloaded','success');
+}
 /* ── Ticker bar ── */
 function setTickers(list){
   allTickers=list;const bar=$('tkbar');bar.innerHTML='';
@@ -5335,9 +5365,6 @@ async function pollStatus(){
     $('v-pl').innerHTML=`<span style="color:${pct>=0?'var(--accent)':'var(--danger)'}">${pct>=0?'+':''}${pct.toFixed(2)}%</span>`;
     $('v-pos').textContent=d.open_positions;
     renderSignals(d.signals);renderOrders(d.orders);
-    const mt=$('monitor-tab-btn');
-    if(d.running&&mt)mt.style.display='';
-    else if(mt)mt.style.display='none';
     $('logbar').innerHTML=(d.log||[]).join('<br>');
   }catch(e){}
 }
@@ -5418,12 +5445,22 @@ async function refreshMonitor(){
     }else if(!$('monitor-signals').innerHTML.includes('LIVE SIGNAL FEED')){
       $('monitor-signals').style.display='none';
     }
+    // if bot not running, show stopped message
+    if(!botRunning){
+      $('monitor-status').style.display='';
+      $('monitor-status').innerHTML=`<div style="display:flex;align-items:center;gap:var(--sp-sm);background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:var(--sp-md);margin-bottom:var(--sp-sm);"><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#ef4444;box-shadow:0 0 8px #ef444488;"></span><span style="font-weight:600;font-size:var(--fs-sm);">Bot Stopped</span><span style="color:var(--muted);font-size:var(--fs-xs);margin-left:6px;">Start the bot in the sidebar to begin monitoring.</span></div>`;
+      $('monitor-signals').style.display='none';$('monitor-signals').innerHTML='';
+      $('monitor-content').innerHTML='<p class="ph" style="text-align:center;margin-top:40px;color:var(--muted);">Bot is not running. Configure your tickers and click <b>Start Bot</b> in the sidebar.</p>';
+      return;
+    }
     // batch-fetch news for all tickers (cached client-side)
     const tickers=Object.keys(m.tickers||{});
-    const newsPromises=tickers.filter(sym=>!window._newsCache||!window._newsCache[sym]||Date.now()-window._newsCache[sym].ts>120000).map(async sym=>{
-      try{const r=await fetch('/api/news/'+sym);const d=await r.json();if(!window._newsCache)window._newsCache={};window._newsCache[sym]={articles:d.articles||[],ts:Date.now()};}catch(e){}
-    });
-    if(newsPromises.length)await Promise.allSettled(newsPromises);
+    if(tickers.length){
+      const newsPromises=tickers.filter(sym=>!window._newsCache||!window._newsCache[sym]||Date.now()-window._newsCache[sym].ts>120000).map(async sym=>{
+        try{const r=await fetch('/api/news/'+sym);const d=await r.json();if(!window._newsCache)window._newsCache={};window._newsCache[sym]={articles:d.articles||[],ts:Date.now()};}catch(e){}
+      });
+      if(newsPromises.length)await Promise.allSettled(newsPromises);
+    }
     // ticker cards
     if(m.error){$('monitor-content').innerHTML=`<p class="ph" style="color:var(--danger)">${m.error}</p>`;return;}
     let html='';
@@ -5567,7 +5604,7 @@ function startBTGame(){
       <div class="bt-ticker-list">
         ${items}
       </div>
-      <div class="bt-ticker-status">Loading backtest results... ⚡</div>
+      <div class="bt-ticker-status">Loading backtest results...</div>
     </div>
   `;
   _btTickerTimer=setInterval(()=>{
@@ -5692,6 +5729,18 @@ async function loadCorr(){
   const d=await(await fetch('/api/correlation')).json();
   $('corr-content').innerHTML=d.html||'<p class="ph">No data</p>';
 }
+
+/* ── Help Search ── */
+function filterHelp(){
+  const q=$('help-search').value.toLowerCase().trim();
+  document.querySelectorAll('#tab-help details').forEach(d=>{
+    if(!q){d.style.display='';d.removeAttribute('open');return;}
+    const txt=d.textContent.toLowerCase();
+    if(txt.includes(q)){d.style.display='';d.setAttribute('open','');}
+    else d.style.display='none';
+  });
+}
+document.addEventListener('keydown',e=>{if((e.metaKey||e.ctrlKey)&&e.key==='f'&&$('tab-help').classList.contains('active')){e.preventDefault();$('help-search').focus();$('help-search').select();}});
 
 /* ── Leaderboard ── */
 async function loadLeaderboard(){
@@ -5834,7 +5883,7 @@ if __name__ == "__main__":
     time.sleep(1.2)
 
     window = webview.create_window(
-        "TraderMoney 4.0.7",
+        "TraderMoney 5.0.0",
         "http://127.0.0.1:5050",
         width=1440,
         height=880,
