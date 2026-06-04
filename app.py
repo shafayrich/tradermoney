@@ -566,14 +566,18 @@ class AlpacaBroker(BaseBroker):
             if sl_price is None and sl_pct is None:
                 self.api.submit_order(symbol=symbol, qty=qty, side=side, type="market", time_in_force="day")
             else:
-                trade = self.api.get_latest_trade(symbol)
-                price = float(trade.price)
-                if side == "buy":
-                    stop = round(sl_price if sl_price else price * (1 - sl_pct / 100), 2)
-                    limit = round(tp_price if tp_price else price * (1 + tp_pct / 100), 2)
+                if sl_price is not None and tp_price is not None:
+                    stop = round(sl_price, 2)
+                    limit = round(tp_price, 2)
                 else:
-                    stop = round(sl_price if sl_price else price * (1 + sl_pct / 100), 2)
-                    limit = round(tp_price if tp_price else price * (1 - tp_pct / 100), 2)
+                    last = self.api.get_latest_bar(symbol)
+                    price = float(last.Close)
+                    if side == "buy":
+                        stop = round(price * (1 - sl_pct / 100), 2)
+                        limit = round(price * (1 + tp_pct / 100), 2)
+                    else:
+                        stop = round(price * (1 + sl_pct / 100), 2)
+                        limit = round(price * (1 - tp_pct / 100), 2)
                 self.api.submit_order(
                     symbol=symbol, qty=qty, side=side, type="market", time_in_force="gtc",
                     order_class="bracket",
