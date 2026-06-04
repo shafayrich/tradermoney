@@ -48,14 +48,14 @@ import webview
 from flask import Flask, Response, jsonify, request, send_file
 from flask_cors import CORS
 
-APP_VERSION = "3.0.1"
+APP_VERSION = "4.0.0"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # AI CONFIGURATION
 # ═══════════════════════════════════════════════════════════════════════════════
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY") or "INJECT_OPENROUTER_API_KEY"
 AI_MODELS = [
-    "deepseek/deepseek-v4-flash:free",
+    "deepseek/deepseek-v4-flash",
     "google/gemini-2.5-flash",
     "deepseek/deepseek-chat-v3-0324",
 ]
@@ -67,6 +67,8 @@ _CHAT_SYSTEM_PROMPT = (
     "TraderMoney supports 6 brokers (Alpaca, IBKR, Tradier, Binance, Bybit, OKX) with paper and live trading. "
     "It uses a 9-indicator confirmation engine. Pro users can auto-trade with risk management. "
     "Free tier is signal-only, Alpaca paper, 1 ticker, core indicators. "
+    "Ticker format: comma-separated symbols, optional quantity after colon (e.g. AAPL:10, TSLA:5, BTC/USD:0.01). "
+    "Supported formats: stock symbols, crypto pairs (BTC/USD, ETH/USD). "
     "Keep answers concise (under 220 words), practical, specific to TraderMoney. Plain text only."
 )
 
@@ -439,6 +441,8 @@ class AppState:
         self.internet_status: bool = True
         self.dashboard: dict = {"equity": 0, "pl": 0, "buying_power": 0, "open_positions": 0}
         self.last_bt_data: dict = {}
+        self.signal_history: List[dict] = []
+        self.monitor_cache: dict = {}
 
 state = AppState()
 
@@ -1846,6 +1850,12 @@ class TradingEngine(threading.Thread):
 
                                 self.ui_queue.put(("signal", (s, sig, price, rationale)))
                                 db.insert_signal(_ts(), s, sig, price, rationale)
+                                try:
+                                    state.signal_history.append({"time": _ts(), "symbol": s, "signal": sig, "price": price, "rationale": rationale, "confidence": conf})
+                                    if len(state.signal_history) > 500:
+                                        state.signal_history = state.signal_history[-500:]
+                                except Exception:
+                                    pass
 
                                 if (mode == "auto"
                                         and self.is_licensed
@@ -2266,6 +2276,9 @@ def api_status():
         "pl": state.dashboard["pl"],
         "buying_power": state.dashboard["buying_power"],
         "open_positions": state.dashboard["open_positions"],
+        "broker": state.config.get("broker", "Alpaca"),
+        "mode": state.config.get("mode", "signal"),
+        "tickers": state.config.get("tickers", ""),
         "signals": signals,
         "orders": orders,
         "log": db.get_recent_logs(100),
@@ -2487,6 +2500,7 @@ def api_backtest():
                                 "shares": abs(position), "pnl": round(pnl, 2), "type": "exit",
                                 "reason_open": entry_reason, "reason_close": "BUY signal closed short",
                                 "indicators_at_entry": entry_indicators,
+                                "days_held": _calc_days_held(entry_time, s["time"]),
                             })
                         entry_shares = qty
                         cash -= qty * price
@@ -2515,6 +2529,7 @@ def api_backtest():
                                 "shares": round(position, 4), "pnl": round(pnl, 2), "type": "exit",
                                 "reason_open": entry_reason, "reason_close": s.get("reason", "EMA crossover bearish"),
                                 "indicators_at_entry": entry_indicators,
+                                "days_held": _calc_days_held(entry_time, s["time"]),
                             })
                         entry_shares = qty
                         cash += qty * price
@@ -2551,6 +2566,7 @@ def api_backtest():
                         "reason_open": entry_reason,
                         "reason_close": "Mark-to-market (end of data)",
                         "indicators_at_entry": entry_indicators,
+                        "days_held": _calc_days_held(entry_time, sigs[-1]["time"]),
                     })
 
                 final_cash = equity
@@ -2735,6 +2751,14 @@ def monte_carlo():
     except Exception as e:
         return jsonify({"error": str(e)})
 
+def _calc_days_held(entry_time_str, exit_time_str):
+    try:
+        et = datetime.strptime(str(entry_time_str)[:10], "%Y-%m-%d")
+        xt = datetime.strptime(str(exit_time_str)[:10], "%Y-%m-%d")
+        return (xt - et).days
+    except Exception:
+        return 0
+
 @app.route("/api/export/backtest/csv", methods=["POST"])
 def export_backtest_csv():
     trades = (request.json or {}).get("trades", [])
@@ -2742,15 +2766,94 @@ def export_backtest_csv():
         return jsonify({"error": "No trades"}), 400
     si = io.StringIO()
     w = csv.writer(si)
-    w.writerow(["Entry Time", "Exit Time", "Side", "Entry Price", "Exit Price", "P&L"])
+    w.writerow(["Entry Time", "Exit Time", "Side", "Entry Price", "Exit Price", "P&L", "Days Held"])
     for t in trades:
         if t.get("type") == "exit":
             w.writerow([t["entry_time"], t["exit_time"], t["side"],
-                        t["entry_price"], t["exit_price"], t["pnl"]])
+                        t["entry_price"], t["exit_price"], t["pnl"],
+                        t.get("days_held", "")])
     output = si.getvalue()
     si.close()
     return Response(output, mimetype="text/csv",
                     headers={"Content-Disposition": "attachment;filename=backtest.csv"})
+
+def _pdf_header_footer(pdf, label):
+    pdf.set_text_color(80, 80, 80)
+    pdf.set_font("Helvetica", "B", 16)
+    pdf.cell(0, 7, "TraderMoney Backtest Report", ln=True)
+    pdf.set_font("Helvetica", "", 7)
+    pdf.set_text_color(140, 140, 140)
+    pdf.cell(0, 4, f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} UTC", ln=True)
+    if label:
+        pdf.set_font("Helvetica", "I", 8)
+        pdf.set_text_color(100, 100, 100)
+        pdf.cell(0, 4, label, ln=True)
+    pdf.ln(2)
+    pdf.set_draw_color(200, 200, 200)
+    pdf.set_line_width(0.2)
+    pdf.line(10, pdf.get_y(), 200, pdf.get_y())
+    pdf.ln(3)
+
+def _pdf_summary_table(pdf, exits):
+    total_pnl = sum(t["pnl"] for t in exits)
+    wins = sum(1 for t in exits if t["pnl"] > 0)
+    win_rate = (wins / len(exits) * 100) if exits else 0
+    avg_pnl = total_pnl / len(exits) if exits else 0
+    avg_days = 0
+    days_count = 0
+    for t in exits:
+        if t.get("days_held"):
+            avg_days += t["days_held"]
+            days_count += 1
+    avg_days = (avg_days / days_count) if days_count else 0
+    pdf.set_font("Helvetica", "", 7.5)
+    pdf.set_text_color(60, 60, 60)
+    summary_data = [
+        ("Trades", str(len(exits))),
+        ("Wins", str(wins)),
+        ("Losses", str(len(exits) - wins)),
+        ("Win Rate", f"{win_rate:.1f}%"),
+        ("Total P&L", f"${total_pnl:.2f}"),
+        ("Avg Trade", f"${avg_pnl:.2f}"),
+    ]
+    if avg_days:
+        summary_data.append(("Avg Days Held", f"{avg_days:.1f}"))
+    rows = [summary_data[i:i+3] for i in range(0, len(summary_data), 3)]
+    for row in rows:
+        for label, value in row:
+            pdf.cell(63, 5, f"{label}:  {value}", 0, 0, "L")
+        pdf.ln(4)
+    pdf.ln(2)
+    pdf.set_draw_color(200, 200, 200)
+    pdf.line(10, pdf.get_y(), 200, pdf.get_y())
+    pdf.ln(3)
+
+def _pdf_trade_table(pdf, exits):
+    pdf.set_font("Helvetica", "B", 7)
+    pdf.set_text_color(60, 60, 60)
+    col_widths = [24, 24, 14, 10, 10, 16, 16, 14, 14]
+    headers = ["Entry", "Exit", "Sym", "Side", "Shrs", "Entry $", "Exit $", "P&L", "Days"]
+    aligns = ["L", "L", "C", "C", "R", "R", "R", "R", "R"]
+    for w, h, a in zip(col_widths, headers, aligns):
+        pdf.cell(w, 5, h, 1, 0, a)
+    pdf.ln()
+    pdf.set_font("Helvetica", "", 6.5)
+    pdf.set_text_color(80, 80, 80)
+    for t in exits:
+        pnl = t.get("pnl", 0)
+        days_held = t.get("days_held", "")
+        pdf.cell(24, 4.5, str(t.get("entry_time", ""))[:10], 1, 0, "L")
+        pdf.cell(24, 4.5, str(t.get("exit_time", ""))[:10], 1, 0, "L")
+        pdf.cell(14, 4.5, str(t.get("symbol", "")), 1, 0, "C")
+        pdf.cell(10, 4.5, t.get("side", ""), 1, 0, "C")
+        pdf.cell(10, 4.5, str(t.get("shares", "")), 1, 0, "R")
+        pdf.cell(16, 4.5, f"${t.get('entry_price', 0):.2f}", 1, 0, "R")
+        pdf.cell(16, 4.5, f"${t.get('exit_price', 0):.2f}", 1, 0, "R")
+        pdf.set_text_color(*(180, 180, 180) if pnl >= 0 else (200, 80, 80))
+        pdf.cell(14, 4.5, f"${pnl:.2f}", 1, 0, "R")
+        pdf.set_text_color(80, 80, 80)
+        pdf.cell(14, 4.5, str(days_held), 1, 0, "R")
+        pdf.ln()
 
 @app.route("/api/export/backtest/pdf", methods=["POST"])
 def export_backtest_pdf():
@@ -2761,103 +2864,11 @@ def export_backtest_pdf():
     trades = (request.json or {}).get("trades", [])
     pdf = FPDF("P", "mm", "A4")
     pdf.add_page()
-    # Primary accent colors
-    ACCENT = (0, 201, 167)
-    ACCENT_DIM = (0, 161, 134)
-    DARK_BG = (11, 14, 20)
-    SURFACE = (17, 24, 39)
-    MUTED = (100, 116, 139)
-    LIGHT_TEXT = (226, 232, 240)
-    RED = (239, 68, 68)
-    GREEN = (0, 201, 167)
-    # Top accent bar
-    pdf.set_fill_color(*ACCENT)
-    pdf.rect(0, 0, 210, 2.5, "F")
-    pdf.set_y(8)
-    pdf.set_text_color(*ACCENT)
-    pdf.set_font("Helvetica", "B", 20)
-    pdf.cell(0, 8, "TraderMoney Backtest Report", ln=True, align="L")
-    pdf.set_draw_color(*ACCENT_DIM)
-    pdf.set_line_width(0.3)
-    pdf.line(10, pdf.get_y() + 1, 200, pdf.get_y() + 1)
-    pdf.ln(3)
-    pdf.set_text_color(*MUTED)
-    pdf.set_font("Helvetica", "", 8)
-    pdf.cell(0, 5, f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} UTC", ln=True, align="R")
-    pdf.ln(5)
+    _pdf_header_footer(pdf, "")
     exits = [t for t in trades if t.get("type") == "exit"]
     if exits:
-        total_pnl = sum(t["pnl"] for t in exits)
-        wins = sum(1 for t in exits if t["pnl"] > 0)
-        win_rate = (wins / len(exits) * 100) if exits else 0
-        avg_pnl = total_pnl / len(exits) if exits else 0
-        max_win = max((t["pnl"] for t in exits), default=0)
-        max_loss = min((t["pnl"] for t in exits), default=0)
-        pdf.set_font("Helvetica", "B", 9)
-        summary_items = [
-            ("Trades", str(len(exits))),
-            ("Win Rate", f"{win_rate:.1f}%"),
-            ("Total P&L", f"${total_pnl:.2f}"),
-            ("Avg Trade", f"${avg_pnl:.2f}"),
-            ("Best", f"${max_win:.2f}"),
-            ("Worst", f"${max_loss:.2f}"),
-        ]
-        card_w = 30
-        gap = 3
-        total_w = len(summary_items) * card_w + (len(summary_items) - 1) * gap
-        start_x = (210 - total_w) / 2
-        for i, (label, value) in enumerate(summary_items):
-            x = start_x + i * (card_w + gap)
-            y = pdf.get_y()
-            pdf.set_fill_color(*SURFACE)
-            pdf.rect(x, y, card_w, 14, "F")
-            pdf.set_draw_color(*ACCENT_DIM)
-            pdf.set_line_width(0.12)
-            pdf.rect(x, y, card_w, 14, "D")
-            pdf.set_text_color(*MUTED)
-            pdf.set_font("Helvetica", "", 6)
-            pdf.set_xy(x, y + 1)
-            pdf.cell(card_w, 5, label, align="C")
-            if label == "Total P&L":
-                c = GREEN if total_pnl >= 0 else RED
-            elif label == "Best":
-                c = GREEN
-            elif label == "Worst":
-                c = RED
-            else:
-                c = LIGHT_TEXT
-            pdf.set_text_color(*c)
-            pdf.set_font("Helvetica", "B", 9)
-            pdf.set_xy(x, y + 6.5)
-            pdf.cell(card_w, 6, value, align="C")
-        pdf.set_y(pdf.get_y() + 20)
-        # Table header
-        pdf.set_text_color(*DARK_BG)
-        pdf.set_font("Helvetica", "B", 7.5)
-        pdf.set_fill_color(*ACCENT)
-        col_widths = [28, 28, 14, 10, 10, 18, 18, 16]
-        headers = ["Entry", "Exit", "Sym", "Side", "Shrs", "Entry $", "Exit $", "P&L"]
-        aligns = ["L", "L", "C", "C", "R", "R", "R", "R"]
-        for w, h, a in zip(col_widths, headers, aligns):
-            pdf.cell(w, 6.5, h, 1, 0, a, fill=True)
-        pdf.ln()
-        pdf.set_text_color(*LIGHT_TEXT)
-        pdf.set_font("Helvetica", "", 6.5)
-        for t in exits:
-            pnl = t.get("pnl", 0)
-            fill = SURFACE if pnl >= 0 else (24, 14, 14)
-            pdf.set_fill_color(*fill)
-            pdf.cell(28, 5, str(t.get("entry_time", ""))[:10], 1, 0, "L", fill=True)
-            pdf.cell(28, 5, str(t.get("exit_time", ""))[:10], 1, 0, "L", fill=True)
-            pdf.cell(14, 5, str(t.get("symbol", "")), 1, 0, "C", fill=True)
-            pdf.cell(10, 5, t.get("side", ""), 1, 0, "C", fill=True)
-            pdf.cell(10, 5, str(t.get("shares", "")), 1, 0, "R", fill=True)
-            pdf.cell(18, 5, f"${t.get('entry_price', 0):.2f}", 1, 0, "R", fill=True)
-            pdf.cell(18, 5, f"${t.get('exit_price', 0):.2f}", 1, 0, "R", fill=True)
-            pdf.set_text_color(*(GREEN if pnl >= 0 else RED))
-            pdf.cell(16, 5, f"${pnl:.2f}", 1, 0, "R", fill=True)
-            pdf.set_text_color(*LIGHT_TEXT)
-            pdf.ln()
+        _pdf_summary_table(pdf, exits)
+        _pdf_trade_table(pdf, exits)
     raw = pdf.output()
     pdf_bytes = bytes(raw) if isinstance(raw, (bytes, bytearray)) else raw.encode("latin-1")
     return Response(pdf_bytes, mimetype="application/pdf",
@@ -2870,13 +2881,13 @@ def export_backtest_csv_file():
         return jsonify({"error": "No trades"}), 400
     si = io.StringIO()
     w = csv.writer(si)
-    w.writerow(["Entry Time", "Exit Time", "Symbol", "Side", "Shares", "Entry Price", "Exit Price", "P&L", "Reason Open", "Reason Close"])
+    w.writerow(["Entry Time", "Exit Time", "Symbol", "Side", "Shares", "Entry Price", "Exit Price", "P&L", "Days Held", "Reason Open", "Reason Close"])
     for t in trades:
         if t.get("type") == "exit":
             w.writerow([t.get("entry_time",""), t.get("exit_time",""), t.get("symbol",""),
                         t.get("side",""), t.get("shares",""), t.get("entry_price",""),
                         t.get("exit_price",""), t.get("pnl",""),
-                        t.get("reason_open",""), t.get("reason_close","")])
+                        t.get("days_held",""), t.get("reason_open",""), t.get("reason_close","")])
     output = si.getvalue()
     si.close()
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -2896,104 +2907,11 @@ def export_backtest_pdf_file():
     trades = (request.json or {}).get("trades", [])
     pdf = FPDF("P", "mm", "A4")
     pdf.add_page()
-    # Primary accent colors
-    ACCENT = (0, 201, 167)
-    ACCENT_DIM = (0, 161, 134)
-    DARK_BG = (11, 14, 20)
-    SURFACE = (17, 24, 39)
-    MUTED = (100, 116, 139)
-    LIGHT_TEXT = (226, 232, 240)
-    RED = (239, 68, 68)
-    GREEN = (0, 201, 167)
-    # Top accent bar
-    pdf.set_fill_color(*ACCENT)
-    pdf.rect(0, 0, 210, 2.5, "F")
-    pdf.set_y(8)
-    pdf.set_text_color(*ACCENT)
-    pdf.set_font("Helvetica", "B", 20)
-    pdf.cell(0, 8, "TraderMoney Backtest Report", ln=True, align="L")
-    pdf.set_draw_color(*ACCENT_DIM)
-    pdf.set_line_width(0.3)
-    pdf.line(10, pdf.get_y() + 1, 200, pdf.get_y() + 1)
-    pdf.ln(3)
-    pdf.set_text_color(*MUTED)
-    pdf.set_font("Helvetica", "", 8)
-    pdf.cell(0, 5, f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} UTC", ln=True, align="R")
-    pdf.ln(5)
+    _pdf_header_footer(pdf, "")
     exits = [t for t in trades if t.get("type") == "exit"]
     if exits:
-        total_pnl = sum(t["pnl"] for t in exits)
-        wins = sum(1 for t in exits if t["pnl"] > 0)
-        win_rate = (wins / len(exits) * 100) if exits else 0
-        avg_pnl = total_pnl / len(exits) if exits else 0
-        loss_rate = 100 - win_rate
-        max_win = max((t["pnl"] for t in exits), default=0)
-        max_loss = min((t["pnl"] for t in exits), default=0)
-        pdf.set_font("Helvetica", "B", 9)
-        summary_items = [
-            ("Trades", str(len(exits))),
-            ("Win Rate", f"{win_rate:.1f}%"),
-            ("Total P&L", f"${total_pnl:.2f}"),
-            ("Avg Trade", f"${avg_pnl:.2f}"),
-            ("Best", f"${max_win:.2f}"),
-            ("Worst", f"${max_loss:.2f}"),
-        ]
-        card_w = 30
-        gap = 3
-        total_w = len(summary_items) * card_w + (len(summary_items) - 1) * gap
-        start_x = (210 - total_w) / 2
-        for i, (label, value) in enumerate(summary_items):
-            x = start_x + i * (card_w + gap)
-            y = pdf.get_y()
-            pdf.set_fill_color(*SURFACE)
-            pdf.rect(x, y, card_w, 14, "F")
-            pdf.set_draw_color(*ACCENT_DIM)
-            pdf.set_line_width(0.12)
-            pdf.rect(x, y, card_w, 14, "D")
-            pdf.set_text_color(*MUTED)
-            pdf.set_font("Helvetica", "", 6)
-            pdf.set_xy(x, y + 1)
-            pdf.cell(card_w, 5, label, align="C")
-            if label == "Total P&L":
-                c = GREEN if total_pnl >= 0 else RED
-            elif label == "Best":
-                c = GREEN
-            elif label == "Worst":
-                c = RED
-            else:
-                c = LIGHT_TEXT
-            pdf.set_text_color(*c)
-            pdf.set_font("Helvetica", "B", 9)
-            pdf.set_xy(x, y + 6.5)
-            pdf.cell(card_w, 6, value, align="C")
-        pdf.set_y(pdf.get_y() + 20)
-        # Table header
-        pdf.set_text_color(*DARK_BG)
-        pdf.set_font("Helvetica", "B", 7.5)
-        pdf.set_fill_color(*ACCENT)
-        col_widths = [28, 28, 14, 10, 10, 18, 18, 16]
-        headers = ["Entry", "Exit", "Sym", "Side", "Shrs", "Entry $", "Exit $", "P&L"]
-        aligns = ["L", "L", "C", "C", "R", "R", "R", "R"]
-        for w, h, a in zip(col_widths, headers, aligns):
-            pdf.cell(w, 6.5, h, 1, 0, a, fill=True)
-        pdf.ln()
-        pdf.set_text_color(*LIGHT_TEXT)
-        pdf.set_font("Helvetica", "", 6.5)
-        for t in exits:
-            pnl = t.get("pnl", 0)
-            fill = SURFACE if pnl >= 0 else (24, 14, 14)
-            pdf.set_fill_color(*fill)
-            pdf.cell(28, 5, str(t.get("entry_time", ""))[:10], 1, 0, "L", fill=True)
-            pdf.cell(28, 5, str(t.get("exit_time", ""))[:10], 1, 0, "L", fill=True)
-            pdf.cell(14, 5, str(t.get("symbol", "")), 1, 0, "C", fill=True)
-            pdf.cell(10, 5, t.get("side", ""), 1, 0, "C", fill=True)
-            pdf.cell(10, 5, str(t.get("shares", "")), 1, 0, "R", fill=True)
-            pdf.cell(18, 5, f"${t.get('entry_price', 0):.2f}", 1, 0, "R", fill=True)
-            pdf.cell(18, 5, f"${t.get('exit_price', 0):.2f}", 1, 0, "R", fill=True)
-            pdf.set_text_color(*(GREEN if pnl >= 0 else RED))
-            pdf.cell(16, 5, f"${pnl:.2f}", 1, 0, "R", fill=True)
-            pdf.set_text_color(*LIGHT_TEXT)
-            pdf.ln()
+        _pdf_summary_table(pdf, exits)
+        _pdf_trade_table(pdf, exits)
     raw = pdf.output()
     pdf_bytes = bytes(raw) if isinstance(raw, (bytes, bytearray)) else raw.encode("latin-1")
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -3003,6 +2921,114 @@ def export_backtest_pdf_file():
     with open(fpath, "wb") as f:
         f.write(pdf_bytes)
     return jsonify({"path": fpath})
+
+_MONITOR_CACHE: dict = {}
+_MONITOR_CACHE_TIME: dict = {}
+
+@app.route("/api/monitor", methods=["GET"])
+def api_monitor():
+    tickers_str = state.config.get("tickers", "AAPL")
+    raw_list = [s.strip() for s in tickers_str.split(",") if s.strip()]
+    symbols = list(dict.fromkeys(clean_symbol(e) for e in raw_list))
+    per_ticker_data = {}
+    now = time.time()
+    try:
+        import yfinance as yf
+        for sym in symbols:
+            try:
+                cache_key = f"monitor_{sym}"
+                cached = _MONITOR_CACHE.get(cache_key)
+                cached_time = _MONITOR_CACHE_TIME.get(cache_key, 0)
+                if cached and (now - cached_time) < 60:
+                    per_ticker_data[sym] = cached
+                    continue
+                df = yf.download(sym, period="2d", interval="1d", progress=False, auto_adjust=True, timeout=10)
+                if df is None or df.empty:
+                    df = yf.download(sym, period="5d", interval="1d", progress=False, auto_adjust=True, timeout=10)
+                if df is None or df.empty:
+                    per_ticker_data[sym] = {"error": "No data", "price": 0, "change": 0, "change_pct": 0, "position": "flat", "quantity": 0, "signal": None, "confidence": 0, "rationale": "", "signal_history": [], "trend_dir": "flat", "indicators": {"rsi": 0, "rsi_label": "—", "macd": 0, "macd_signal": 0, "macd_label": "—", "adx": 0, "adx_label": "—", "bb_upper": 0, "bb_lower": 0, "bb_pos_pct": 50, "bb_label": "—", "vwap": 0, "atr": 0, "ema_fast": 0, "ema_slow": 0}}
+                    continue
+                if isinstance(df.columns, pd.MultiIndex):
+                    df.columns = df.columns.get_level_values(0)
+                latest = df.iloc[-1]
+                price = round(float(latest["Close"]), 2)
+                prev_close = round(float(df.iloc[-2]["Close"]), 2) if len(df) > 1 else price
+                change = round(price - prev_close, 2)
+                change_pct = round((change / prev_close) * 100, 2) if prev_close else 0
+                ef, es = state.config.get("emas", [9, 50])
+                ind_params = state.config.get("indicator_params", {})
+                df = IndicatorCalculator.compute_all(df, ef, es, indicator_params=ind_params)
+                last_row = df.iloc[-1]
+                pf = SignalAnalyzer._sf(last_row["EMA_fast"])
+                ps = SignalAnalyzer._sf(last_row["EMA_slow"])
+                sig, rationale, conf = SignalAnalyzer.generate_signal(
+                    df, pf, ps, state.config, indicator_params=ind_params)
+                pos = 0
+                if state.engine and state.engine.running:
+                    pos = state.engine.positions.get(sym, 0)
+                pos_label = "flat"
+                pos_qty = 0
+                if pos > 0:
+                    pos_label = "long"
+                    pos_qty = pos
+                elif pos < 0:
+                    pos_label = "short"
+                    pos_qty = abs(pos)
+                sig_history = [s for s in state.signal_history if s["symbol"] == sym][-20:]
+                ef_val = float(SignalAnalyzer._sf(last_row.get("EMA_fast", 0)))
+                es_val = float(SignalAnalyzer._sf(last_row.get("EMA_slow", 0)))
+                rsi_val = round(float(SignalAnalyzer._sf(last_row.get("RSI", 50))), 1)
+                macd_val = round(float(SignalAnalyzer._sf(last_row.get("MACD", 0))), 2)
+                macd_sig_val = round(float(SignalAnalyzer._sf(last_row.get("MACD_signal", 0))), 2)
+                adx_val = round(float(SignalAnalyzer._sf(last_row.get("ADX", 0))), 1)
+                bbu = round(float(SignalAnalyzer._sf(last_row.get("BB_upper", 0))), 2)
+                bbl = round(float(SignalAnalyzer._sf(last_row.get("BB_lower", 0))), 2)
+                vwap_val = round(float(SignalAnalyzer._sf(last_row.get("VWAP", 0))), 2)
+                atr_val = round(float(SignalAnalyzer._sf(last_row.get("ATR", 0))), 2)
+                trend_dir = "up" if ef_val > es_val else ("down" if ef_val < es_val else "flat")
+                rsi_label = "Oversold" if rsi_val <= 30 else ("Overbought" if rsi_val >= 70 else "Neutral")
+                macd_label = "Bullish" if macd_val > macd_sig_val else "Bearish"
+                adx_label = "Strong Trend" if adx_val >= 25 else ("Weak Trend" if adx_val < 20 else "Moderate")
+                if bbu > bbl:
+                    bb_pos_pct = round((price - bbl) / (bbu - bbl) * 100, 0)
+                    bb_label = f"Near Upper Band" if bb_pos_pct >= 80 else (f"Near Lower Band" if bb_pos_pct <= 20 else "Middle Range")
+                else:
+                    bb_pos_pct = 50
+                    bb_label = "—"
+                indicators = {
+                    "rsi": rsi_val, "rsi_label": rsi_label,
+                    "macd": macd_val, "macd_signal": macd_sig_val, "macd_label": macd_label,
+                    "adx": adx_val, "adx_label": adx_label,
+                    "bb_upper": bbu, "bb_lower": bbl, "bb_pos_pct": int(bb_pos_pct), "bb_label": bb_label,
+                    "vwap": vwap_val, "atr": atr_val, "ema_fast": ef_val, "ema_slow": es_val,
+                }
+                ticker_data = {
+                    "price": price,
+                    "change": change,
+                    "change_pct": change_pct,
+                    "position": pos_label,
+                    "quantity": pos_qty,
+                    "signal": sig,
+                    "confidence": round(float(conf), 2) if conf else 0,
+                    "rationale": rationale or "",
+                    "signal_history": sig_history,
+                    "indicators": indicators,
+                    "trend_dir": trend_dir,
+                }
+                _MONITOR_CACHE[cache_key] = ticker_data
+                _MONITOR_CACHE_TIME[cache_key] = now
+                per_ticker_data[sym] = ticker_data
+            except Exception as e:
+                err_msg = str(e)
+                if "socket" in err_msg.lower() or "timeout" in err_msg.lower() or "connection" in err_msg.lower():
+                    cached = _MONITOR_CACHE.get(f"monitor_{sym}")
+                    if cached:
+                        per_ticker_data[sym] = cached
+                        continue
+                per_ticker_data[sym] = {"error": err_msg, "price": 0, "change": 0, "change_pct": 0, "position": "flat", "quantity": 0, "signal": None, "confidence": 0, "rationale": "", "signal_history": [], "trend_dir": "flat", "indicators": {"rsi": 0, "rsi_label": "—", "macd": 0, "macd_signal": 0, "macd_label": "—", "adx": 0, "adx_label": "—", "bb_upper": 0, "bb_lower": 0, "bb_pos_pct": 50, "bb_label": "—", "vwap": 0, "atr": 0, "ema_fast": 0, "ema_slow": 0}}
+    except Exception as e:
+        return jsonify({"tickers": per_ticker_data, "running": state.engine.running if state.engine else False, "error": str(e)})
+    return jsonify({"tickers": per_ticker_data, "running": state.engine.running if state.engine else False})
 
 @app.route("/api/correlation", methods=["GET"])
 def correlation_matrix():
@@ -3175,7 +3201,7 @@ FRONTEND_HTML = r"""
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>TraderMoney 3.0.1</title>
+<title>TraderMoney 4.0.0</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root {
@@ -3271,6 +3297,23 @@ body.light #sb { background: var(--surface); border-right: 1px solid var(--borde
 }
 .sidebar-actions button:hover { background: var(--glass); color: var(--text); }
 
+/* ── Bot Started Modal ── */
+#bot-started-overlay {
+  position: fixed; inset: 0; z-index: 9997;
+  background: rgba(0,0,0,0.5); backdrop-filter: blur(4px);
+  display: none;
+}
+#bot-started-overlay.show { display: block; }
+#bot-started-modal {
+  position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%);
+  z-index: 9998; background: var(--surface); color: var(--text);
+  border: 1px solid var(--border); border-radius: var(--radius-lg);
+  padding: 0; width: 320px; max-width: 90vw;
+  box-shadow: var(--shadow-lg); display: none;
+}
+body.light #bot-started-modal { background: var(--surface); border: 1px solid var(--border2); }
+#bot-started-modal.show { display: block; }
+
 /* ── Settings Modal ── */
 #settings-modal-overlay {
   position: fixed; inset: 0; z-index: 9998;
@@ -3362,6 +3405,28 @@ body.light .cb .cm { background: var(--glass); }
   border: solid #000; border-width: 0 2px 2px 0;
   transform: rotate(45deg) translateY(-1px);
 }
+
+/* ── Ticker info icon / tooltip ── */
+.ticker-info-icon {
+  display: inline-block; cursor: pointer; color: var(--accent);
+  font-size: 14px; margin-left: 4px; vertical-align: middle; position: relative;
+  opacity: 0.7; transition: opacity 0.15s;
+}
+.ticker-info-icon:hover { opacity: 1; }
+.ticker-info-popover {
+  display: none; position: absolute; z-index: 9999;
+  background: var(--surface); color: var(--text);
+  border: 1px solid var(--border3); border-radius: var(--radius);
+  padding: 12px 14px; font-size: 0.7rem; line-height: 1.6;
+  box-shadow: var(--shadow-lg); min-width: 260px;
+  top: 22px; left: 0;
+}
+body.light .ticker-info-popover { background: #fff; }
+.ticker-info-popover code {
+  background: var(--glass); padding: 1px 5px; border-radius: 3px;
+  font-size: 0.68rem; color: var(--accent);
+}
+.ticker-info-popover b { color: var(--accent); }
 
 /* ── Inputs ── */
 select, input[type="text"], input[type="password"], input[type="number"], textarea {
@@ -3647,6 +3712,51 @@ body.light .istat { background: var(--surface); border: 1px solid var(--border2)
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 .bt-loader-text { color: var(--muted); font-size: 0.72rem; }
+
+/* ── Monitor Tab ── */
+.monitor-card {
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: var(--sp-md);
+  transition: border-color 0.15s;
+}
+body.light .monitor-card { background: var(--surface); border: 1px solid var(--border2); }
+.monitor-card:hover { border-color: var(--accent-glow); }
+.monitor-card-header {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: var(--sp-sm); padding-bottom: var(--sp-xs);
+  border-bottom: 1px solid var(--border);
+}
+.monitor-card-sym {
+  font-weight: 700; font-size: var(--fs-lg); color: var(--text);
+  display: flex; align-items: center; gap: 6px;
+}
+.monitor-card-price {
+  font-weight: 700; font-size: var(--fs-lg);
+  font-family: 'SF Mono', Consolas, monospace;
+}
+.monitor-card-price.up { color: var(--accent); }
+.monitor-card-price.dn { color: var(--danger); }
+.monitor-card-pos {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: var(--fs-xs); font-weight: 600; padding: 2px 8px;
+  border-radius: 4px;
+}
+.monitor-card-pos.long { background: var(--accent-dim); color: var(--accent); }
+.monitor-card-pos.short { background: var(--danger-dim); color: var(--danger); }
+.monitor-card-pos.flat { background: var(--glass); color: var(--muted); }
+.monitor-card-body { font-size: var(--fs-sm); color: var(--text2); line-height: 1.6; }
+.monitor-card-body .row { display: flex; justify-content: space-between; padding: 2px 0; }
+.monitor-card-body .label { color: var(--muted); }
+.monitor-card-body .value { font-weight: 500; color: var(--text); }
+.monitor-sig-item {
+  font-size: var(--fs-xs); padding: 3px 0;
+  display: flex; justify-content: space-between;
+  border-bottom: 1px solid var(--border);
+}
+.monitor-sig-item:last-child { border-bottom: none; }
+.monitor-sig-item .sig { font-weight: 600; }
+.monitor-sig-item .sig.buy { color: var(--accent); }
+.monitor-sig-item .sig.sell { color: var(--danger); }
 
 /* ── Market Ticker ── */
 .bt-ticker-wrap {
@@ -4020,10 +4130,27 @@ button.ghost:hover { box-shadow: none; }
     <hr>
     <div class="settings-row"><span>Layout</span><select id="layout-select" onchange="applyLayout()" style="width:auto;min-width:100px;"><option value="default">Default</option><option value="compact">Compact</option></select></div>
     <hr>
+    <div class="settings-row"><span>Show Debug Console</span><label class="toggle"><input type="checkbox" id="debug-toggle" onchange="toggleDebugConsole()"><span class="slider"></span></label></div>
+    <hr>
     <div class="settings-row"><span>License Key</span></div>
     <div class="r2"><input type="password" id="lickey" placeholder="Paste Gumroad key"><button onclick="validateLicense()" style="height:32px;padding:0 10px;flex-shrink:0;"><svg class="icon"><use href="#i-key"/></svg></button></div>
     <p style="font-size:.6rem;color:var(--muted);margin:4px 0 0;"><a href="https://tradermoney.gumroad.com/l/ykaoov" style="color:var(--accent)">Buy license</a></p>
     <div id="free-notice" class="free-notice">Free tier: Alpaca paper only · Signal-Only · 1 ticker · Core indicators · AI: 5/day<br><b>License session-only – re-enter each restart.</b></div>
+  </div>
+</div>
+
+<!-- ════ BOT STARTED MODAL ══════════════════════════════════════ -->
+<div id="bot-started-overlay" onclick="dismissBotStarted()"></div>
+<div id="bot-started-modal">
+  <div class="modal-header">
+    <h3><svg class="icon" style="width:16px;height:16px;"><use href="#i-start"/></svg> Bot Started</h3>
+    <button class="modal-close" onclick="dismissBotStarted()"><svg class="icon" style="width:16px;height:16px;"><use href="#i-close"/></svg></button>
+  </div>
+  <div class="modal-body">
+    <div id="bs-tickers" style="margin-bottom:10px;"><span style="color:var(--muted);font-size:.7rem;">Tickers:</span> <span id="bs-ticker-list" style="font-weight:600;"></span></div>
+    <div id="bs-broker" style="margin-bottom:10px;"><span style="color:var(--muted);font-size:.7rem;">Broker:</span> <span id="bs-broker-name" style="font-weight:600;"></span></div>
+    <div id="bs-mode" style="margin-bottom:14px;"><span style="color:var(--muted);font-size:.7rem;">Mode:</span> <span id="bs-mode-name" style="font-weight:600;"></span></div>
+    <button onclick="dismissBotStarted();switchTab('monitor');" style="width:100%;"><svg class="icon"><use href="#i-chart"/></svg> View Dashboard</button>
   </div>
 </div>
 
@@ -4033,7 +4160,7 @@ button.ghost:hover { box-shadow: none; }
     <span class="sidebar-logo">TM</span>
     <div class="sidebar-title">
       <span class="sidebar-name">TraderMoney</span>
-      <span class="sidebar-version">v3.0.1</span>
+      <span class="sidebar-version">v4.0.0</span>
     </div>
     <div class="sidebar-actions">
       <button onclick="location.reload()" title="Refresh"><svg class="icon" style="width:13px;height:13px;" viewBox="0 0 24 24"><path d="M17.65 6.35A7.958 7.958 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg></button>
@@ -4063,7 +4190,15 @@ button.ghost:hover { box-shadow: none; }
   <details class="sb-section" open>
     <summary><svg class="icon"><use href="#i-chart"/></svg> Strategy</summary>
     <div class="sb-section-body">
-      <label>Tickers <span style="color:var(--muted);font-weight:400;">(e.g. AAPL:5)</span></label>
+      <label>Tickers <span style="color:var(--muted);font-weight:400;">(e.g. AAPL:5)</span>
+        <span class="ticker-info-icon" onclick="toggleTickerHelp(event)" title="Ticker format help">ⓘ</span>
+        <div class="ticker-info-popover" id="tickerInfoPopover">
+          <b>Ticker Format</b><br>
+          <code>AAPL</code> — 1 share (default quantity)<br>
+          <code>AAPL:10</code> — 10 shares<br>
+          <code>AAPL:10, TSLA:5, BTC/USD:0.01</code> — multiple tickers with custom qty<br><br>
+          <b>Supported:</b> stock symbols, crypto pairs (BTC/USD, ETH/USD)
+        </div></label>
       <input type="text" id="tickers" value="AAPL">
       <label>Timeframe</label>
       <select id="tf">
@@ -4186,6 +4321,7 @@ button.ghost:hover { box-shadow: none; }
     <button class="tbtn" data-tab="analysis"><svg class="icon"><use href="#i-analysis"/></svg>Analysis</button>
     <button class="tbtn" data-tab="help"><svg class="icon"><use href="#i-help"/></svg>Help</button>
     <button class="tbtn" data-tab="aichat"><svg class="icon"><use href="#i-chat"/></svg>AI Chat</button>
+    <button class="tbtn" data-tab="monitor" id="monitor-tab-btn" style="display:none;"><svg class="icon" style="width:12px;height:12px;"><use href="#i-chart"/></svg> Live</button>
   </div>
 
   <!-- Charts tab -->
@@ -4248,7 +4384,7 @@ button.ghost:hover { box-shadow: none; }
   <!-- Help tab -->
   <div id="tab-help" class="tab">
     <div class="hb">
-      <h3>TraderMoney v3.0.1 – Complete Help Guide</h3>
+      <h3>TraderMoney v4.0.0 – Complete Help Guide</h3>
       <p style="font-size:.82rem;color:var(--muted);margin-top:-4px;">Your desktop algorithmic trading terminal. All features documented below.</p>
 
       <details>
@@ -4609,6 +4745,17 @@ button.ghost:hover { box-shadow: none; }
     </div>
   </div>
 
+  <!-- Monitor tab -->
+  <div id="tab-monitor" class="tab">
+    <div style="padding:var(--sp-md);overflow:auto;flex:1;display:flex;flex-direction:column;gap:var(--sp-md);" id="monitor-scroll">
+      <div id="monitor-status" style="display:none;"></div>
+      <div id="monitor-signals" style="display:none;"></div>
+      <div id="monitor-content">
+        <p class="ph" style="text-align:center;">Start the bot to begin monitoring.</p>
+      </div>
+    </div>
+  </div>
+
   <div id="logbar"></div>
 </div>
 
@@ -4637,16 +4784,7 @@ function lockCb(id,locked){
 }
 
 /* ── Tab switching ── */
-const TABS=['charts','signals','history','backtest','analysis','help','aichat'];
-function switchTab(name){
-  document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
-  document.querySelectorAll('.tbtn').forEach(x=>x.classList.remove('active'));
-  const t=$('tab-'+name),b=document.querySelector(`[data-tab="${name}"]`);
-  if(t)t.classList.add('active');if(b)b.classList.add('active');
-  if(name==='aichat')initAIChat();
-  if(name==='charts')setTimeout(()=>{if(tvWidget&&tvWidget.resize)tvWidget.resize();},80);
-}
-document.querySelectorAll('.tbtn').forEach(b=>{b.addEventListener('click',function(){switchTab(this.dataset.tab);});});
+const TABS=['charts','signals','history','backtest','analysis','help','aichat','monitor'];
 
 /* ── Session clock ── */
 function updSess(){
@@ -4702,8 +4840,32 @@ function updateBrokerOptions(){
 }
 function onBrokerChange(){cfg.broker=$('broker').value;updateCreds();}
 function toggleDefQty(){$('defqty-box').style.display=gc('udefqty')?'block':'none';}
+function toggleTickerHelp(e){
+  const p=$('tickerInfoPopover');
+  p.style.display=p.style.display==='block'?'none':'block';
+  e.stopPropagation();
+  document.addEventListener('click',function h(ev){if(!p.contains(ev.target)){p.style.display='none';document.removeEventListener('click',h);}},{once:true});
+}
 
 /* ── Theme / Layout Controls ── */
+let _botStartedTimer=null;
+function showBotStarted(data){
+  const tickers=cfg.tickers||'AAPL';
+  const broker=cfg.broker||'Alpaca';
+  const mode=cfg.mode==='auto'?'Auto Trade':'Signal';
+  $('bs-ticker-list').textContent=tickers;
+  $('bs-broker-name').textContent=broker;
+  $('bs-mode-name').textContent=mode;
+  $('bot-started-overlay').classList.add('show');
+  $('bot-started-modal').classList.add('show');
+  if(_botStartedTimer)clearTimeout(_botStartedTimer);
+  _botStartedTimer=setTimeout(dismissBotStarted,5000);
+}
+function dismissBotStarted(){
+  $('bot-started-overlay').classList.remove('show');
+  $('bot-started-modal').classList.remove('show');
+  if(_botStartedTimer){clearTimeout(_botStartedTimer);_botStartedTimer=null;}
+}
 function toggleSettings(){const o=$('settings-modal-overlay'),m=$('settings-modal');if(o&&m){const c=o.classList.contains('open');o.classList.toggle('open');m.classList.toggle('open');document.body.style.overflow=c?'':'hidden';}}
 function toggleTheme(){
   const light=gc('theme-toggle');
@@ -4722,12 +4884,21 @@ function applyLayout(){
   if(layout==='compact'){$('sb').style.setProperty('--sw','270px');}
   else{$('sb').style.setProperty('--sw','310px');}
 }
+function toggleDebugConsole(){
+  const show=gc('debug-toggle');
+  const lb=$('logbar');
+  if(lb)lb.style.display=show?'block':'none';
+  const saved=JSON.parse(localStorage.getItem('tm_settings')||'{}');
+  saved.debug=show;localStorage.setItem('tm_settings',JSON.stringify(saved));
+}
 function loadSettings(){
   try{
     const saved=JSON.parse(localStorage.getItem('tm_settings')||'{}');
     if(saved.light){sc('theme-toggle',true);document.body.classList.add('light');$('theme-label').textContent='Light';}
     else{sc('theme-toggle',false);document.body.classList.remove('light');$('theme-label').textContent='Dark';}
     if(saved.layout){$('layout-select').value=saved.layout;applyLayout();}
+    if(saved.debug!==undefined){sc('debug-toggle',saved.debug);toggleDebugConsole();}
+    else{sc('debug-toggle',true);}
   }catch(e){}
 }
 
@@ -5004,7 +5175,7 @@ async function startBot(){
   btn.textContent='\u25B6 Start Bot';btn.disabled=false;
   toast(d.message,d.status==='ok'?'success':'error');
   if(d.status!=='ok'){$('bstatus').textContent=d.message;$('bstatus').className='err';}
-  else{botRunning=true;}
+  else{botRunning=true;showBotStarted(d);}
 }
 async function stopBot(){
   const btn=$('stopBtn');btn.textContent='Stopping...';btn.disabled=true;
@@ -5060,10 +5231,138 @@ async function pollStatus(){
     $('v-pl').innerHTML=`<span style="color:${pct>=0?'var(--accent)':'var(--danger)'}">${pct>=0?'+':''}${pct.toFixed(2)}%</span>`;
     $('v-pos').textContent=d.open_positions;
     renderSignals(d.signals);renderOrders(d.orders);
+    const mt=$('monitor-tab-btn');
+    if(d.running&&mt)mt.style.display='';
+    else if(mt)mt.style.display='none';
     $('logbar').innerHTML=(d.log||[]).join('<br>');
   }catch(e){}
 }
 setInterval(pollStatus,1500);
+
+/* ── Monitor ── */
+let _monitorTimer=null;
+function _ind(s){return s===0||s==='0'?'—':s;}
+function _trdArrow(dir){return dir==='up'?'↗':dir==='down'?'↘':'→';}
+function _sigColor(sig){return sig==='BUY'?'var(--accent)':sig==='SELL'?'var(--danger)':'var(--muted)';}
+async function refreshMonitor(){
+  try{
+    const [mr,sr]=await Promise.all([fetch('/api/monitor'),fetch('/api/status')]);
+    const m=await mr.json();const s=await sr.json();
+    const running=!!s.running;
+    // status header
+    const pct=s.equity?((s.pl/s.equity)*100).toFixed(2):'0.00';
+    const eqCls=s.pl>=0?'up':'dn';
+    $('monitor-status').style.display=running?'':'none';
+    $('monitor-status').innerHTML=running?`
+      <div style="display:flex;flex-wrap:wrap;gap:var(--sp-md);align-items:center;justify-content:space-between;background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:var(--sp-md);margin-bottom:var(--sp-sm);">
+        <div style="display:flex;align-items:center;gap:var(--sp-sm);">
+          <span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#22c55e;box-shadow:0 0 8px #22c55e88;"></span>
+          <span style="font-weight:700;font-size:var(--fs-sm);">Running</span>
+        </div>
+        <div style="display:flex;gap:var(--sp-lg);font-size:var(--fs-xs);">
+          <span style="color:var(--muted);">Broker</span><span style="font-weight:600;">${s.broker||'—'}</span>
+          <span style="color:var(--muted);">Mode</span><span style="font-weight:600;">${s.mode||'—'}</span>
+          <span style="color:var(--muted);">Tickers</span><span style="font-weight:600;">${s.tickers||'—'}</span>
+        </div>
+        <div style="display:flex;gap:var(--sp-lg);font-size:var(--fs-xs);">
+          <div><span style="color:var(--muted);">Equity</span><br><span style="font-weight:700;">$${fmt(s.equity)}</span></div>
+          <div><span style="color:var(--muted);">P&L</span><br><span style="font-weight:700;color:${eqCls==='up'?'var(--accent)':'var(--danger)'}">${s.pl>=0?'+':''}${fmt(s.pl)} (${s.pl>=0?'+':''}${pct}%)</span></div>
+          <div><span style="color:var(--muted);">Buying Power</span><br><span style="font-weight:700;">$${fmt(s.buying_power)}</span></div>
+          <div><span style="color:var(--muted);">Open Pos.</span><br><span style="font-weight:700;">${s.open_positions}</span></div>
+        </div>
+      </div>`:'';
+    // signal feed
+    if(running&&s.signals&&s.signals.length){
+      $('monitor-signals').style.display='';
+      const lastSignals=s.signals.slice(-20).reverse();
+      $('monitor-signals').innerHTML=`
+        <div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:var(--sp-md);margin-bottom:var(--sp-sm);">
+          <div style="font-size:var(--fs-xs);font-weight:600;color:var(--muted);margin-bottom:6px;display:flex;align-items:center;gap:6px;">
+            <svg class="icon" style="width:12px;height:12px;"><use href="#i-signal"/></svg> LIVE SIGNAL FEED
+          </div>
+          <div style="max-height:210px;overflow-y:auto;display:flex;flex-direction:column;gap:2px;">
+            ${lastSignals.map(sig=>`
+              <div style="display:flex;align-items:center;justify-content:space-between;font-size:var(--fs-xs);padding:4px 6px;border-radius:4px;background:var(--glass);">
+                <span><span style="font-weight:700;color:${_sigColor(sig.signal)}">${sig.signal}</span> <b>${sig.symbol}</b></span>
+                <span><span style="color:var(--muted)">$${sig.price}</span> <span style="color:var(--muted);font-size:10px;">${sig.time}</span></span>
+              </div>
+            `).join('')}
+          </div>
+        </div>`;
+    }else{$('monitor-signals').style.display='none';$('monitor-signals').innerHTML='';}
+    // ticker cards
+    if(m.error){$('monitor-content').innerHTML=`<p class="ph" style="color:var(--danger)">${m.error}</p>`;return;}
+    let html='';
+    for(const sym in m.tickers){
+      if(m.tickers.hasOwnProperty(sym)){
+      const t=m.tickers[sym];
+      if(t.error&&!t.price){html+=`<div class="monitor-card"><b>${sym}</b>: ${t.error}</div>`;continue;}
+      const priceCls=t.change>=0?'up':'dn';
+      const posCls=t.position;
+      const confPct=t.confidence>0?' ('+(t.confidence*100).toFixed(0)+'%)':'';
+      const ind=t.indicators;
+      const trdLabel=ind.ema_fast>0?`<span style="color:${t.trend_dir==='up'?'var(--accent)':t.trend_dir==='down'?'var(--danger)':'var(--muted)'}">${_trdArrow(t.trend_dir)} ${t.trend_dir.toUpperCase()}</span>`:'—';
+      const bbRange=ind.bb_upper>ind.bb_lower?`<span style="color:var(--muted)">$${ind.bb_lower}</span> – <span style="color:var(--muted)">$${ind.bb_upper}</span>`:'—';
+      const rsiColor=ind.rsi>=70?'var(--danger)':ind.rsi<=30?'var(--accent)':'var(--text)';
+      const macdColor=ind.macd_label==='Bullish'?'var(--accent)':'var(--danger)';
+      const adxColor=ind.adx>=25?'var(--accent)':'var(--muted)';
+      html+=`<div class="monitor-card">
+        <div class="monitor-card-header">
+          <span class="monitor-card-sym">${sym} <span class="monitor-card-pos ${posCls}">${t.position}${t.quantity>0?' ('+t.quantity+')':''}</span></span>
+          <span class="monitor-card-price ${priceCls}">$${t.price} <span style="font-size:var(--fs-xs);font-weight:400;">${t.change>=0?'+':''}${t.change} (${t.change_pct>=0?'+':''}${t.change_pct}%)</span></span>
+        </div>
+        <div class="monitor-card-body">
+          <div class="row"><span class="label">Signal</span><span class="value" style="font-weight:700;${t.signal==='BUY'?'color:var(--accent)':t.signal==='SELL'?'color:var(--danger)':''}">${t.signal||'—'}${confPct}</span></div>
+          <div class="row"><span class="label">Trend</span><span class="value">${trdLabel}</span></div>
+          <div class="row"><span class="label">Rationale</span><span class="value" style="font-size:var(--fs-xs)">${t.rationale||'—'}</span></div>
+          <hr style="border:none;border-top:1px solid var(--border);margin:6px 0;">
+          <div style="font-size:var(--fs-xs);font-weight:600;color:var(--muted);margin-bottom:4px;">INDICATORS</div>
+          <div class="row"><span class="label">RSI <span style="color:var(--muted);font-weight:400;">(14)</span></span><span class="value" style="color:${rsiColor}">${_ind(ind.rsi)} <span style="color:var(--muted);font-weight:400;">${ind.rsi_label}</span></span></div>
+          <div class="row"><span class="label">MACD <span style="color:var(--muted);font-weight:400;">(12/26/9)</span></span><span class="value" style="color:${macdColor}">${_ind(ind.macd)} <span style="color:var(--muted);font-weight:400;">${ind.macd_label}</span></span></div>
+          <div class="row"><span class="label">ADX <span style="color:var(--muted);font-weight:400;">(14)</span></span><span class="value" style="color:${adxColor}">${_ind(ind.adx)} <span style="color:var(--muted);font-weight:400;">${ind.adx_label}</span></span></div>
+          <div class="row"><span class="label">Bollinger Bands</span><span class="value" style="font-size:var(--fs-xs)">${bbRange} <span style="color:var(--muted)">· ${ind.bb_pos_pct}% · ${ind.bb_label}</span></span></div>
+          <div class="row"><span class="label">VWAP</span><span class="value">${_ind(ind.vwap)}</span></div>
+          <div class="row"><span class="label">ATR</span><span class="value">${_ind(ind.atr)}</span></div>
+          <hr style="border:none;border-top:1px solid var(--border);margin:6px 0;">
+          <div style="font-size:var(--fs-xs);color:var(--muted);line-height:1.5;padding:4px 6px;background:var(--glass);border-radius:4px;">
+            <b style="font-size:11px;">Quick Guide</b><br>
+            <b>RSI</b> → Below 30 = oversold (may bounce up) &nbsp;|&nbsp; Above 70 = overbought (may drop)<br>
+            <b>MACD</b> → Bullish = momentum up &nbsp;|&nbsp; Bearish = momentum down<br>
+            <b>ADX</b> → 25+ = strong trend &nbsp;|&nbsp; Below 20 = weak / sideways<br>
+            <b>BB</b> → Price near upper band = extended up &nbsp;|&nbsp; Near lower band = extended down
+          </div>
+          <details style="margin-top:6px;">
+            <summary style="font-size:var(--fs-xs);color:var(--muted);cursor:pointer;">Signal History (${t.signal_history.length})</summary>
+            <div style="margin-top:4px;">${t.signal_history.slice().reverse().map(s=>`<div class="monitor-sig-item"><span class="sig ${s.signal==='BUY'?'buy':'sell'}">${s.signal}</span><span>$${s.price} <span style="color:var(--muted)">${s.time}</span></span></div>`).join('')||'<span style="color:var(--muted)">No signals yet</span>'}</div>
+          </details>
+        </div>
+      </div>`;}
+    }
+    $('monitor-content').innerHTML=html||'<p class="ph">No ticker data available.</p>';
+  }catch(e){
+    if(!$('monitor-content').innerHTML.includes('monitor-card'))
+      $('monitor-content').innerHTML='<p class="ph" style="color:var(--muted)">Loading ticker data...</p>';
+  }
+}
+function startMonitorPolling(){
+  stopMonitorPolling();
+  refreshMonitor();
+  _monitorTimer=setInterval(refreshMonitor,5000);
+}
+function stopMonitorPolling(){
+  if(_monitorTimer){clearInterval(_monitorTimer);_monitorTimer=null;}
+}
+function switchTab(name){
+  document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
+  document.querySelectorAll('.tbtn').forEach(x=>x.classList.remove('active'));
+  const t=$('tab-'+name),b=document.querySelector(`[data-tab="${name}"]`);
+  if(t)t.classList.add('active');if(b)b.classList.add('active');
+  if(name==='aichat')initAIChat();
+  if(name==='charts')setTimeout(()=>{if(tvWidget&&tvWidget.resize)tvWidget.resize();},80);
+  if(name==='monitor'){refreshMonitor();startMonitorPolling();}
+  else stopMonitorPolling();
+}
+document.querySelectorAll('.tbtn').forEach(b=>{b.addEventListener('click',function(){switchTab(this.dataset.tab);});});
 
 /* ── Presets ── */
 const PRESETS={
@@ -5179,9 +5478,9 @@ async function runBT(){
         </div>`;
         const exits=sim.trades.filter(t=>t.type==='exit');
         if(exits.length){
-          html+=`<details class="bt-trade-details" open><summary>Trade Log (${exits.length})</summary><div style="overflow-x:auto;"><table class="bttbl"><tr><th>Entry</th><th>Exit</th><th>Side</th><th>Shares</th><th>Entry $</th><th>Exit $</th><th>P&amp;L</th></tr>`;
+          html+=`<details class="bt-trade-details" open><summary>Trade Log (${exits.length})</summary><div style="overflow-x:auto;"><table class="bttbl"><tr><th>Entry</th><th>Exit</th><th>Side</th><th>Shares</th><th>Entry $</th><th>Exit $</th><th>P&amp;L</th><th>Days</th></tr>`;
           exits.forEach(t=>{
-            html+=`<tr><td>${String(t.entry_time).slice(0,12)}</td><td>${String(t.exit_time).slice(0,12)}</td><td style="color:${t.side==='LONG'?'var(--accent)':'var(--danger)'}">${t.side}</td><td>${t.shares?t.shares.toFixed(2):''}</td><td>$${t.entry_price.toFixed(2)}</td><td>$${t.exit_price.toFixed(2)}</td><td style="color:${t.pnl>=0?'var(--accent)':'var(--danger)'}">${t.pnl>=0?'+':''}$${t.pnl.toFixed(2)}</td></tr>`;
+            html+=`<tr><td>${String(t.entry_time).slice(0,12)}</td><td>${String(t.exit_time).slice(0,12)}</td><td style="color:${t.side==='LONG'?'var(--accent)':'var(--danger)'}">${t.side}</td><td>${t.shares?t.shares.toFixed(2):''}</td><td>$${t.entry_price.toFixed(2)}</td><td>$${t.exit_price.toFixed(2)}</td><td style="color:${t.pnl>=0?'var(--accent)':'var(--danger)'}">${t.pnl>=0?'+':''}$${t.pnl.toFixed(2)}</td><td>${t.days_held!==undefined?t.days_held:''}</td></tr>`;
           });
           html+=`</table></div></details>`;
         }
@@ -5368,7 +5667,7 @@ document.addEventListener('keydown',e=>{
   if(ctrl&&!e.shiftKey&&e.key==='b'&&!isInput){e.preventDefault();runBT();}
   if(ctrl&&e.shiftKey&&e.key==='B'){e.preventDefault();switchTab('backtest');}
   if(ctrl&&e.key==='s'&&!isInput){e.preventDefault();saveConfig();}
-  if(ctrl&&e.key>='1'&&e.key<='7'&&!isInput){e.preventDefault();switchTab(TABS[parseInt(e.key)-1]);}
+  if(ctrl&&e.key>='1'&&e.key<='8'&&!isInput){e.preventDefault();const i=parseInt(e.key)-1;if(i<TABS.length)switchTab(TABS[i]);}
 });
 
 /* ── Boot ── */
@@ -5394,7 +5693,7 @@ if __name__ == "__main__":
     time.sleep(1.2)
 
     window = webview.create_window(
-        "TraderMoney 3.0.1",
+        "TraderMoney 4.0.0",
         "http://127.0.0.1:5050",
         width=1440,
         height=880,
