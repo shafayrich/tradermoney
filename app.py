@@ -4190,9 +4190,9 @@ button.ghost:hover { box-shadow: none; }
       <select id="broker" onchange="onBrokerChange()"></select>
       <div id="bstatus" class="ok"></div>
       <div id="creds"></div>
-      <div class="simple-hidden">
-        <label>Telegram Token (opt)</label><input type="password" id="tgt">
-        <label>Telegram Chat ID (opt)</label><input type="text" id="tgc">
+      <div>
+        <label>Telegram Token <span style="color:var(--muted);font-weight:400;">(Pro)</span></label><input type="password" id="tgt">
+        <label>Telegram Chat ID <span style="color:var(--muted);font-weight:400;">(Pro)</span></label><input type="text" id="tgc">
       </div>
     </div>
   </details>
@@ -4989,11 +4989,13 @@ function applyFreeTierUI(){
   updateBrokerOptions();$('broker').disabled=true;sv('broker','Alpaca');cfg.broker='Alpaca';
   sv('mode','signal');$('mode').disabled=true;sv('dir','both');$('dir').disabled=true;
   ['ubracket','uatr','uadx','uvol','ust','ustoch','unews'].forEach(id=>{sc(id,false);lockCb(id,true);});
+  ['tgt','tgc'].forEach(id=>{$(id).disabled=true;$(id).style.opacity='0.35';});
   $('free-notice').style.display='block';
 }
 function applyProUI(){
   updateBrokerOptions();$('broker').disabled=false;$('mode').disabled=false;$('dir').disabled=false;
   ['ubracket','uatr','uadx','uvol','ust','ustoch'].forEach(id=>lockCb(id,false));
+  ['tgt','tgc'].forEach(id=>{$(id).disabled=false;$(id).style.opacity='1';});
   $('free-notice').style.display='none';
 }
 
