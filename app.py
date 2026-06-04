@@ -48,7 +48,7 @@ import webview
 from flask import Flask, Response, jsonify, request, send_file
 from flask_cors import CORS
 
-APP_VERSION = "4.0.0"
+APP_VERSION = "4.0.7"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # AI CONFIGURATION
@@ -1684,6 +1684,7 @@ class TradingEngine(threading.Thread):
         self._stop_watchdog = threading.Event()
         self.consecutive_failures = 0
         self.paused = False
+        self.news_cache: Dict[str, Tuple[float, List[str], float]] = {}  # symbol -> (score, headlines, timestamp)
 
         if not self.is_licensed:
             self.config["mode"] = "signal"
@@ -1849,13 +1850,34 @@ class TradingEngine(threading.Thread):
                             sig, rationale, conf = SignalAnalyzer.generate_signal(
                                 df, prev_f, prev_s, self.config, indicator_params=ind_params)
                             if sig:
+                                news_label = ""
                                 if news_filter and NEWS_API_KEY:
-                                    sentiment = self._get_news_sentiment(s)
-                                    if (sig == "BUY" and sentiment < -0.2) or \
-                                       (sig == "SELL" and sentiment > 0.2):
-                                        self._log(f"[NewsFilter] Suppressed {sig} {s} "
-                                                  f"(score: {sentiment:.2f})")
-                                        continue
+                                    sentiment, headlines = self._get_news_sentiment(s)
+                                    if sentiment != 0.0:
+                                        if sig == "BUY":
+                                            boost = sentiment * 0.2
+                                            if sentiment > 0.1:
+                                                news_label = f" 📰+{sentiment:.2f}"
+                                            elif sentiment < -0.4:
+                                                self._log(f"[NewsFilter] Suppressed {sig} {s} "
+                                                          f"(score: {sentiment:.2f})")
+                                                continue
+                                            else:
+                                                news_label = f" 📰{sentiment:.2f}"
+                                        else:
+                                            boost = -sentiment * 0.2
+                                            if sentiment < -0.1:
+                                                news_label = f" 📰{-sentiment:.2f}"
+                                            elif sentiment > 0.4:
+                                                self._log(f"[NewsFilter] Suppressed {sig} {s} "
+                                                          f"(score: {sentiment:.2f})")
+                                                continue
+                                            else:
+                                                news_label = f" 📰{sentiment:.2f}"
+                                        conf = min(1.0, conf + boost)
+                                        if headlines:
+                                            top = headlines[0][:80]
+                                            rationale += f" | News: {top}"
 
                                 self.ui_queue.put(("signal", (s, sig, price, rationale)))
                                 db.insert_signal(_ts(), s, sig, price, rationale)
@@ -1865,7 +1887,7 @@ class TradingEngine(threading.Thread):
                                         state.signal_history = state.signal_history[-500:]
                                 except Exception:
                                     pass
-                                self._telegram(f"<b>Signal</b> {sig} {s} @ ${price:.2f} (conf: {conf:.2f})")
+                                self._telegram(f"<b>Signal</b> {sig} {s} @ ${price:.2f} (conf: {conf:.2f}){news_label}")
 
                                 if (mode == "auto"
                                         and self.is_licensed
@@ -2006,15 +2028,21 @@ class TradingEngine(threading.Thread):
                 pass
             time.sleep(2)
 
-    def _get_news_sentiment(self, symbol: str) -> float:
+    def _get_news_sentiment(self, symbol: str) -> Tuple[float, List[str]]:
+        now = time.time()
+        cached = self.news_cache.get(symbol)
+        if cached and now - cached[2] < 300:
+            return cached[0], cached[1]
         try:
             resp = http_requests.get(
                 f"https://newsapi.org/v2/everything?q={symbol}"
                 f"&apiKey={NEWS_API_KEY}&pageSize=3", timeout=5)
             articles = resp.json().get("articles", [])
-            headlines = " ".join(a["title"] for a in articles)
+            headlines = [a["title"] for a in articles if a.get("title")]
             if not headlines:
-                return 0.0
+                self.news_cache[symbol] = (0.0, [], now)
+                return 0.0, []
+            combined = " ".join(headlines)
             chat_resp = http_requests.post(
                 "https://openrouter.ai/api/v1/chat/completions",
                 headers={
@@ -2027,13 +2055,15 @@ class TradingEngine(threading.Thread):
                         {"role": "system",
                          "content": "Analyze sentiment. Return a single number "
                                     "between -1 (very negative) and 1 (very positive)."},
-                        {"role": "user", "content": headlines}],
+                        {"role": "user", "content": combined}],
                     "max_tokens": 10, "temperature": 0},
                 timeout=10)
             score = float(chat_resp.json()["choices"][0]["message"]["content"].strip())
-            return max(-1.0, min(1.0, score))
+            score = max(-1.0, min(1.0, score))
+            self.news_cache[symbol] = (score, headlines, now)
+            return score, headlines
         except Exception:
-            return 0.0
+            return 0.0, []
 
     def stop(self):
         if self.running:
@@ -3183,6 +3213,30 @@ def delete_thesis():
     EncryptedConfigManager.save(state.config)
     return jsonify({"ok": True})
 
+
+@app.route("/api/news/<symbol>", methods=["GET"])
+def api_news(symbol):
+    if not NEWS_API_KEY:
+        return jsonify({"articles": []})
+    try:
+        resp = http_requests.get(
+            f"https://newsapi.org/v2/everything?q={symbol}"
+            f"&apiKey={NEWS_API_KEY}&pageSize=5&sortBy=publishedAt",
+            timeout=5)
+        articles = resp.json().get("articles", [])
+        result = []
+        for a in articles:
+            result.append({
+                "title": a.get("title", ""),
+                "url": a.get("url", ""),
+                "source": a.get("source", {}).get("name", ""),
+                "published": a.get("publishedAt", "")[:10],
+            })
+        return jsonify({"articles": result})
+    except Exception:
+        return jsonify({"articles": []})
+
+
 @app.route("/api/thesis/list", methods=["GET"])
 def list_theses():
     return jsonify({"theses": state.config.get("custom_theses", [])})
@@ -3192,16 +3246,34 @@ def apply_thesis():
     data = request.json or {}
     name = data.get("name", "").strip()
     params = data.get("params", {})
-    if params:
-        state.config["indicator_params"] = {**state.config.get("indicator_params", {}), **params}
-        EncryptedConfigManager.save(state.config)
-        return jsonify({"ok": True})
-    for t in state.config.get("custom_theses", []):
-        if t["name"] == name:
-            state.config["indicator_params"] = {**state.config.get("indicator_params", {}), **t["params"]}
-            EncryptedConfigManager.save(state.config)
-            return jsonify({"ok": True, "params": t["params"]})
-    return jsonify({"error": "Thesis not found"}), 404
+    if not params:
+        for t in state.config.get("custom_theses", []):
+            if t["name"] == name:
+                params = t["params"]
+                break
+        if not params:
+            return jsonify({"error": "Thesis not found"}), 404
+
+    # Apply indicator_params (preserve keys not in thesis)
+    ic = state.config.get("indicator_params", {})
+    for k in ("rsi_period","rsi_oversold","rsi_overbought","macd_fast","macd_slow","macd_signal",
+              "bb_period","bb_std","adx_threshold","adx_period","vol_threshold","vol_period",
+              "supertrend_period","supertrend_multiplier","stoch_k_period","stoch_d_period",
+              "atr_period","atr_stop_mult","atr_tp_mult"):
+        if k in params:
+            ic[k] = params[k]
+    state.config["indicator_params"] = ic
+
+    # Apply top-level keys from thesis
+    if "ema_fast" in params and "ema_slow" in params:
+        state.config["emas"] = [params["ema_fast"], params["ema_slow"]]
+    if "sl_percent" in params:
+        state.config["sl_percent"] = params["sl_percent"]
+    if "tp_percent" in params:
+        state.config["tp_percent"] = params["tp_percent"]
+
+    EncryptedConfigManager.save(state.config)
+    return jsonify({"ok": True, "params": params})
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # FRONTEND HTML
@@ -3211,7 +3283,7 @@ FRONTEND_HTML = r"""
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>TraderMoney 4.0.0</title>
+<title>TraderMoney 4.0.7</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root {
@@ -4170,7 +4242,7 @@ button.ghost:hover { box-shadow: none; }
     <span class="sidebar-logo">TM</span>
     <div class="sidebar-title">
       <span class="sidebar-name">TraderMoney</span>
-      <span class="sidebar-version">v4.0.0</span>
+      <span class="sidebar-version">v4.0.7</span>
     </div>
     <div class="sidebar-actions">
       <button onclick="location.reload()" title="Refresh"><svg class="icon" style="width:13px;height:13px;" viewBox="0 0 24 24"><path d="M17.65 6.35A7.958 7.958 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg></button>
@@ -4242,7 +4314,7 @@ button.ghost:hover { box-shadow: none; }
       <label><span class="cb"><input type="checkbox" id="uvol" checked><span class="cm"></span></span> Volume <span class="badge badge-gold" style="font-size:.5rem;padding:0 5px;">PRO</span></label>
       <label><span class="cb"><input type="checkbox" id="ust" checked><span class="cm"></span></span> SuperTrend <span class="badge badge-gold" style="font-size:.5rem;padding:0 5px;">PRO</span></label>
       <label><span class="cb"><input type="checkbox" id="ustoch" checked><span class="cm"></span></span> Stochastic <span class="badge badge-gold" style="font-size:.5rem;padding:0 5px;">PRO</span></label>
-      <label><span class="cb"><input type="checkbox" id="unews" disabled><span class="cm"></span></span> News <span class="badge badge-gold" style="font-size:.5rem;padding:0 5px;">PRO</span></label>
+      <label><span class="cb"><input type="checkbox" id="unews"><span class="cm"></span></span> News <span class="badge badge-gold" style="font-size:.5rem;padding:0 5px;">PRO</span></label>
     </div>
   </details>
 
@@ -4251,6 +4323,10 @@ button.ghost:hover { box-shadow: none; }
     <div class="sb-section-body">
       <label style="font-size:.65rem;">Thesis Name</label>
       <input type="text" id="thesis-name" placeholder="e.g., Momentum RSI" style="font-size:.75rem;">
+      <label style="font-size:.65rem;margin-top:6px;">EMA Fast / Slow</label>
+      <div class="r2"><input id="tp-ema-fast" type="number" value="9"><input id="tp-ema-slow" type="number" value="50"></div>
+      <label style="font-size:.65rem;">Stop Loss / Take Profit %</label>
+      <div class="r2"><input id="tp-sl-pct" type="number" value="2.0" step="0.1"><input id="tp-tp-pct" type="number" value="4.0" step="0.1"></div>
       <label style="font-size:.65rem;margin-top:6px;">RSI Period</label>
       <input id="tp-rsi-period" type="number" value="14" min="2" max="50">
       <label style="font-size:.65rem;">RSI Oversold</label>
@@ -4394,7 +4470,7 @@ button.ghost:hover { box-shadow: none; }
   <!-- Help tab -->
   <div id="tab-help" class="tab">
     <div class="hb">
-      <h3>TraderMoney v4.0.0 – Complete Help Guide</h3>
+      <h3>TraderMoney v4.0.7 – Complete Help Guide</h3>
       <p style="font-size:.82rem;color:var(--muted);margin-top:-4px;">Your desktop algorithmic trading terminal. All features documented below.</p>
 
       <details>
@@ -4408,6 +4484,7 @@ button.ghost:hover { box-shadow: none; }
             <li>Set your <b>Tickers</b> (e.g. AAPL, TSLA, BTC/USD)</li>
             <li>Choose a <b>Timeframe</b> for analysis (1m/5m/15m/30m/1h/1d)</li>
             <li>Enable the indicators you want to use (more = higher confidence)</li>
+            <li>Enable <b>News</b> (Pro) to factor live news sentiment into signals — set NEWS_API_KEY in .env (get free key at <a href="https://newsapi.org/register" target="_blank">newsapi.org/register</a>)</li>
             <li>Click <b>Save Config</b> to persist settings</li>
             <li>Click <b>Start Bot</b> to begin analyzing markets</li>
             <li>View signals in the Signals tab, charts in Charts tab</li>
@@ -4488,6 +4565,11 @@ button.ghost:hover { box-shadow: none; }
           <p><b>What it does:</b> Uses ATR to set dynamic stop-loss and take-profit levels. Stop = entry price - (ATR * stop_mult). TP = entry price + (ATR * tp_mult).</p>
           <p><b>Best for:</b> Adaptive risk management that accounts for volatility.</p>
           <p><b>Customizable:</b> ATR Period (default 14), Stop multiplier (default 2.0), TP multiplier (default 3.0).</p>
+
+          <h4>📰 News Sentiment</h4>
+          <p><b>What it does:</b> Fetches the latest 3 news headlines about each ticker from NewsAPI and analyzes sentiment via AI (Gemini 2.0 Flash). Strongly positive news boosts BUY confidence; strongly negative news boosts SELL confidence. Extremely contradictory news (BUY + very negative headlines) suppresses the signal.</p>
+          <p><b>Best for:</b> Avoiding trades against the news flow. Catches earnings reactions, product launches, regulatory events.</p>
+          <p><b>Requires:</b> FREE News API key at <a href="https://newsapi.org/register" target="_blank">newsapi.org/register</a> — add <code>NEWS_API_KEY=your_key</code> to <code>.env</code>. Pro license to enable the checkbox.</p>
         </div>
       </details>
 
@@ -4592,7 +4674,7 @@ button.ghost:hover { box-shadow: none; }
             <li>Saved theses appear in a list below the builder - click to load or delete</li>
             <li>Run a backtest to compare thesis performance</li>
           </ol>
-          <p style="font-size:.82rem;"><b>Example:</b> Create a thesis named "Fast Momentum" with RSI period=7, MACD fast=6/slow=13/signal=5, BB period=10. This creates a faster-reacting strategy for shorter timeframes.</p>
+          <p style="font-size:.82rem;"><b>Example:</b> Create a thesis named "Fast Momentum" with EMA fast=5, slow=20, SL%=1.5, TP%=3, RSI period=7, MACD fast=6/slow=13/signal=5, BB period=10. This creates a faster-reacting strategy for shorter timeframes.</p>
         </div>
       </details>
 
@@ -4994,7 +5076,7 @@ function applyFreeTierUI(){
 }
 function applyProUI(){
   updateBrokerOptions();$('broker').disabled=false;$('mode').disabled=false;$('dir').disabled=false;
-  ['ubracket','uatr','uadx','uvol','ust','ustoch'].forEach(id=>lockCb(id,false));
+  ['ubracket','uatr','uadx','uvol','ust','ustoch','unews'].forEach(id=>lockCb(id,false));
   ['tgt','tgc'].forEach(id=>{$(id).disabled=false;$(id).style.opacity='1';});
   $('free-notice').style.display='none';
 }
@@ -5019,6 +5101,10 @@ function buildCfg(){
 }
 function collectIndicatorParams(){
   return{
+    ema_fast:parseInt(gv('tp-ema-fast','9'))||9,
+    ema_slow:parseInt(gv('tp-ema-slow','50'))||50,
+    sl_percent:parseFloat(gv('tp-sl-pct','2.0'))||2.0,
+    tp_percent:parseFloat(gv('tp-tp-pct','4.0'))||4.0,
     rsi_period:parseInt(gv('tp-rsi-period','14'))||14,
     rsi_oversold:parseInt(gv('tp-rsi-os','30'))||30,
     rsi_overbought:parseInt(gv('tp-rsi-ob','70'))||70,
@@ -5056,6 +5142,7 @@ function initUI(c){
   sv('slp',c.sl_percent||2);sv('tpp',c.tp_percent||4);
   sc('ursi',c.use_rsi!==false);sc('umacd',c.use_macd!==false);
   sc('uvwap',c.use_vwap!==false);sc('uboll',c.use_bollinger!==false);
+  sc('unews',c.news_sentiment!==false);
   if(c.license_key)sv('lickey',c.license_key);
   updateCreds();
   const raw=(c.tickers||'AAPL').split(',').map(s=>s.trim()).filter(s=>s);
@@ -5145,6 +5232,8 @@ async function applyThesis(){
     const r=await fetch('/api/thesis/apply',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});
     const d=await r.json();if(d.ok&&d.params)params=d.params;else{toast(d.error||'Apply failed','error');return;}
   }
+  sv('tp-ema-fast',params.ema_fast||9);sv('tp-ema-slow',params.ema_slow||50);
+  sv('tp-sl-pct',params.sl_percent||2.0);sv('tp-tp-pct',params.tp_percent||4.0);
   sv('tp-rsi-period',params.rsi_period||14);sv('tp-rsi-os',params.rsi_oversold||30);sv('tp-rsi-ob',params.rsi_overbought||70);
   sv('tp-macd-fast',params.macd_fast||12);sv('tp-macd-slow',params.macd_slow||26);sv('tp-macd-sig',params.macd_signal||9);
   sv('tp-bb-per',params.bb_period||20);sv('tp-bb-std',params.bb_std||2);
@@ -5155,6 +5244,8 @@ async function applyThesis(){
   sv('tp-atr-per',params.atr_period||14);
   sv('tp-atr-stop',params.atr_stop_mult||2.0);
   sv('tp-atr-tp',params.atr_tp_mult||3.0);
+  sv('emaf',params.ema_fast||9);sv('emas',params.ema_slow||50);
+  sv('slp',params.sl_percent||2.0);sv('tpp',params.tp_percent||4.0);
   toast('Thesis applied! Save config to persist.','success');
 }
 async function loadSavedTheses(){
@@ -5207,6 +5298,7 @@ async function validateLicense(silent=false){
     sc('ubracket',!!cfg.use_bracket);sc('uatr',cfg.use_atr_stops!==false);
     sc('uadx',cfg.use_adx!==false);sc('uvol',cfg.use_vol_confirm!==false);
     sc('ust',cfg.use_supertrend!==false);sc('ustoch',cfg.use_stochastic!==false);
+    sc('unews',cfg.news_sentiment!==false);
     updateCreds();if(!silent)toast('Pro unlocked for this session','success');
   }else{licValid=false;applyFreeTierUI();if(!silent)toast(d.message,'error');}
   updateBrokerOptions();
@@ -5326,6 +5418,12 @@ async function refreshMonitor(){
     }else if(!$('monitor-signals').innerHTML.includes('LIVE SIGNAL FEED')){
       $('monitor-signals').style.display='none';
     }
+    // batch-fetch news for all tickers (cached client-side)
+    const tickers=Object.keys(m.tickers||{});
+    const newsPromises=tickers.filter(sym=>!window._newsCache||!window._newsCache[sym]||Date.now()-window._newsCache[sym].ts>120000).map(async sym=>{
+      try{const r=await fetch('/api/news/'+sym);const d=await r.json();if(!window._newsCache)window._newsCache={};window._newsCache[sym]={articles:d.articles||[],ts:Date.now()};}catch(e){}
+    });
+    if(newsPromises.length)await Promise.allSettled(newsPromises);
     // ticker cards
     if(m.error){$('monitor-content').innerHTML=`<p class="ph" style="color:var(--danger)">${m.error}</p>`;return;}
     let html='';
@@ -5370,6 +5468,10 @@ async function refreshMonitor(){
             <b>ADX</b> → 25+ = strong trend &nbsp;|&nbsp; Below 20 = weak / sideways<br>
             <b>BB</b> → Price near upper band = extended up &nbsp;|&nbsp; Near lower band = extended down
           </div>
+          <details style="margin-top:6px;">
+            <summary style="font-size:var(--fs-xs);color:var(--muted);cursor:pointer;">📰 News</summary>
+            <div style="margin-top:4px;font-size:var(--fs-xs);" id="news-${sym}">${window._newsCache&&window._newsCache[sym]?window._newsCache[sym].articles.slice(0,3).map(a=>`<div style="padding:3px 0;border-bottom:1px solid var(--border);"><a href="${a.url}" target="_blank" style="color:var(--accent);text-decoration:none;">${a.title}</a><br><span style="color:var(--muted);font-size:9px;">${a.source} · ${a.published}</span></div>`).join('')||'<span style="color:var(--muted)">No recent news</span>':'<span style="color:var(--muted)">Loading...</span>'}</div>
+          </details>
           <details style="margin-top:6px;">
             <summary style="font-size:var(--fs-xs);color:var(--muted);cursor:pointer;">Signal History (${t.signal_history.length})</summary>
             <div style="margin-top:4px;">${t.signal_history.slice().reverse().map(s=>`<div class="monitor-sig-item"><span class="sig ${s.signal==='BUY'?'buy':'sell'}">${s.signal}</span><span>$${s.price} <span style="color:var(--muted)">${s.time}</span></span></div>`).join('')||'<span style="color:var(--muted)">No signals yet</span>'}</div>
@@ -5732,7 +5834,7 @@ if __name__ == "__main__":
     time.sleep(1.2)
 
     window = webview.create_window(
-        "TraderMoney 4.0.0",
+        "TraderMoney 4.0.7",
         "http://127.0.0.1:5050",
         width=1440,
         height=880,
