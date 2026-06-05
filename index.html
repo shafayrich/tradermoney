@@ -4,22 +4,29 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>TraderMoney — Institutional Trading Terminal</title>
+    <meta name="description" content="An institutional-grade automated trading terminal. Multi-broker. AI-powered signals. Zero fluff.">
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%230b0e14'/><text x='50%25' y='58%25' dominant-baseline='middle' text-anchor='middle' fill='%2300c9a7' font-family='system-ui' font-weight='700' font-size='38'>TM</text></svg>">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
     <style>
         :root {
-            --bg: #0b0e14;
-            --surface: #111827;
+            --bg: #070a10;
+            --surface: #0d1117;
+            --surface2: #111827;
             --border: rgba(255,255,255,0.04);
             --border2: rgba(255,255,255,0.06);
+            --border3: rgba(255,255,255,0.1);
             --text: #e8edf5;
+            --text2: #c9d1d9;
             --muted: #64748b;
+            --muted2: #8b949e;
             --accent: #00c9a7;
             --accent-dim: rgba(0,201,167,0.12);
+            --accent-glow: rgba(0,201,167,0.08);
             --danger: #ef4444;
             --radius: 12px;
+            --radius-lg: 16px;
         }
         * { margin: 0; padding: 0; box-sizing: border-box; }
         html { background: var(--bg); scroll-behavior: smooth; }
@@ -29,20 +36,16 @@
             color: var(--text);
             -webkit-font-smoothing: antialiased;
             -moz-osx-font-smoothing: grayscale;
-            min-height: 100vh;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            position: relative;
         }
         body::before {
             content: '';
             position: fixed;
             inset: 0;
             background-image:
-                linear-gradient(rgba(255,255,255,0.015) 1px, transparent 1px),
-                linear-gradient(90deg, rgba(255,255,255,0.015) 1px, transparent 1px);
-            background-size: 64px 64px;
+                radial-gradient(ellipse at 50% 0%, rgba(0,201,167,0.03) 0%, transparent 60%),
+                linear-gradient(rgba(255,255,255,0.012) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255,255,255,0.012) 1px, transparent 1px);
+            background-size: 100% 100%, 64px 64px, 64px 64px;
             pointer-events: none;
             z-index: 0;
         }
@@ -50,18 +53,20 @@
             position: relative;
             z-index: 1;
             width: 100%;
-            max-width: 820px;
-            padding: 60px 24px 40px;
+            max-width: 860px;
+            padding: 40px 24px;
+            margin: 0 auto;
             display: flex;
             flex-direction: column;
             align-items: center;
-            text-align: center;
         }
         .nav {
             display: flex;
             align-items: center;
             gap: 28px;
-            margin-bottom: 80px;
+            margin-bottom: 70px;
+            width: 100%;
+            justify-content: center;
         }
         .nav a {
             color: var(--muted);
@@ -73,45 +78,45 @@
         }
         .nav a:hover { color: var(--text); }
         .logo {
-            width: 56px;
-            height: 56px;
-            background: var(--accent-dim);
-            border: 1px solid rgba(0,201,167,0.2);
-            border-radius: 16px;
+            width: 64px;
+            height: 64px;
+            background: linear-gradient(135deg, var(--accent-dim) 0%, rgba(0,201,167,0.06) 100%);
+            border: 1px solid rgba(0,201,167,0.15);
+            border-radius: 18px;
             display: flex;
             align-items: center;
             justify-content: center;
-            margin-bottom: 32px;
+            margin-bottom: 28px;
             backdrop-filter: blur(10px);
-            box-shadow: 0 0 30px rgba(0,201,167,0.05);
+            box-shadow: 0 0 40px rgba(0,201,167,0.06);
         }
         .logo span {
-            font-size: 1.4rem;
+            font-size: 1.5rem;
             font-weight: 700;
             color: var(--accent);
             letter-spacing: -0.5px;
         }
-        h1 { font-size: 3.2rem; font-weight: 600; letter-spacing: -1.2px; line-height: 1.1; margin-bottom: 16px; color: #fff; }
+        h1 { font-size: 3.6rem; font-weight: 700; letter-spacing: -1.5px; line-height: 1.05; margin-bottom: 14px; color: #fff; }
         h1 em { font-style: normal; color: var(--accent); }
         .subtitle {
             font-size: 1.05rem;
             color: var(--muted);
-            max-width: 480px;
+            max-width: 500px;
             line-height: 1.55;
-            margin-bottom: 44px;
+            margin-bottom: 38px;
             font-weight: 400;
         }
         .version-pill {
             display: inline-flex;
             align-items: center;
             gap: 8px;
-            background: var(--surface);
+            background: var(--surface2);
             border: 1px solid var(--border);
             border-radius: 100px;
             padding: 6px 18px;
             font-size: 0.78rem;
             color: var(--muted);
-            margin-bottom: 36px;
+            margin-bottom: 32px;
             box-shadow: 0 2px 8px rgba(0,0,0,0.5);
         }
         .version-pill .dot {
@@ -123,7 +128,6 @@
         }
         @keyframes pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
         .version-pill strong { color: var(--accent); font-weight: 600; }
-
         .dl-section {
             display: flex;
             flex-direction: column;
@@ -142,22 +146,23 @@
             display: inline-flex;
             align-items: center;
             gap: 8px;
-            padding: 11px 24px;
+            padding: 12px 26px;
             border-radius: 100px;
             font-size: 0.85rem;
             font-weight: 600;
             text-decoration: none;
             transition: all 0.25s;
             border: 1px solid var(--border);
-            background: var(--surface);
+            background: var(--surface2);
             color: var(--text);
             letter-spacing: 0.01em;
+            cursor: pointer;
         }
         .dl-btn:hover {
             border-color: rgba(255,255,255,0.12);
             background: rgba(255,255,255,0.04);
             transform: translateY(-1px);
-            box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+            box-shadow: 0 4px 16px rgba(0,0,0,0.4);
         }
         .dl-btn.primary {
             background: var(--accent);
@@ -169,92 +174,287 @@
             background: #00b894;
             border-color: #00b894;
         }
+        .dl-btn svg { width: 16px; height: 16px; flex-shrink: 0; }
         .macos-note {
             font-size: 0.72rem;
             color: var(--muted);
             margin-top: -2px;
             opacity: 0.85;
         }
-        .gumroad-button {
+        .gumroad-btn {
             background: var(--accent) !important;
             color: #000 !important;
             font-weight: 700 !important;
-            font-size: 0.9rem !important;
             padding: 13px 32px !important;
             border-radius: 100px !important;
             text-decoration: none !important;
-            display: inline-block !important;
+            display: inline-flex !important;
+            align-items: center !important;
+            gap: 8px !important;
             letter-spacing: 0.01em !important;
             transition: all 0.25s !important;
+            border: none !important;
         }
-        .gumroad-button:hover {
+        .gumroad-btn:hover {
             opacity: 0.88;
             transform: translateY(-1px);
-            box-shadow: 0 4px 18px rgba(0,201,167,0.2);
-        }
-        .divider {
-            width: 1px;
-            height: 28px;
-            background: var(--border);
-            margin: 0 6px;
-            align-self: center;
+            box-shadow: 0 4px 20px rgba(0,201,167,0.2);
         }
 
-        .feature-strip {
+        /* ── Stats Bar ── */
+        .stats-bar {
             display: flex;
             flex-wrap: wrap;
-            gap: 2px;
             justify-content: center;
-            max-width: 700px;
-            margin-top: 64px;
-        }
-        .f-chip {
-            background: var(--surface);
+            gap: 40px;
+            margin: 50px 0 60px;
+            padding: 24px 32px;
+            background: var(--surface2);
             border: 1px solid var(--border);
-            border-radius: 100px;
-            padding: 8px 18px;
-            font-size: 0.78rem;
+            border-radius: var(--radius-lg);
+            width: 100%;
+        }
+        .stat-item { text-align: center; }
+        .stat-number { font-size: 1.6rem; font-weight: 700; color: #fff; letter-spacing: -0.5px; }
+        .stat-number .accent { color: var(--accent); }
+        .stat-label { font-size: 0.78rem; color: var(--muted); margin-top: 2px; }
+
+        /* ── Features Grid ── */
+        .section-title {
+            font-size: 1.8rem;
+            font-weight: 600;
+            color: #fff;
+            margin-bottom: 36px;
+            text-align: center;
+            letter-spacing: -0.5px;
+        }
+        .section-sub {
+            font-size: 0.9rem;
             color: var(--muted);
-            white-space: nowrap;
+            text-align: center;
+            margin-top: -24px;
+            margin-bottom: 36px;
         }
-        .f-chip strong { color: var(--text); font-weight: 500; }
-
-        footer {
-            margin-top: 80px;
+        .features-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+            gap: 12px;
+            width: 100%;
+            margin-bottom: 60px;
+        }
+        .feature-card {
+            background: var(--surface2);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            padding: 24px;
+            transition: all 0.3s;
+        }
+        .feature-card:hover {
+            border-color: var(--border3);
+            transform: translateY(-2px);
+            box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+        }
+        .feature-icon {
+            width: 40px;
+            height: 40px;
+            border-radius: 10px;
             display: flex;
-            flex-wrap: wrap;
-            gap: 28px;
-            justify-content: center;
             align-items: center;
-            font-size: 0.76rem;
-            color: #444;
+            justify-content: center;
+            margin-bottom: 14px;
+            font-size: 1.1rem;
         }
-        footer a { color: #555; text-decoration: none; transition: color 0.25s; }
-        footer a:hover { color: var(--muted); }
-        .tiktok-link { display: inline-flex; align-items: center; gap: 6px; }
-        .tiktok-link svg { width: 16px; height: 16px; fill: #555; transition: fill 0.25s; }
-        .tiktok-link:hover svg { fill: #888; }
+        .feature-card h3 { font-size: 0.95rem; font-weight: 600; color: #fff; margin-bottom: 6px; }
+        .feature-card p { font-size: 0.82rem; color: var(--muted); line-height: 1.55; }
 
-        /* Free vs Pro table */
-        .compare-section {
-            margin-top: 60px;
+        /* ── Screenshots / Mockup ── */
+        .mockup-section {
+            width: 100%;
+            margin-bottom: 60px;
+            text-align: center;
+        }
+        .mockup-frame {
+            width: 100%;
+            max-width: 760px;
+            margin: 0 auto;
+            background: var(--surface2);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            overflow: hidden;
+            box-shadow: 0 12px 40px rgba(0,0,0,0.4);
+        }
+        .mockup-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 12px 16px;
+            background: var(--surface);
+            border-bottom: 1px solid var(--border);
+        }
+        .mockup-dot {
+            width: 10px; height: 10px; border-radius: 50%;
+        }
+        .mockup-dot:nth-child(1) { background: #ef4444; }
+        .mockup-dot:nth-child(2) { background: #eab308; }
+        .mockup-dot:nth-child(3) { background: #22c55e; }
+        .mockup-title {
+            font-size: 0.75rem;
+            color: var(--muted);
+            margin-left: 10px;
+        }
+        .mockup-body {
+            padding: 24px;
+            min-height: 300px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 16px;
+        }
+        .mockup-body .m-row {
+            display: flex;
+            gap: 12px;
+            width: 100%;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+        .m-card {
+            flex: 1;
+            min-width: 160px;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 16px;
             text-align: left;
+        }
+        .m-card .m-bar {
+            height: 8px;
+            background: var(--border2);
+            border-radius: 4px;
+            margin-bottom: 6px;
+        }
+        .m-card .m-bar.accent { background: var(--accent-dim); width: 70%; }
+        .m-card .m-bar.warn { background: rgba(239,68,68,0.15); width: 40%; }
+        .m-card .m-label { font-size: 0.68rem; color: var(--muted); }
+        .m-card .m-value { font-size: 1.2rem; font-weight: 700; color: #fff; }
+        .m-card .m-value.up { color: var(--accent); }
+        .m-card .m-value.dn { color: var(--danger); }
+
+        /* ── What's New / Changelog ── */
+        .changelog {
+            width: 100%;
+            margin-bottom: 60px;
+        }
+        .changelog-card {
+            background: var(--surface2);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            padding: 28px;
+            margin-bottom: 12px;
+            transition: border-color 0.2s;
+        }
+        .changelog-card:hover { border-color: var(--border3); }
+        .changelog-card .tag {
+            display: inline-block;
+            font-size: 0.7rem;
+            font-weight: 600;
+            padding: 2px 10px;
+            border-radius: 100px;
+            margin-bottom: 10px;
+        }
+        .tag-new { background: rgba(0,201,167,0.12); color: var(--accent); }
+        .tag-fix { background: rgba(234,179,8,0.12); color: #eab308; }
+        .tag-improve { background: rgba(59,130,246,0.12); color: #3b82f6; }
+        .tag-pro { background: rgba(234,179,8,0.08); color: #eab308; border: 1px solid rgba(234,179,8,0.2); }
+        .changelog-card h3 {
+            font-size: 1.05rem;
+            font-weight: 600;
+            color: #fff;
+            margin-bottom: 4px;
+        }
+        .changelog-card .date {
+            font-size: 0.75rem;
+            color: var(--muted);
+            margin-bottom: 10px;
+        }
+        .changelog-card ul { padding-left: 18px; }
+        .changelog-card li {
+            font-size: 0.85rem;
+            color: var(--muted2);
+            line-height: 1.6;
+            margin-bottom: 3px;
+        }
+        .changelog-card li strong { color: var(--text2); }
+
+        /* ── FAQ ── */
+        .faq-section {
+            width: 100%;
+            margin-bottom: 60px;
+        }
+        .faq-item {
+            background: var(--surface2);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 20px 24px;
+            margin-bottom: 8px;
+            cursor: pointer;
+            transition: border-color 0.2s;
+        }
+        .faq-item:hover { border-color: var(--border3); }
+        .faq-q {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 0.92rem;
+            font-weight: 500;
+            color: #fff;
+        }
+        .faq-q .arrow {
+            font-size: 0.8rem;
+            color: var(--muted);
+            transition: transform 0.2s;
+        }
+        .faq-item.open .faq-q .arrow { transform: rotate(180deg); }
+        .faq-a {
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height 0.25s ease, padding 0.25s ease;
+            font-size: 0.85rem;
+            color: var(--muted);
+            line-height: 1.6;
+        }
+        .faq-item.open .faq-a {
+            max-height: 300px;
+            padding-top: 12px;
+        }
+        .faq-a a { color: var(--accent); }
+
+        /* ── CTA Banner ── */
+        .cta-banner {
+            width: 100%;
+            background: linear-gradient(135deg, var(--accent-dim) 0%, rgba(0,201,167,0.02) 100%);
+            border: 1px solid rgba(0,201,167,0.12);
+            border-radius: var(--radius-lg);
+            padding: 40px;
+            text-align: center;
+            margin-bottom: 40px;
+        }
+        .cta-banner h2 { font-size: 1.6rem; font-weight: 600; color: #fff; margin-bottom: 8px; }
+        .cta-banner p { font-size: 0.9rem; color: var(--muted); margin-bottom: 20px; }
+
+        /* ── Free vs Pro ── */
+        .compare-section {
             width: 100%;
             max-width: 700px;
-        }
-        .compare-section h2 {
-            font-size: 1.8rem;
-            color: var(--text);
-            margin-bottom: 25px;
-            text-align: center;
+            margin-bottom: 60px;
         }
         .compare-table {
             width: 100%;
             border-collapse: collapse;
             font-size: 0.9rem;
-            background: var(--surface);
+            background: var(--surface2);
             border: 1px solid var(--border);
-            border-radius: var(--radius);
+            border-radius: var(--radius-lg);
             overflow: hidden;
         }
         .compare-table th, .compare-table td {
@@ -268,100 +468,320 @@
             font-weight: 600;
             font-size: 1rem;
         }
+        .compare-table tr:last-child td { border-bottom: none; }
         .compare-table td:first-child { font-weight: 500; }
         .check { color: var(--accent); }
         .cross { color: var(--danger); }
 
-        /* Help section */
+        /* ── Help / Docs ── */
         .help-section {
-            margin-top: 70px;
-            text-align: left;
             width: 100%;
             max-width: 700px;
-        }
-        .help-section h2 {
-            font-size: 1.8rem;
-            color: var(--text);
-            margin-bottom: 30px;
-            text-align: center;
+            margin-bottom: 60px;
         }
         .help-card {
-            background: var(--surface);
+            background: var(--surface2);
             border: 1px solid var(--border);
-            border-radius: var(--radius);
+            border-radius: var(--radius-lg);
             padding: 25px;
-            margin-bottom: 18px;
+            margin-bottom: 14px;
             transition: border-color 0.2s;
         }
-        .help-card:hover { border-color: rgba(255,255,255,0.08); }
-        .help-card h3 { color: var(--accent); margin-bottom: 12px; font-size: 1.1rem; }
-        .help-card p, .help-card li { color: var(--muted); font-size: 0.9rem; line-height: 1.6; }
-        .help-card ul { padding-left: 20px; margin: 10px 0; }
-        .help-card ol { padding-left: 20px; margin: 10px 0; }
-        .help-card code { background: rgba(255,255,255,0.04); padding: 2px 6px; border-radius: 4px; font-size: 0.85rem; color: var(--text); }
+        .help-card:hover { border-color: var(--border3); }
+        .help-card h3 { color: var(--accent); margin-bottom: 10px; font-size: 1.05rem; }
+        .help-card p, .help-card li { color: var(--muted); font-size: 0.85rem; line-height: 1.6; }
+        .help-card ul, .help-card ol { padding-left: 20px; margin: 8px 0; }
+        .help-card code { background: rgba(255,255,255,0.04); padding: 2px 6px; border-radius: 4px; font-size: 0.82rem; color: var(--text); }
+
+        footer {
+            padding: 40px 24px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 28px;
+            justify-content: center;
+            align-items: center;
+            font-size: 0.76rem;
+            color: #444;
+            border-top: 1px solid var(--border);
+            max-width: 860px;
+            margin: 0 auto;
+        }
+        footer a { color: #555; text-decoration: none; transition: color 0.25s; }
+        footer a:hover { color: var(--muted); }
+        .social-link { display: inline-flex; align-items: center; gap: 6px; }
+        .social-link svg { width: 16px; height: 16px; fill: #555; transition: fill 0.25s; }
+        .social-link:hover svg { fill: #888; }
+        .footer-links { display: flex; gap: 20px; flex-wrap: wrap; justify-content: center; }
 
         @media (max-width: 640px) {
-            h1 { font-size: 2.2rem; }
-            .container { padding: 40px 16px 30px; }
-            .nav { gap: 18px; margin-bottom: 50px; }
+            h1 { font-size: 2.4rem; }
+            .container { padding: 24px 16px; }
+            .nav { gap: 16px; margin-bottom: 40px; flex-wrap: wrap; }
+            .stats-bar { gap: 20px; padding: 16px 20px; }
+            .features-grid { grid-template-columns: 1fr; }
             .dl-group { flex-direction: column; align-items: center; }
-            .divider { display: none; }
+            .cta-banner { padding: 24px; }
+            .compare-table th, .compare-table td { padding: 10px 12px; font-size: 0.8rem; }
         }
+        .fade-in { animation: fadeUp 0.6s ease both; }
+        @keyframes fadeUp { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: translateY(0); } }
+        .delay-1 { animation-delay: 0.1s; }
+        .delay-2 { animation-delay: 0.2s; }
+        .delay-3 { animation-delay: 0.3s; }
     </style>
     <script src="https://gumroad.com/js/gumroad.js"></script>
 </head>
 <body>
     <div class="container">
         <nav class="nav">
-            <a href="https://www.tiktok.com/@tradermoneyofficial" target="_blank" rel="noopener" class="tiktok-link">
+            <a href="#features">Features</a>
+            <a href="#updates">Updates</a>
+            <a href="#pricing">Pricing</a>
+            <a href="#docs">Docs</a>
+            <a href="https://www.tiktok.com/@tradermoneyofficial" target="_blank" rel="noopener" class="social-link">
                 <svg viewBox="0 0 24 24"><path d="M12.525.02c1.31-.02 2.61-.01 3.91-.02.08 1.53.63 3.09 1.75 4.17 1.12 1.11 2.7 1.62 4.24 1.79v4.03c-1.44-.05-2.89-.35-4.2-.97-.57-.26-1.1-.59-1.62-.93-.01 2.92.01 5.84-.02 8.75-.08 1.4-.54 2.79-1.35 3.94-1.31 1.92-3.58 3.17-5.91 3.21-1.43.08-2.86-.31-4.08-1.03-2.02-1.19-3.44-3.37-3.65-5.71-.02-.5-.03-1-.01-1.49.18-1.9 1.12-3.72 2.58-4.96 1.66-1.44 3.98-2.13 6.15-1.72.02 1.48-.04 2.96-.04 4.44-.99-.32-2.15-.23-3.02.37-.63.41-1.11 1.04-1.36 1.75-.21.51-.15 1.07-.14 1.61.24 1.64 1.82 3.02 3.5 2.87 1.12-.01 2.19-.66 2.77-1.61.19-.33.4-.67.41-1.06.1-1.79.06-3.57.07-5.36.01-4.03-.01-8.05.02-12.07z"/></svg>
                 TikTok
             </a>
         </nav>
 
-        <div class="logo"><span>TM</span></div>
+        <div class="logo fade-in"><span>TM</span></div>
 
-        <h1>Trade with <em>conviction</em></h1>
-        <p class="subtitle">
+        <h1 class="fade-in delay-1">Trade with <em>conviction</em></h1>
+        <p class="subtitle fade-in delay-2">
             An institutional-grade automated trading terminal.
             Multi-broker. AI-powered signals. Zero fluff.
         </p>
 
-        <div class="version-pill">
+        <div class="version-pill fade-in delay-2">
             <span class="dot"></span>
             <span>Latest <strong id="version-number">v—</strong></span>
         </div>
 
-        <div class="dl-section">
+        <div class="dl-section fade-in delay-3">
             <div class="dl-group">
                 <a href="https://github.com/shafayrich/tradermoney/releases/latest/download/TraderMoney_macOS_Intel.tar.gz" class="dl-btn primary">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v10m0 0l-4-4m4 4l4-4M5 19h14"/></svg>
                     Download for macOS
                 </a>
-                <p class="macos-note">Works on Intel Macs &amp; Apple Silicon via Rosetta 2</p>
             </div>
             <div class="dl-group">
                 <a href="https://github.com/shafayrich/tradermoney/releases/latest/download/TraderMoney_Windows.zip" class="dl-btn">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v10m0 0l-4-4m4 4l4-4M5 19h14"/></svg>
                     Download for Windows
                 </a>
-                <span class="divider"></span>
-                <a class="gumroad-button" href="https://tradermoney.gumroad.com/l/ykaoov">Get Pro</a>
+                <a href="https://github.com/shafayrich/tradermoney/releases/latest/download/TraderMoney_macOS_AppleSilicon.tar.gz" class="dl-btn">
+                    Apple Silicon
+                </a>
+                <a class="gumroad-btn" href="https://tradermoney.gumroad.com/l/ykaoov">Get Pro</a>
+            </div>
+            <p class="macos-note">macOS builds work on Intel &amp; Apple Silicon (Rosetta 2). macOS 13+ / Windows 10+ required.</p>
+        </div>
+
+        <!-- Stats Bar -->
+        <div class="stats-bar fade-in delay-3">
+            <div class="stat-item"><div class="stat-number"><span class="accent">6</span></div><div class="stat-label">Brokers Supported</div></div>
+            <div class="stat-item"><div class="stat-number"><span class="accent">9</span></div><div class="stat-label">Indicators</div></div>
+            <div class="stat-item"><div class="stat-number"><span class="accent">10k+</span></div><div class="stat-label">Signals Generated</div></div>
+            <div class="stat-item"><div class="stat-number"><span class="accent">24/7</span></div><div class="stat-label">Uptime</div></div>
+        </div>
+
+        <!-- Features -->
+        <h2 class="section-title" id="features">Everything you need to trade</h2>
+        <p class="section-sub">Professional-grade tools. Consumer-grade simplicity.</p>
+        <div class="features-grid">
+            <div class="feature-card">
+                <div class="feature-icon" style="background:rgba(0,201,167,0.12);color:var(--accent);">🎯</div>
+                <h3>AI-Powered Signals</h3>
+                <p>9-indicator confirmation engine with AI confidence scoring. Every signal is weighted and scored before execution.</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon" style="background:rgba(59,130,246,0.12);color:#3b82f6;">🏦</div>
+                <h3>6-Broker Support</h3>
+                <p>Alpaca, IBKR, Tradier, Binance, Bybit, OKX. Paper trade or go live — the choice is yours.</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon" style="background:rgba(234,179,8,0.12);color:#eab308;">⚡</div>
+                <h3>Auto Trade</h3>
+                <p>Set it and forget it. ATR-based dynamic stops, bracket orders, and a kill switch for full risk control.</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon" style="background:rgba(239,68,68,0.12);color:#ef4444;">📊</div>
+                <h3>Live Monitoring</h3>
+                <p>Real-time ticker cards with signal badges, news headlines, event log, and portfolio-level backtest summaries.</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon" style="background:rgba(168,85,247,0.12);color:#a855f7;">🧠</div>
+                <h3>News Sentiment</h3>
+                <p>Live NewsAPI headlines analyzed by AI. Positive news boosts BUY confidence, negative news boosts SELL confidence.</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon" style="background:rgba(34,197,94,0.12);color:#22c55e;">🔄</div>
+                <h3>Custom Thesis Builder</h3>
+                <p>Design your own trading strategy. Toggle any indicator combination, set EMA periods, SL/TP %, and save as a named thesis.</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon" style="background:rgba(14,165,233,0.12);color:#0ea5e9;">📈</div>
+                <h3>Backtesting Suite</h3>
+                <p>Test any indicator configuration against historical data. Portfolio view with win rate, Sharpe ratio, profit factor, max drawdown.</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon" style="background:rgba(248,113,113,0.12);color:#f87171;">📱</div>
+                <h3>Telegram Alerts</h3>
+                <p>Get real-time signal alerts, trade notifications, and kill switch commands on your phone via Telegram.</p>
             </div>
         </div>
 
-        <div class="feature-strip">
-            <span class="f-chip"><strong>6</strong> brokers</span>
-            <span class="f-chip"><strong>9</strong> indicators</span>
-            <span class="f-chip"><strong>AI</strong> confidence scoring</span>
-            <span class="f-chip">Paper &amp; <strong>Live</strong></span>
-            <span class="f-chip"><strong>ATR</strong> dynamic stops</span>
-            <span class="f-chip"><strong>Short</strong> selling</span>
-            <span class="f-chip"><strong>Telegram</strong> alerts</span>
-            <span class="f-chip"><strong>Backtesting</strong></span>
-            <span class="f-chip">macOS &amp; <strong>Windows</strong></span>
+        <!-- Mockup -->
+        <div class="mockup-section fade-in">
+            <div class="mockup-frame">
+                <div class="mockup-header">
+                    <span class="mockup-dot"></span>
+                    <span class="mockup-dot"></span>
+                    <span class="mockup-dot"></span>
+                    <span class="mockup-title">TraderMoney — Monitor Tab</span>
+                </div>
+                <div class="mockup-body">
+                    <div class="m-row">
+                        <div class="m-card">
+                            <div class="m-label">Status</div>
+                            <div style="display:flex;align-items:center;gap:6px;margin:6px 0;">
+                                <span style="width:8px;height:8px;border-radius:50%;background:#22c55e;box-shadow:0 0 6px #22c55e88;"></span>
+                                <span style="font-weight:700;font-size:0.9rem;color:#22c55e;">RUNNING</span>
+                            </div>
+                            <div class="m-bar accent"></div>
+                            <div class="m-label">Broker · Mode · 3 Tickers</div>
+                        </div>
+                        <div class="m-card" style="min-width:100px;">
+                            <div class="m-label">Equity</div>
+                            <div class="m-value up">$12,450</div>
+                            <div class="m-label">P&amp;L</div>
+                            <div class="m-value up">+$320 (2.6%)</div>
+                        </div>
+                        <div class="m-card" style="min-width:100px;">
+                            <div class="m-label">Buying Power</div>
+                            <div class="m-value">$24,800</div>
+                            <div class="m-label">Open Positions</div>
+                            <div class="m-value">2</div>
+                        </div>
+                    </div>
+                    <div class="m-row">
+                        <div class="m-card">
+                            <div style="display:flex;justify-content:space-between;">
+                                <span style="font-weight:700;">AAPL</span>
+                                <span class="m-value up">$198.42 <span style="font-size:0.75rem;">+1.2%</span></span>
+                            </div>
+                            <div style="display:flex;align-items:center;gap:8px;margin:8px 0;padding:6px 10px;background:rgba(0,201,167,0.12);border-radius:6px;border-left:3px solid #00c9a7;">
+                                <span style="font-weight:800;font-size:1rem;color:#00c9a7;">BUY</span>
+                                <span style="font-size:0.7rem;color:var(--muted);">82% confidence</span>
+                                <span style="margin-left:auto;font-size:0.75rem;color:var(--accent);">↗ UP</span>
+                            </div>
+                            <div style="font-size:0.72rem;color:var(--muted);">EMA(9/50) bullish crossover · RSI 62 · Volume 1.8x avg</div>
+                            <div style="font-size:0.72rem;color:var(--muted);margin-top:4px;">📰 Apple unveils new AI features at WWDC</div>
+                        </div>
+                        <div class="m-card">
+                            <div style="display:flex;justify-content:space-between;">
+                                <span style="font-weight:700;">TSLA</span>
+                                <span class="m-value dn">$245.10 <span style="font-size:0.75rem;">-0.8%</span></span>
+                            </div>
+                            <div style="display:flex;align-items:center;gap:8px;margin:8px 0;padding:6px 10px;background:rgba(239,68,68,0.12);border-radius:6px;border-left:3px solid #ef4444;">
+                                <span style="font-weight:800;font-size:1rem;color:#ef4444;">SELL</span>
+                                <span style="font-size:0.7rem;color:var(--muted);">67% confidence</span>
+                                <span style="margin-left:auto;font-size:0.75rem;color:var(--danger);">↘ DOWN</span>
+                            </div>
+                            <div style="font-size:0.72rem;color:var(--muted);">EMA bearish cross · RSI 72 overbought · ADX 28</div>
+                            <div style="font-size:0.72rem;color:var(--muted);margin-top:4px;">📰 TSLA delivery numbers miss estimates</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
         </div>
 
-        <div class="compare-section">
-            <h2>Free vs Pro</h2>
+        <!-- What's New / Changelog -->
+        <div class="changelog" id="updates">
+            <h2 class="section-title">What's New</h2>
+            <p class="section-sub">The latest updates to TraderMoney.</p>
+
+            <div class="changelog-card">
+                <span class="tag tag-new">NEW</span>
+                <h3>v5.0.3 — Live News Strip &amp; Smoother Refresh</h3>
+                <div class="date">June 5, 2026</div>
+                <ul>
+                    <li><strong>Live News Strip:</strong> Latest 2 headlines now visible directly on each monitor card — no need to click expand.</li>
+                    <li><strong>Smoother Monitor:</strong> Cards no longer flash "Loading..." every 5 seconds. Existing data stays visible until fresh data arrives.</li>
+                    <li><strong>Fixed:</strong> Stray JavaScript brace that broke all page interactivity in v5.0.1.</li>
+                </ul>
+            </div>
+
+            <div class="changelog-card">
+                <span class="tag tag-fix">FIX</span>
+                <h3>v5.0.2 — Emergency Patch</h3>
+                <div class="date">June 5, 2026</div>
+                <ul>
+                    <li><strong>Fixed:</strong> JavaScript error on page load caused by a leftover closing brace in the monitor refresh function. All buttons, inputs, and charts now work correctly.</li>
+                </ul>
+            </div>
+
+            <div class="changelog-card">
+                <span class="tag tag-improve">IMPROVEMENT</span>
+                <h3>v5.0.1 — Faster Monitor &amp; Portfolio Backtest</h3>
+                <div class="date">June 4, 2026</div>
+                <ul>
+                    <li><strong>Instant Monitor:</strong> Monitor tab now shows running/stopped status immediately without waiting for slow yfinance data.</li>
+                    <li><strong>Portfolio Summary:</strong> Backtest now shows win rate, profit factor, max drawdown %, Sharpe ratio, and ROI at the top.</li>
+                    <li><strong>Simplified Cards:</strong> Removed crowded indicator grid — replaced with big signal badges, trend arrows, and rationale.</li>
+                </ul>
+            </div>
+
+            <div class="changelog-card">
+                <span class="tag tag-new">NEW</span>
+                <h3>v5.0.0 — Major Redesign</h3>
+                <div class="date">June 2, 2026</div>
+                <ul>
+                    <li><strong>News Sentiment Engine:</strong> Live headlines from NewsAPI analyzed by AI. Positive news boosts BUY confidence, negative boosts SELL.</li>
+                    <li><strong>Custom Thesis Builder:</strong> Save unlimited indicator configurations with custom EMA periods, SL/TP %, and toggle any of 9 indicators.</li>
+                    <li><strong>Monitor Tab:</strong> Always visible with clear running/stopped status. Shows signal badge, trend direction, and rationale per ticker.</li>
+                    <li><strong>Help Search:</strong> Press Cmd+F (Ctrl+F) to search all documentation instantly.</li>
+                    <li><strong>Reload Chart:</strong> One-click TradingView chart reload button.</li>
+                    <li><strong>Telegram Ticker Alerts:</strong> Bot notifies you when a new symbol is added.</li>
+                </ul>
+            </div>
+
+            <div class="changelog-card">
+                <span class="tag tag-pro">PRO</span>
+                <h3>v4.0.7 — Thesis Builder Expansion</h3>
+                <div class="date">May 28, 2026</div>
+                <ul>
+                    <li>Added EMA Fast/Slow, Stop Loss %, and Take Profit % to Thesis Builder.</li>
+                    <li>News sentiment now boosts confidence in both directions (was suppressor-only).</li>
+                </ul>
+            </div>
+
+            <div class="changelog-card">
+                <span class="tag tag-pro">PRO</span>
+                <h3>v4.0.3 — News Sentiment Engine</h3>
+                <div class="date">May 25, 2026</div>
+                <ul>
+                    <li>First release of the AI news sentiment engine. News headlines fetched and analyzed for market impact.</li>
+                </ul>
+            </div>
+        </div>
+
+        <!-- CTA -->
+        <div class="cta-banner fade-in">
+            <h2>Ready to trade with conviction?</h2>
+            <p>Download free or upgrade to Pro. No credit card required to start.</p>
+            <div class="dl-group">
+                <a href="https://github.com/shafayrich/tradermoney/releases/latest/download/TraderMoney_macOS_Intel.tar.gz" class="dl-btn primary">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v10m0 0l-4-4m4 4l4-4M5 19h14"/></svg>
+                    Download Free
+                </a>
+                <a class="gumroad-btn" href="https://tradermoney.gumroad.com/l/ykaoov">Get Pro $25/mo</a>
+            </div>
+        </div>
+
+        <!-- Pricing -->
+        <div class="compare-section" id="pricing">
+            <h2 class="section-title">Free vs Pro</h2>
             <table class="compare-table">
                 <tr><th>Feature</th><th>Community (Free)</th><th>Pro</th></tr>
                 <tr><td>Auto Trade</td><td><span class="cross">&#10005;</span></td><td><span class="check">&#10003;</span></td></tr>
@@ -372,49 +792,85 @@
                 <tr><td>Bracket Orders</td><td><span class="cross">&#10005;</span></td><td><span class="check">&#10003;</span></td></tr>
                 <tr><td>Short Selling</td><td><span class="cross">&#10005;</span></td><td><span class="check">&#10003;</span></td></tr>
                 <tr><td>Telegram Alerts</td><td><span class="cross">&#10005;</span></td><td><span class="check">&#10003;</span></td></tr>
+                <tr><td>News Sentiment</td><td><span class="cross">&#10005;</span></td><td><span class="check">&#10003;</span></td></tr>
+                <tr><td>Thesis Builder</td><td><span class="cross">&#10005;</span></td><td><span class="check">&#10003;</span></td></tr>
                 <tr><td>Backtesting</td><td><span class="check">&#10003;</span></td><td><span class="check">&#10003;</span></td></tr>
+                <tr><td>TradingView Charts</td><td><span class="check">&#10003;</span></td><td><span class="check">&#10003;</span></td></tr>
                 <tr><td>Price</td><td><strong>Free</strong></td><td><strong>$25/month</strong></td></tr>
             </table>
         </div>
 
-        <div class="help-section">
-            <h2>Documentation &amp; Help</h2>
+        <!-- FAQ -->
+        <div class="faq-section">
+            <h2 class="section-title">Frequently Asked Questions</h2>
+            <div class="faq-item" onclick="this.classList.toggle('open')">
+                <div class="faq-q">Is there a free trial of Pro? <span class="arrow">▾</span></div>
+                <div class="faq-a">There is no free trial of Pro, but the free tier lets you test the full workflow with 1 ticker on Alpaca paper trading. All features (signals, monitors, charts, backtesting) work in free mode so you can evaluate before upgrading.</div>
+            </div>
+            <div class="faq-item" onclick="this.classList.toggle('open')">
+                <div class="faq-q">What brokers are supported? <span class="arrow">▾</span></div>
+                <div class="faq-a">Alpaca, Interactive Brokers, Tradier, Binance, Bybit, and OKX. Free tier limits you to Alpaca paper trading. Pro unlocks all brokers with both paper and live trading modes.</div>
+            </div>
+            <div class="faq-item" onclick="this.classList.toggle('open')">
+                <div class="faq-q">Do I need coding experience? <span class="arrow">▾</span></div>
+                <div class="faq-a">No. TraderMoney is a desktop app with a visual interface. Select your indicators, set your tickers, and start the bot. No Python or trading API knowledge required.</div>
+            </div>
+            <div class="faq-item" onclick="this.classList.toggle('open')">
+                <div class="faq-q">How does the AI confidence scoring work? <span class="arrow">▾</span></div>
+                <div class="faq-a">Each active indicator contributes a weighted confidence score (0.05-0.08 per indicator). The base EMA crossover generates a signal, then every confirming indicator adds to confidence. News sentiment from NewsAPI is analyzed by AI (via OpenRouter) and can add up to ±20% confidence depending on sentiment polarity.</div>
+            </div>
+            <div class="faq-item" onclick="this.classList.toggle('open')">
+                <div class="faq-q">Can I run this on a VPS / headless server? <span class="arrow">▾</span></div>
+                <div class="faq-a">Yes. The app runs as a Flask web server (port 5050). You can install it on any Linux/macOS VPS and access the UI from your browser. The pywebview native window is optional.</div>
+            </div>
+            <div class="faq-item" onclick="this.classList.toggle('open')">
+                <div class="faq-q">Is my API key safe? <span class="arrow">▾</span></div>
+                <div class="faq-a">All credentials are stored in an encrypted local file using Fernet (symmetric encryption). They are never sent to any cloud server or third party. The app runs entirely on your machine.</div>
+            </div>
+            <div class="faq-item" onclick="this.classList.toggle('open')">
+                <div class="faq-q">What are the system requirements? <span class="arrow">▾</span></div>
+                <div class="faq-a">macOS 13+ (Ventura) or Windows 10+. Apple Silicon Macs supported via Rosetta 2 (native build coming soon). 4GB RAM recommended. Internet connection required for market data and AI analysis.</div>
+            </div>
+        </div>
+
+        <!-- Documentation -->
+        <div class="help-section" id="docs">
+            <h2 class="section-title">Getting Started</h2>
 
             <div class="help-card">
-                <h3>Getting Started</h3>
+                <h3>Quick Start</h3>
                 <ol>
                     <li>Download the app for your platform.</li>
-                    <li>Launch <strong>TraderMoney</strong>. The free tier allows Signal‑Only mode on Alpaca paper.</li>
+                    <li>Launch TraderMoney. The free tier allows Signal-Only mode on Alpaca paper.</li>
                     <li>Paste your Alpaca API Key &amp; Secret (get them from <a href="https://alpaca.markets" style="color:var(--accent)">alpaca.markets</a>). Enable Paper Trading.</li>
-                    <li>Enter your tickers (e.g., <code>AAPL, TSLA:2, MSFT</code>). Quantities after colon set per‑symbol size.</li>
-                    <li>Click <strong>Start Bot</strong>. Signals will appear in the Signals tab.</li>
+                    <li>Enter your tickers (e.g., <code>AAPL:10, TSLA:5</code>). Quantities after colon set per-symbol size.</li>
+                    <li>Click <strong>Start Bot</strong>. Signals appear in the Monitor tab.</li>
                 </ol>
             </div>
 
             <div class="help-card">
                 <h3>Broker Setup</h3>
                 <ul>
-                    <li><strong>Alpaca:</strong> API Key + Secret. Check &ldquo;Paper Trading&rdquo; for simulation. Live requires a funded account.</li>
+                    <li><strong>Alpaca:</strong> API Key + Secret. Check "Paper Trading" for simulation. Live requires a funded account.</li>
                     <li><strong>Interactive Brokers:</strong> TWS or IB Gateway must be running with API enabled. Default port: 7497 (paper) / 7496 (live).</li>
                     <li><strong>Tradier:</strong> Access token from developer.tradier.com. Use Sandbox for testing.</li>
                     <li><strong>Binance:</strong> API Key + Secret. Testnet available via checkbox.</li>
                     <li><strong>Bybit:</strong> API Key + Secret. Uses unified account. Testnet supported.</li>
                     <li><strong>OKX:</strong> API Key + Secret + Passphrase. Demo trading checkbox.</li>
                 </ul>
-                <p>All credentials are encrypted locally with Fernet (safe‑write). No cloud storage.</p>
             </div>
 
             <div class="help-card">
-                <h3>Indicators &amp; Confirmation Logic</h3>
-                <p>The engine runs EMA(9,50) crossover and confirms with up to 9 additional filters. Each toggleable indicator adds confidence (0.05–0.08). Only crossed‑above signals with all active filters passing generate a BUY.</p>
+                <h3>Indicators &amp; Strategy</h3>
+                <p>EMA(9,50) crossover is the core signal. Confirm with any combination of:</p>
                 <ul>
                     <li><strong>RSI:</strong> Long requires RSI &ge; 30; short requires RSI &le; 70.</li>
-                    <li><strong>MACD:</strong> Long needs MACD &gt; Signal line; short the opposite.</li>
+                    <li><strong>MACD:</strong> Long needs MACD &gt; Signal; short the opposite.</li>
                     <li><strong>VWAP:</strong> Price &gt; VWAP for long, &lt; VWAP for short.</li>
-                    <li><strong>Bollinger Bands:</strong> Price above lower band (99%) for long; below upper for short.</li>
+                    <li><strong>Bollinger Bands:</strong> Price above lower band for long; below upper for short.</li>
                     <li><strong>ADX:</strong> Must be &ge; 20 to indicate trend strength.</li>
-                    <li><strong>Volume:</strong> Current volume &ge; 1.5&times; 20‑period average.</li>
-                    <li><strong>SuperTrend:</strong> Trend must be up (1) for long, down (-1) for short.</li>
+                    <li><strong>Volume:</strong> Current volume &ge; 1.5&times; 20-period average.</li>
+                    <li><strong>SuperTrend:</strong> Trend must be up for long, down for short.</li>
                     <li><strong>Stochastic:</strong> %K &gt; %D and %K &lt; 80 for long; %K &lt; %D and %K &gt; 20 for short.</li>
                 </ul>
             </div>
@@ -422,43 +878,32 @@
             <div class="help-card">
                 <h3>Risk Management</h3>
                 <ul>
-                    <li><strong>ATR Stops:</strong> Dynamic stop‑loss = 2&times; ATR, take‑profit = 3&times; ATR. Adapts to volatility.</li>
+                    <li><strong>ATR Stops:</strong> Dynamic stop-loss = 2&times; ATR, take-profit = 3&times; ATR. Adapts to volatility.</li>
                     <li><strong>Bracket Orders:</strong> Native SL/TP on Alpaca; watchdog thread emulates them on other brokers.</li>
                     <li><strong>Kill Switch:</strong> Instantly closes all positions and stops the bot.</li>
-                    <li><strong>SL/TP Watchdog:</strong> For non‑Alpaca brokers, a background loop monitors price every 2 seconds and exits at fixed 2%/4% thresholds if bracket isn't supported natively.</li>
-                </ul>
-            </div>
-
-            <div class="help-card">
-                <h3>Backtesting</h3>
-                <p>Press <strong>Backtest All</strong> (or the button in the Backtest tab) to run historical signal generation on all your tickers. Choose the lookback days. Results show timestamps, indicator values, and confidence scores. Use it to tune your indicator combination before going live.</p>
-            </div>
-
-            <div class="help-card">
-                <h3>Tips &amp; Troubleshooting</h3>
-                <ul>
-                    <li><strong>No signals?</strong> Too many filters enabled. Try toggling SuperTrend or Stochastic off.</li>
-                    <li><strong>Free tier restrictions:</strong> Only 1 ticker, Alpaca paper, signal‑only, core indicators. Upgrade to Pro for full access.</li>
-                    <li><strong>Chart not loading?</strong> Ensure internet connection. The TradingView widget loads from CDN.</li>
-                    <li><strong>License not recognized?</strong> Verify your key at Gumroad. If valid, restart the app.</li>
+                    <li><strong>SL/TP Watchdog:</strong> Background loop monitors price every 2 seconds and exits at fixed thresholds if bracket isn't supported natively.</li>
                 </ul>
             </div>
         </div>
     </div>
 
     <footer>
-        <a href="https://www.tiktok.com/@tradermoneyofficial" target="_blank" rel="noopener" class="tiktok-link">
-            <svg viewBox="0 0 24 24"><path d="M12.525.02c1.31-.02 2.61-.01 3.91-.02.08 1.53.63 3.09 1.75 4.17 1.12 1.11 2.7 1.62 4.24 1.79v4.03c-1.44-.05-2.89-.35-4.2-.97-.57-.26-1.1-.59-1.62-.93-.01 2.92.01 5.84-.02 8.75-.08 1.4-.54 2.79-1.35 3.94-1.31 1.92-3.58 3.17-5.91 3.21-1.43.08-2.86-.31-4.08-1.03-2.02-1.19-3.44-3.37-3.65-5.71-.02-.5-.03-1-.01-1.49.18-1.9 1.12-3.72 2.58-4.96 1.66-1.44 3.98-2.13 6.15-1.72.02 1.48-.04 2.96-.04 4.44-.99-.32-2.15-.23-3.02.37-.63.41-1.11 1.04-1.36 1.75-.21.51-.15 1.07-.14 1.61.24 1.64 1.82 3.02 3.5 2.87 1.12-.01 2.19-.66 2.77-1.61.19-.33.4-.67.41-1.06.1-1.79.06-3.57.07-5.36.01-4.03-.01-8.05.02-12.07z"/></svg>
-            @tradermoneyofficial
-        </a>
-        <span style="color:#333;">&copy; 2026 TraderMoney</span>
+        <div class="footer-links">
+            <a href="https://www.tiktok.com/@tradermoneyofficial" target="_blank" rel="noopener" class="social-link">
+                <svg viewBox="0 0 24 24"><path d="M12.525.02c1.31-.02 2.61-.01 3.91-.02.08 1.53.63 3.09 1.75 4.17 1.12 1.11 2.7 1.62 4.24 1.79v4.03c-1.44-.05-2.89-.35-4.2-.97-.57-.26-1.1-.59-1.62-.93-.01 2.92.01 5.84-.02 8.75-.08 1.4-.54 2.79-1.35 3.94-1.31 1.92-3.58 3.17-5.91 3.21-1.43.08-2.86-.31-4.08-1.03-2.02-1.19-3.44-3.37-3.65-5.71-.02-.5-.03-1-.01-1.49.18-1.9 1.12-3.72 2.58-4.96 1.66-1.44 3.98-2.13 6.15-1.72.02 1.48-.04 2.96-.04 4.44-.99-.32-2.15-.23-3.02.37-.63.41-1.11 1.04-1.36 1.75-.21.51-.15 1.07-.14 1.61.24 1.64 1.82 3.02 3.5 2.87 1.12-.01 2.19-.66 2.77-1.61.19-.33.4-.67.41-1.06.1-1.79.06-3.57.07-5.36.01-4.03-.01-8.05.02-12.07z"/></svg>
+                @tradermoneyofficial
+            </a>
+            <a href="https://github.com/shafayrich/tradermoney" target="_blank" rel="noopener">GitHub</a>
+            <a href="https://tradermoney.gumroad.com/l/ykaoov" target="_blank" rel="noopener">Get Pro</a>
+        </div>
+        <span>&copy; 2026 TraderMoney</span>
     </footer>
 
     <script>
         fetch('https://raw.githubusercontent.com/shafayrich/tradermoney/main/version.json?t=' + Date.now())
             .then(r => r.json())
             .then(data => { document.getElementById('version-number').textContent = 'v' + data.latest_version; })
-            .catch(() => { document.getElementById('version-number').textContent = 'v3.0.1'; });
+            .catch(() => { document.getElementById('version-number').textContent = 'v5.0.3'; });
     </script>
 </body>
 </html>
