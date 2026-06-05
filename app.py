@@ -48,7 +48,7 @@ import webview
 from flask import Flask, Response, jsonify, request, send_file
 from flask_cors import CORS
 
-APP_VERSION = "5.0.0"
+APP_VERSION = "5.0.1"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # AI CONFIGURATION
@@ -2697,11 +2697,40 @@ def api_backtest():
         resp = {"results": results}
         if portfolio:
             exits_all = [t for t in all_trades if t["type"] == "exit"]
+            pnl_list = [t["pnl"] for t in exits_all]
+            wins = sum(1 for p in pnl_list if p > 0)
+            losses = sum(1 for p in pnl_list if p < 0)
+            win_rate = (wins / len(exits_all) * 100) if exits_all else 0
+            gross_profit = sum(p for p in pnl_list if p > 0)
+            gross_loss = abs(sum(p for p in pnl_list if p < 0))
+            pf = (gross_profit / gross_loss) if gross_loss > 0 else (999.99 if gross_profit > 0 else 0)
+            peak = float(initial_cash)
+            max_dd_pct = 0.0
+            running_eq = float(initial_cash)
+            for t in exits_all:
+                running_eq += t["pnl"]
+                if running_eq > peak:
+                    peak = running_eq
+                dd_pct = ((peak - running_eq) / peak * 100) if peak > 0 else 0
+                if dd_pct > max_dd_pct:
+                    max_dd_pct = dd_pct
+            total_roi = ((portfolio_equity - initial_cash) / initial_cash * 100) if initial_cash > 0 else 0
+            if len(pnl_list) >= 2:
+                import numpy as np
+                returns = [p / initial_cash for p in pnl_list]
+                sharpe = (float(np.mean(returns)) / float(np.std(returns, ddof=1)) * math.sqrt(252)) if float(np.std(returns, ddof=1)) > 0 else 0
+            else:
+                sharpe = 0
             resp["portfolio"] = {
                 "initial_cash": initial_cash,
                 "final_cash": round(portfolio_equity, 2),
-                "total_pnl": round(sum(t["pnl"] for t in exits_all), 2),
+                "total_pnl": round(sum(pnl_list), 2),
                 "total_trades": len(exits_all),
+                "win_rate": round(win_rate, 1),
+                "profit_factor": round(pf, 2),
+                "max_drawdown_pct": round(max_dd_pct, 1),
+                "roi": round(total_roi, 2),
+                "sharpe_ratio": round(sharpe, 2),
             }
         state.last_bt_data = resp
         db.insert_backtest(json.dumps({"config": config, "results": results}))
@@ -3291,7 +3320,7 @@ FRONTEND_HTML = r"""
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>TraderMoney 5.0.0</title>
+<title>TraderMoney 5.0.1</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root {
@@ -4250,7 +4279,7 @@ button.ghost:hover { box-shadow: none; }
     <span class="sidebar-logo">TM</span>
     <div class="sidebar-title">
       <span class="sidebar-name">TraderMoney</span>
-      <span class="sidebar-version">v5.0.0</span>
+      <span class="sidebar-version">v5.0.1</span>
     </div>
     <div class="sidebar-actions">
       <button onclick="location.reload()" title="Refresh"><svg class="icon" style="width:13px;height:13px;" viewBox="0 0 24 24"><path d="M17.65 6.35A7.958 7.958 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg></button>
@@ -4479,7 +4508,7 @@ button.ghost:hover { box-shadow: none; }
   <div id="tab-help" class="tab">
     <div class="hb">
       <input type="text" id="help-search" placeholder="Search help... (Cmd+F)" oninput="filterHelp()" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);font-size:.82rem;margin-bottom:10px;box-sizing:border-box;">
-      <h3>TraderMoney v5.0.0 – Complete Help Guide</h3>
+      <h3>TraderMoney v5.0.1 – Complete Help Guide</h3>
       <p style="font-size:.82rem;color:var(--muted);margin-top:-4px;">Your desktop algorithmic trading terminal. All features documented below.</p>
 
       <details>
@@ -4504,7 +4533,7 @@ button.ghost:hover { box-shadow: none; }
       </details>
 
       <details>
-        <summary style="cursor:pointer;color:var(--accent);font-weight:600;">What's New in v5.0.0</summary>
+        <summary style="cursor:pointer;color:var(--accent);font-weight:600;">What's New in v5.0.1</summary>
         <div style="padding:8px 0;font-size:.82rem;line-height:1.7;">
           <ul>
             <li><b>News Sentiment Engine</b> (Pro) – Live news headlines from NewsAPI analyzed by AI. Positive news boosts BUY confidence, negative news boosts SELL confidence. Updated every 5 minutes. Headlines shown in Monitor cards.</li>
@@ -5383,12 +5412,12 @@ async function refreshMonitor(){
     // status header
     const pct=s.equity?((s.pl/s.equity)*100).toFixed(2):'0.00';
     const eqCls=s.pl>=0?'up':'dn';
-    $('monitor-status').style.display=running?'':'none';
-    $('monitor-status').innerHTML=running?`
-      <div style="display:flex;flex-wrap:wrap;gap:var(--sp-md);align-items:center;justify-content:space-between;background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:var(--sp-md);margin-bottom:var(--sp-sm);">
+    $('monitor-status').style.display=botRunning?'':'none';
+    $('monitor-status').innerHTML=botRunning?`
+      <div style="display:flex;flex-wrap:wrap;gap:var(--sp-md);align-items:center;justify-content:space-between;background:var(--card);border:2px solid #22c55e;border-radius:var(--radius);padding:var(--sp-md);margin-bottom:var(--sp-sm);">
         <div style="display:flex;align-items:center;gap:var(--sp-sm);">
-          <span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#22c55e;box-shadow:0 0 8px #22c55e88;"></span>
-          <span style="font-weight:700;font-size:var(--fs-sm);">Running</span>
+          <span style="display:inline-block;width:14px;height:14px;border-radius:50%;background:#22c55e;box-shadow:0 0 10px #22c55e88;"></span>
+          <span style="font-weight:800;font-size:1.1rem;color:#22c55e;">RUNNING</span>
         </div>
         <div style="display:flex;gap:var(--sp-lg);font-size:var(--fs-xs);">
           <span style="color:var(--muted);">Broker</span><span style="font-weight:600;">${s.broker||'—'}</span>
@@ -5445,12 +5474,16 @@ async function refreshMonitor(){
     }else if(!$('monitor-signals').innerHTML.includes('LIVE SIGNAL FEED')){
       $('monitor-signals').style.display='none';
     }
-    // if bot not running, show stopped message
+    // if bot not running, show ultra-clear stopped state
     if(!botRunning){
       $('monitor-status').style.display='';
-      $('monitor-status').innerHTML=`<div style="display:flex;align-items:center;gap:var(--sp-sm);background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:var(--sp-md);margin-bottom:var(--sp-sm);"><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#ef4444;box-shadow:0 0 8px #ef444488;"></span><span style="font-weight:600;font-size:var(--fs-sm);">Bot Stopped</span><span style="color:var(--muted);font-size:var(--fs-xs);margin-left:6px;">Start the bot in the sidebar to begin monitoring.</span></div>`;
+      $('monitor-status').innerHTML=`<div style="display:flex;flex-direction:column;align-items:center;gap:12px;background:var(--card);border:2px solid #ef4444;border-radius:var(--radius);padding:24px;margin-bottom:var(--sp-sm);text-align:center;">
+        <span style="display:inline-block;width:16px;height:16px;border-radius:50%;background:#ef4444;box-shadow:0 0 12px #ef444488;"></span>
+        <span style="font-weight:800;font-size:1.4rem;color:#ef4444;">BOT STOPPED</span>
+        <span style="color:var(--muted);font-size:var(--fs-sm);">Configure your tickers in the sidebar and click <b>Start Bot</b> to begin monitoring.</span>
+      </div>`;
       $('monitor-signals').style.display='none';$('monitor-signals').innerHTML='';
-      $('monitor-content').innerHTML='<p class="ph" style="text-align:center;margin-top:40px;color:var(--muted);">Bot is not running. Configure your tickers and click <b>Start Bot</b> in the sidebar.</p>';
+      $('monitor-content').innerHTML='';
       return;
     }
     // batch-fetch news for all tickers (cached client-side)
@@ -5465,53 +5498,31 @@ async function refreshMonitor(){
     if(m.error){$('monitor-content').innerHTML=`<p class="ph" style="color:var(--danger)">${m.error}</p>`;return;}
     let html='';
     for(const sym in m.tickers){
-      if(m.tickers.hasOwnProperty(sym)){
+      if(!m.tickers.hasOwnProperty(sym))continue;
       const t=m.tickers[sym];
       if(t.error&&!t.price){html+=`<div class="monitor-card"><b>${sym}</b>: ${t.error}</div>`;continue;}
       const priceCls=t.change>=0?'up':'dn';
-      const posCls=t.position;
-      const confPct=t.confidence>0?' ('+(t.confidence*100).toFixed(0)+'%)':'';
-      const ind=t.indicators;
-      const emaCross=ind.ema_fast>0&&ind.ema_slow>0?(ind.ema_fast>ind.ema_slow?'Bullish Crossover':'Bearish Crossover'):'—';
-      const emaCrossColor=ind.ema_fast>ind.ema_slow?'var(--accent)':'var(--danger)';
-      const trdLabel=ind.ema_fast>0?`<span style="color:${t.trend_dir==='up'?'var(--accent)':t.trend_dir==='down'?'var(--danger)':'var(--muted)'}">${_trdArrow(t.trend_dir)} ${t.trend_dir.toUpperCase()}</span>`:'—';
-      const bbRange=ind.bb_upper>ind.bb_lower?`<span style="color:var(--muted)">$${ind.bb_lower}</span> – <span style="color:var(--muted)">$${ind.bb_upper}</span>`:'—';
-      const rsiColor=ind.rsi>=70?'var(--danger)':ind.rsi<=30?'var(--accent)':'var(--text)';
-      const macdColor=ind.macd_label==='Bullish'?'var(--accent)':'var(--danger)';
-      const adxColor=ind.adx>=25?'var(--accent)':'var(--muted)';
+      const sigColor=t.signal==='BUY'?'#00c9a7':t.signal==='SELL'?'#ef4444':'var(--muted)';
+      const sigBg=t.signal==='BUY'?'rgba(0,201,167,0.12)':t.signal==='SELL'?'rgba(239,68,68,0.12)':'transparent';
       html+=`<div class="monitor-card">
         <div class="monitor-card-header">
-          <span class="monitor-card-sym">${sym} <span class="monitor-card-pos ${posCls}">${t.position}${t.quantity>0?' ('+t.quantity+')':''}</span></span>
-          <span class="monitor-card-price ${priceCls}">$${t.price} <span style="font-size:var(--fs-xs);font-weight:400;">${t.change>=0?'+':''}${t.change} (${t.change_pct>=0?'+':''}${t.change_pct}%)</span></span>
+          <span class="monitor-card-sym">${sym} <span class="monitor-card-pos ${t.position}">${t.position}${t.quantity>0?' ('+t.quantity+')':''}</span></span>
+          <span class="monitor-card-price ${priceCls}" style="font-size:1.2rem;">$${t.price} <span style="font-size:var(--fs-xs);font-weight:400;">${t.change>=0?'+':''}${t.change} (${t.change_pct>=0?'+':''}${t.change_pct}%)</span></span>
         </div>
-        <div class="monitor-card-body">
-          <div class="row"><span class="label">Signal</span><span class="value" style="font-weight:700;${t.signal==='BUY'?'color:var(--accent)':t.signal==='SELL'?'color:var(--danger)':''}">${t.signal||'—'}${confPct}</span></div>
-          <div class="row"><span class="label">Trend</span><span class="value">${trdLabel}</span></div>
-          <div class="row"><span class="label">EMA ${_ind(ind.ema_fast)} / ${_ind(ind.ema_slow)}</span><span class="value" style="color:${emaCrossColor};font-weight:600;">${emaCross}</span></div>
-          <div class="row"><span class="label">Rationale</span><span class="value" style="font-size:var(--fs-xs)">${t.rationale||'—'}</span></div>
-          <hr style="border:none;border-top:1px solid var(--border);margin:6px 0;">
-          <div style="font-size:var(--fs-xs);font-weight:600;color:var(--muted);margin-bottom:4px;">INDICATORS</div>
-          <div class="row"><span class="label">RSI <span style="color:var(--muted);font-weight:400;">(14)</span></span><span class="value" style="color:${rsiColor}">${_ind(ind.rsi)} <span style="color:var(--muted);font-weight:400;">${ind.rsi_label}</span></span></div>
-          <div class="row"><span class="label">MACD <span style="color:var(--muted);font-weight:400;">(12/26/9)</span></span><span class="value" style="color:${macdColor}">${_ind(ind.macd)} <span style="color:var(--muted);font-weight:400;">${ind.macd_label}</span></span></div>
-          <div class="row"><span class="label">ADX <span style="color:var(--muted);font-weight:400;">(14)</span></span><span class="value" style="color:${adxColor}">${_ind(ind.adx)} <span style="color:var(--muted);font-weight:400;">${ind.adx_label}</span></span></div>
-          <div class="row"><span class="label">Bollinger Bands</span><span class="value" style="font-size:var(--fs-xs)">${bbRange} <span style="color:var(--muted)">· ${ind.bb_pos_pct}% · ${ind.bb_label}</span></span></div>
-          <div class="row"><span class="label">VWAP</span><span class="value">${_ind(ind.vwap)}</span></div>
-          <div class="row"><span class="label">ATR</span><span class="value">${_ind(ind.atr)}</span></div>
-          <hr style="border:none;border-top:1px solid var(--border);margin:6px 0;">
-          <div style="font-size:var(--fs-xs);color:var(--muted);line-height:1.5;padding:4px 6px;background:var(--glass);border-radius:4px;">
-            <b style="font-size:11px;">Quick Guide</b><br>
-            <b>RSI</b> → Below 30 = oversold (may bounce up) &nbsp;|&nbsp; Above 70 = overbought (may drop)<br>
-            <b>MACD</b> → Bullish = momentum up &nbsp;|&nbsp; Bearish = momentum down<br>
-            <b>ADX</b> → 25+ = strong trend &nbsp;|&nbsp; Below 20 = weak / sideways<br>
-            <b>BB</b> → Price near upper band = extended up &nbsp;|&nbsp; Near lower band = extended down
-          </div>
-          <details style="margin-top:6px;">
-            <summary style="font-size:var(--fs-xs);color:var(--muted);cursor:pointer;">📰 News</summary>
+        <div style="display:flex;align-items:center;gap:10px;padding:8px 12px;margin-bottom:8px;background:${sigBg};border-radius:8px;border-left:3px solid ${sigColor};">
+          <span style="font-weight:800;font-size:1.1rem;color:${sigColor};">${t.signal||'—'}</span>
+          ${t.confidence>0?`<span style="font-size:var(--fs-xs);color:var(--muted);">${(t.confidence*100).toFixed(0)}% confidence</span>`:''}
+          <span style="margin-left:auto;font-size:var(--fs-xs);color:${t.trend_dir==='up'?'var(--accent)':t.trend_dir==='down'?'var(--danger)':'var(--muted)'};">${_trdArrow(t.trend_dir)} ${t.trend_dir.toUpperCase()}</span>
+        </div>
+        <div style="font-size:var(--fs-xs);color:var(--muted);padding:0 12px 8px;">${t.rationale||''}</div>
+        <div style="display:flex;gap:6px;padding:0 12px 8px;">
+          <details style="flex:1;">
+            <summary style="font-size:var(--fs-xs);color:var(--muted);cursor:pointer;padding:3px 6px;background:var(--glass);border-radius:4px;">📰 News</summary>
             <div style="margin-top:4px;font-size:var(--fs-xs);" id="news-${sym}">${window._newsCache&&window._newsCache[sym]?window._newsCache[sym].articles.slice(0,3).map(a=>`<div style="padding:3px 0;border-bottom:1px solid var(--border);"><a href="${a.url}" target="_blank" style="color:var(--accent);text-decoration:none;">${a.title}</a><br><span style="color:var(--muted);font-size:9px;">${a.source} · ${a.published}</span></div>`).join('')||'<span style="color:var(--muted)">No recent news</span>':'<span style="color:var(--muted)">Loading...</span>'}</div>
           </details>
-          <details style="margin-top:6px;">
-            <summary style="font-size:var(--fs-xs);color:var(--muted);cursor:pointer;">Signal History (${t.signal_history.length})</summary>
-            <div style="margin-top:4px;">${t.signal_history.slice().reverse().map(s=>`<div class="monitor-sig-item"><span class="sig ${s.signal==='BUY'?'buy':'sell'}">${s.signal}</span><span>$${s.price} <span style="color:var(--muted)">${s.time}</span></span></div>`).join('')||'<span style="color:var(--muted)">No signals yet</span>'}</div>
+          <details style="flex:1;">
+            <summary style="font-size:var(--fs-xs);color:var(--muted);cursor:pointer;padding:3px 6px;background:var(--glass);border-radius:4px;">📊 History (${t.signal_history.length})</summary>
+            <div style="margin-top:4px;">${t.signal_history.slice().reverse().map(s=>`<div style="display:flex;justify-content:space-between;padding:2px 4px;font-size:var(--fs-xs);"><span style="color:${s.signal==='BUY'?'var(--accent)':'var(--danger)'};font-weight:600;">${s.signal}</span><span>$${s.price} <span style="color:var(--muted)">${s.time}</span></span></div>`).join('')||'<span style="color:var(--muted);font-size:var(--fs-xs)">No signals yet</span>'}</div>
           </details>
         </div>
       </div>`;}
@@ -5627,7 +5638,7 @@ async function runBT(){
   switchTab('backtest');
   $('mc-btn').disabled=true;$('csv-btn').disabled=true;$('pdf-btn').disabled=true;$('tune-btn').disabled=true;
   try{
-    const r=await fetch('/api/backtest',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({config:buildCfg(),days})});
+    const r=await fetch('/api/backtest',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({config:buildCfg(),days,portfolio:true})});
     const data=await r.json();lastBTData=data;
     stopBTGame();
     if(data.error){toast('Backtest error: '+data.error,'error');$('btres').innerHTML=`<p class="ph" style="color:var(--danger)">${data.error}</p>`;return;}
@@ -5635,6 +5646,28 @@ async function runBT(){
     const sm=(v)=>{if(v===undefined||v===null||isNaN(v))return'—';return'$'+Number(v).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});};
     const ss=(v)=>{if(v===undefined||v===null||isNaN(v))return'—';return v;};
     let html='';
+    // Total portfolio summary at top
+    if(data.portfolio){
+      const p=data.portfolio;
+      const pnlCls=p.total_pnl>=0?'up':'dn';
+      html+=`<div class="card card-glow section" style="margin-bottom:var(--sp-md);border:1px solid ${p.total_pnl>=0?'var(--accent)':'var(--danger)'};">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+          <span style="font-weight:700;font-size:1.1rem;color:var(--accent);">TOTAL PORTFOLIO</span>
+          <span style="font-weight:800;font-size:1.4rem;color:${p.total_pnl>=0?'var(--accent)':'var(--danger)'}">${p.total_pnl>=0?'+':''}${sm(p.total_pnl)}</span>
+        </div>
+        <div class="bt-summary-stats">
+          <div class="bt-stat"><span class="bt-stat-v">${sm(p.initial_cash)}</span><span class="bt-stat-l">Start</span></div>
+          <div class="bt-stat-arrow">→</div>
+          <div class="bt-stat"><span class="bt-stat-v">${sm(p.final_cash)}</span><span class="bt-stat-l">End</span></div>
+          <div class="bt-stat"><span class="bt-stat-v" style="color:${pnlCls==='up'?'var(--accent)':'var(--danger)'}">${sf(p.roi)}%</span><span class="bt-stat-l">Return</span></div>
+          <div class="bt-stat"><span class="bt-stat-v">${sf(p.win_rate,0)}%</span><span class="bt-stat-l">Win Rate</span></div>
+          <div class="bt-stat"><span class="bt-stat-v">${ss(p.total_trades)}</span><span class="bt-stat-l">Trades</span></div>
+          <div class="bt-stat"><span class="bt-stat-v">${sf(p.profit_factor)}</span><span class="bt-stat-l">Profit Factor</span></div>
+          <div class="bt-stat"><span class="bt-stat-v">${sf(p.max_drawdown_pct,0)}%</span><span class="bt-stat-l">Max DD</span></div>
+          <div class="bt-stat"><span class="bt-stat-v">${sf(p.sharpe_ratio)}</span><span class="bt-stat-l">Sharpe</span></div>
+        </div>
+      </div>`;
+    }
     for(const sym in data.results){
       const info=data.results[sym];
       if(info.error){html+=`<div class="card section"><span style="color:var(--danger)">${sym}: ${info.error}</span></div>`;continue;}
@@ -5668,17 +5701,6 @@ async function runBT(){
         info.signals.forEach(s=>{html+=`<tr><td>${s.time}</td><td class="${s.signal==='BUY'?'buy':'sell'}">${s.signal}</td><td>$${s.price}</td><td>${(s.confidence*100).toFixed(0)}%</td><td style="font-size:.7rem">${s.reason||''}</td></tr>`;});
         html+=`</table></div></details>`;
       }
-    }
-    if(data.portfolio){
-      const p=data.portfolio;
-      const pnlColor=p.total_pnl>=0?'var(--accent)':'var(--danger)';
-      html+=`<div class="card section" style="margin-top:var(--sp-md)"><b style="color:var(--accent)">Portfolio Summary</b><div class="bt-summary-stats" style="margin-top:var(--sp-sm)">
-        <div class="bt-stat"><span class="bt-stat-v">${sm(p.initial_cash)}</span><span class="bt-stat-l">Start</span></div>
-        <div class="bt-stat-arrow">→</div>
-        <div class="bt-stat"><span class="bt-stat-v">${sm(p.final_cash)}</span><span class="bt-stat-l">End</span></div>
-        <div class="bt-stat"><span class="bt-stat-v" style="color:${pnlColor}">${p.total_pnl>=0?'+':''}${sm(p.total_pnl)}</span><span class="bt-stat-l">P&amp;L</span></div>
-        <div class="bt-stat"><span class="bt-stat-v">${ss(p.total_trades)}</span><span class="bt-stat-l">Trades</span></div>
-      </div></div>`;
     }
     $('btres').innerHTML=html||'<p class="ph">No results.</p>';
     $('mc-btn').disabled=false;$('csv-btn').disabled=false;$('pdf-btn').disabled=false;$('tune-btn').disabled=false;
@@ -5883,7 +5905,7 @@ if __name__ == "__main__":
     time.sleep(1.2)
 
     window = webview.create_window(
-        "TraderMoney 5.0.0",
+        "TraderMoney 5.0.1",
         "http://127.0.0.1:5050",
         width=1440,
         height=880,
