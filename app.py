@@ -5458,8 +5458,9 @@ async function refreshMonitor(){
     }
     $('monitor-signals').style.display=signalsHtml?'':'none';
     $('monitor-signals').innerHTML=signalsHtml;
-    // show loading for ticker cards
-    $('monitor-content').innerHTML='<p class="ph" style="color:var(--muted)">Loading ticker data...</p>';
+    // show loading for ticker cards (only on first load — preserve cards on refresh)
+    if($('monitor-content').innerHTML.trim()===''||$('monitor-content').innerHTML.startsWith('<p'))
+      $('monitor-content').innerHTML='<p class="ph" style="color:var(--muted)">Loading ticker data...</p>';
   }catch(e){
     $('monitor-status').innerHTML=`<div style="display:flex;align-items:center;gap:12px;background:var(--card);border:2px solid #22c55e;border-radius:var(--radius);padding:24px;text-align:center;">
       <span style="display:inline-block;width:14px;height:14px;border-radius:50%;background:#22c55e;box-shadow:0 0 10px #22c55e88;"></span>
@@ -5518,11 +5519,11 @@ async function refreshMonitor(){
           <span style="margin-left:auto;font-size:var(--fs-xs);color:${t.trend_dir==='up'?'var(--accent)':t.trend_dir==='down'?'var(--danger)':'var(--muted)'};">${_trdArrow(t.trend_dir)} ${t.trend_dir.toUpperCase()}</span>
         </div>
         <div style="font-size:var(--fs-xs);color:var(--muted);padding:0 12px 8px;">${t.rationale||''}</div>
+        <div id="news-${sym}" style="font-size:11px;padding:0 12px 4px;color:var(--muted);display:flex;align-items:center;gap:4px;overflow:hidden;">
+          <span style="font-weight:600;flex-shrink:0;">📰</span>
+          ${window._newsCache&&window._newsCache[sym]?window._newsCache[sym].articles.slice(0,2).map(a=>`<a href="${a.url}" target="_blank" style="color:var(--accent);text-decoration:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:45%;">${a.title}</a>`).join('<span style="color:var(--border);flex-shrink:0;">|</span>')||'<span style="font-style:italic;">No recent news</span>':'<span style="font-style:italic;">Loading news...</span>'}
+        </div>
         <div style="display:flex;gap:6px;padding:0 12px 8px;">
-          <details style="flex:1;">
-            <summary style="font-size:var(--fs-xs);color:var(--muted);cursor:pointer;padding:3px 6px;background:var(--glass);border-radius:4px;">📰 News</summary>
-            <div style="margin-top:4px;font-size:var(--fs-xs);" id="news-${sym}">${window._newsCache&&window._newsCache[sym]?window._newsCache[sym].articles.slice(0,3).map(a=>`<div style="padding:3px 0;border-bottom:1px solid var(--border);"><a href="${a.url}" target="_blank" style="color:var(--accent);text-decoration:none;">${a.title}</a><br><span style="color:var(--muted);font-size:9px;">${a.source} · ${a.published}</span></div>`).join('')||'<span style="color:var(--muted)">No recent news</span>':'<span style="color:var(--muted)">Loading...</span>'}</div>
-          </details>
           <details style="flex:1;">
             <summary style="font-size:var(--fs-xs);color:var(--muted);cursor:pointer;padding:3px 6px;background:var(--glass);border-radius:4px;">📊 History (${t.signal_history.length})</summary>
             <div style="margin-top:4px;">${t.signal_history.slice().reverse().map(s=>`<div style="display:flex;justify-content:space-between;padding:2px 4px;font-size:var(--fs-xs);"><span style="color:${s.signal==='BUY'?'var(--accent)':'var(--danger)'};font-weight:600;">${s.signal}</span><span>$${s.price} <span style="color:var(--muted)">${s.time}</span></span></div>`).join('')||'<span style="color:var(--muted);font-size:var(--fs-xs)">No signals yet</span>'}</div>
