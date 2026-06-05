@@ -48,7 +48,7 @@ import webview
 from flask import Flask, Response, jsonify, request, send_file
 from flask_cors import CORS
 
-APP_VERSION = "5.0.3"
+APP_VERSION = "5.0.4"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # AI CONFIGURATION
@@ -3320,7 +3320,7 @@ FRONTEND_HTML = r"""
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>TraderMoney 5.0.3</title>
+<title>TraderMoney 5.0.4</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root {
@@ -4279,7 +4279,7 @@ button.ghost:hover { box-shadow: none; }
     <span class="sidebar-logo">TM</span>
     <div class="sidebar-title">
       <span class="sidebar-name">TraderMoney</span>
-      <span class="sidebar-version">v5.0.3</span>
+      <span class="sidebar-version">v5.0.4</span>
     </div>
     <div class="sidebar-actions">
       <button onclick="location.reload()" title="Refresh"><svg class="icon" style="width:13px;height:13px;" viewBox="0 0 24 24"><path d="M17.65 6.35A7.958 7.958 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg></button>
@@ -4355,7 +4355,7 @@ button.ghost:hover { box-shadow: none; }
     </div>
   </details>
 
-  <details class="sb-section simple-hidden">
+  <details class="sb-section simple-hidden" id="thesis-details" ontoggle="if(this.open&&!licValid){this.open=false;toast('Upgrade to Pro to unlock the Thesis Builder','error');}">
     <summary><svg class="icon"><use href="#i-flask"/></svg> Thesis Builder <span class="badge badge-gold" style="font-size:.5rem;padding:0 5px;">PRO</span></summary>
     <div class="sb-section-body">
       <label style="font-size:.65rem;">Thesis Name</label>
@@ -4508,7 +4508,7 @@ button.ghost:hover { box-shadow: none; }
   <div id="tab-help" class="tab">
     <div class="hb">
       <input type="text" id="help-search" placeholder="Search help... (Cmd+F)" oninput="filterHelp()" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);font-size:.82rem;margin-bottom:10px;box-sizing:border-box;">
-      <h3>TraderMoney v5.0.3 – Complete Help Guide</h3>
+      <h3>TraderMoney v5.0.4 – Complete Help Guide</h3>
       <p style="font-size:.82rem;color:var(--muted);margin-top:-4px;">Your desktop algorithmic trading terminal. All features documented below.</p>
 
       <details>
@@ -4909,7 +4909,6 @@ button.ghost:hover { box-shadow: none; }
     <div style="padding:var(--sp-md);overflow:auto;flex:1;display:flex;flex-direction:column;gap:var(--sp-md);" id="monitor-scroll">
       <div id="monitor-status" style="display:none;"></div>
       <div id="monitor-signals" style="display:none;"></div>
-      <div id="monitor-content"></div>
     </div>
   </div>
 
@@ -5425,7 +5424,8 @@ async function refreshMonitor(){
       <span style="color:var(--muted);font-size:var(--fs-sm);">Configure your tickers in the sidebar and click <b>Start Bot</b> to begin monitoring.</span>
     </div>`;
     $('monitor-signals').style.display='none';$('monitor-signals').innerHTML='';
-    $('monitor-content').innerHTML='';return;
+    const mn=$('monitor-news');if(mn)mn.remove();
+    return;
   }
   // Step 2: Show running badge from status API (fast), show loading for monitor data
   try{
@@ -5452,100 +5452,74 @@ async function refreshMonitor(){
           <div><span style="color:var(--muted);">Open Pos.</span><br><span style="font-weight:700;">${s.open_positions}</span></div>
         </div>
       </div>`;
-    // signal feed & event log
+    // signal feed (styled like mockup)
     let signalsHtml='';
     if(s.signals&&s.signals.length){
       signalsHtml+=`<div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:var(--sp-md);">
-        <div style="font-size:var(--fs-xs);font-weight:600;color:var(--muted);margin-bottom:6px;">▲ LIVE SIGNAL FEED</div>
-        <div style="max-height:180px;overflow-y:auto;display:flex;flex-direction:column;gap:2px;">
-          ${s.signals.slice(-20).reverse().map(sig=>`
-            <div style="display:flex;align-items:center;justify-content:space-between;font-size:var(--fs-xs);padding:4px 6px;border-radius:4px;background:var(--glass);">
-              <span><span style="font-weight:700;color:${_sigColor(sig.signal)}">${sig.signal}</span> <b>${sig.symbol}</b></span>
-              <span><span style="color:var(--muted)">$${sig.price}</span> <span style="color:var(--muted);font-size:10px;">${sig.time}</span></span>
-            </div>
-          `).join('')}
+        <div style="font-size:var(--fs-xs);font-weight:600;color:var(--accent);margin-bottom:8px;text-transform:uppercase;letter-spacing:0.04em;">Signal Feed</div>
+        <div style="max-height:200px;overflow-y:auto;display:flex;flex-direction:column;gap:4px;">
+          ${s.signals.slice(-20).reverse().map(sig=>{
+            const sc=sig.signal==='BUY'?'#00c9a7':sig.signal==='SELL'?'#ef4444':'var(--muted)';
+            const sbg=sig.signal==='BUY'?'rgba(0,201,167,0.12)':sig.signal==='SELL'?'rgba(239,68,68,0.12)':'transparent';
+            return `<div style="display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:6px;background:var(--glass);font-size:var(--fs-xs);">
+              <span style="display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:4px;background:${sbg};color:${sc};font-weight:700;font-size:0.7rem;">${sig.signal}</span>
+              <b style="font-size:0.75rem;">${sig.symbol}</b>
+              <span style="margin-left:auto;color:var(--muted);">$${sig.price} <span style="font-size:9px;">${sig.time}</span></span>
+            </div>`;
+          }).join('')}
         </div>
       </div>`;
     }
     $('monitor-signals').style.display=signalsHtml?'':'none';
     $('monitor-signals').innerHTML=signalsHtml;
-    // show loading for ticker cards (only on first load — preserve cards on refresh)
-    if($('monitor-content').innerHTML.trim()===''||$('monitor-content').innerHTML.startsWith('<p'))
-      $('monitor-content').innerHTML='<p class="ph" style="color:var(--muted)">Loading ticker data...</p>';
   }catch(e){
     $('monitor-status').innerHTML=`<div style="display:flex;align-items:center;gap:12px;background:var(--card);border:2px solid #22c55e;border-radius:var(--radius);padding:24px;text-align:center;">
       <span style="display:inline-block;width:14px;height:14px;border-radius:50%;background:#22c55e;box-shadow:0 0 10px #22c55e88;"></span>
       <span style="font-weight:800;font-size:1.1rem;color:#22c55e;">RUNNING</span>
     </div>`;
   }
-  // Step 3: Fetch monitor ticker data (may be slow due to yfinance)
+  // Step 3: Fetch news for all tracked tickers
   try{
-    const mr=await fetch('/api/monitor');
-    const m=await mr.json();
-    // event log from telegram
-    const telog=m.telegram_log||[];
-    if(telog.length){
-      const telHtml=telog.slice(-30).reverse().map(e=>{
-        const isBuy=e.msg.includes('BUY'), isSell=e.msg.includes('SELL');
-        const clr=isBuy?'var(--accent)':isSell?'var(--danger)':'var(--muted)';
-        return `<div style="display:flex;align-items:flex-start;gap:6px;font-size:var(--fs-xs);padding:3px 6px;border-radius:4px;background:var(--glass);">
-          <span style="color:${clr};font-weight:600;white-space:nowrap;">${isBuy?'▲ BUY':isSell?'▼ SELL':'○'}</span>
-          <span style="flex:1;color:var(--text2);word-break:break-word;">${e.msg.replace(/<[^>]*>/g,'')}</span>
-          <span style="color:var(--muted);white-space:nowrap;font-size:9px;">${e.time}</span>
-        </div>`;
-      }).join('');
-      $('monitor-signals').style.display='';
-      $('monitor-signals').innerHTML+=`
-        <div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:var(--sp-md);margin-top:6px;">
-          <div style="font-size:var(--fs-xs);font-weight:600;color:var(--muted);margin-bottom:6px;">○ EVENT LOG</div>
-          <div style="max-height:260px;overflow-y:auto;display:flex;flex-direction:column;gap:2px;">${telHtml}</div>
-        </div>`;
-    }
-    // news cache
-    const tickers=Object.keys(m.tickers||{});
-    if(tickers.length){
-      const newsPromises=tickers.filter(sym=>!window._newsCache||!window._newsCache[sym]||Date.now()-window._newsCache[sym].ts>120000).map(async sym=>{
+    const sr2=await fetch('/api/status');
+    const s2=await sr2.json();
+    const tickersArr=s2.tickers?s2.tickers.split(/[,;]\s*/).filter(Boolean):[];
+    if(tickersArr.length){
+      const newsPromises=tickersArr.filter(sym=>!window._newsCache||!window._newsCache[sym]||Date.now()-window._newsCache[sym].ts>120000).map(async sym=>{
         try{const r=await fetch('/api/news/'+sym);const d=await r.json();if(!window._newsCache)window._newsCache={};window._newsCache[sym]={articles:d.articles||[],ts:Date.now()};}catch(e){}
       });
       if(newsPromises.length)await Promise.allSettled(newsPromises);
+      // render news feed (Yahoo Finance style)
+      const allNews=[];
+      for(const sym of tickersArr){
+        if(window._newsCache&&window._newsCache[sym]){
+          window._newsCache[sym].articles.forEach(a=>{allNews.push({sym,...a});});
+        }
+      }
+      allNews.sort((a,b)=>new Date(b.published||0)-new Date(a.published||0));
+      if(allNews.length){
+        let newsHtml='<div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:var(--sp-md);">';
+        newsHtml+=`<div style="font-size:var(--fs-xs);font-weight:600;color:var(--accent);margin-bottom:10px;text-transform:uppercase;letter-spacing:0.04em;">Market News</div>`;
+        newsHtml+=`<div style="display:flex;flex-direction:column;gap:6px;max-height:340px;overflow-y:auto;">`;
+        for(const item of allNews.slice(0,30)){
+          const color=['#3b82f6','#a855f7','#eab308','#f97316','#06b6d4','#8b5cf6','#ec4899','#14b8a6'][Math.abs(item.sym.charCodeAt(0)||0)%8];
+          newsHtml+=`<a href="${item.url}" target="_blank" style="display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:6px;background:var(--glass);text-decoration:none;transition:background 0.15s;border:1px solid transparent;" onmouseover="this.style.borderColor='var(--border2)';this.style.background='rgba(255,255,255,0.04)'" onmouseout="this.style.borderColor='transparent';this.style.background='var(--glass)'">
+            <span style="font-size:0.6rem;font-weight:600;padding:2px 6px;border-radius:3px;background:${color}20;color:${color};flex-shrink:0;text-transform:uppercase;">${item.sym}</span>
+            <span style="flex:1;font-size:0.78rem;color:var(--text2);line-height:1.3;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;">${item.title}</span>
+            <span style="font-size:0.62rem;color:var(--muted);flex-shrink:0;white-space:nowrap;">${item.source||''}</span>
+          </a>`;
+        }
+        newsHtml+='</div></div>';
+        // Create or update news container
+        let nc=$('monitor-news');
+        if(!nc){
+          nc=document.createElement('div');
+          nc.id='monitor-news';
+          $('monitor-scroll').appendChild(nc);
+        }
+        nc.innerHTML=newsHtml;
+      }
     }
-    // render ticker cards
-    if(m.error){$('monitor-content').innerHTML=`<p class="ph" style="color:var(--danger)">${m.error}</p>`;return;}
-    let html='';
-    for(const sym in m.tickers){
-      if(!m.tickers.hasOwnProperty(sym))continue;
-      const t=m.tickers[sym];
-      if(t.error&&!t.price){html+=`<div class="monitor-card"><b>${sym}</b>: ${t.error}</div>`;continue;}
-      const priceCls=t.change>=0?'up':'dn';
-      const sigColor=t.signal==='BUY'?'#00c9a7':t.signal==='SELL'?'#ef4444':'var(--muted)';
-      const sigBg=t.signal==='BUY'?'rgba(0,201,167,0.12)':t.signal==='SELL'?'rgba(239,68,68,0.12)':'transparent';
-      html+=`<div class="monitor-card">
-        <div class="monitor-card-header">
-          <span class="monitor-card-sym">${sym} <span class="monitor-card-pos ${t.position}">${t.position}${t.quantity>0?' ('+t.quantity+')':''}</span></span>
-          <span class="monitor-card-price ${priceCls}" style="font-size:1.2rem;">$${t.price} <span style="font-size:var(--fs-xs);font-weight:400;">${t.change>=0?'+':''}${t.change} (${t.change_pct>=0?'+':''}${t.change_pct}%)</span></span>
-        </div>
-        <div style="display:flex;align-items:center;gap:10px;padding:8px 12px;margin-bottom:8px;background:${sigBg};border-radius:8px;border-left:3px solid ${sigColor};">
-          <span style="font-weight:800;font-size:1.1rem;color:${sigColor};">${t.signal||'—'}</span>
-          ${t.confidence>0?`<span style="font-size:var(--fs-xs);color:var(--muted);">${(t.confidence*100).toFixed(0)}% confidence</span>`:''}
-          <span style="margin-left:auto;font-size:var(--fs-xs);color:${t.trend_dir==='up'?'var(--accent)':t.trend_dir==='down'?'var(--danger)':'var(--muted)'};">${_trdArrow(t.trend_dir)} ${t.trend_dir.toUpperCase()}</span>
-        </div>
-        <div style="font-size:var(--fs-xs);color:var(--muted);padding:0 12px 8px;">${t.rationale||''}</div>
-        <div id="news-${sym}" style="font-size:11px;padding:0 12px 4px;color:var(--muted);display:flex;align-items:center;gap:4px;overflow:hidden;">
-          <span style="font-weight:600;flex-shrink:0;">📰</span>
-          ${window._newsCache&&window._newsCache[sym]?window._newsCache[sym].articles.slice(0,2).map(a=>`<a href="${a.url}" target="_blank" style="color:var(--accent);text-decoration:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:45%;">${a.title}</a>`).join('<span style="color:var(--border);flex-shrink:0;">|</span>')||'<span style="font-style:italic;">No recent news</span>':'<span style="font-style:italic;">Loading news...</span>'}
-        </div>
-        <div style="display:flex;gap:6px;padding:0 12px 8px;">
-          <details style="flex:1;">
-            <summary style="font-size:var(--fs-xs);color:var(--muted);cursor:pointer;padding:3px 6px;background:var(--glass);border-radius:4px;">📊 History (${t.signal_history.length})</summary>
-            <div style="margin-top:4px;">${t.signal_history.slice().reverse().map(s=>`<div style="display:flex;justify-content:space-between;padding:2px 4px;font-size:var(--fs-xs);"><span style="color:${s.signal==='BUY'?'var(--accent)':'var(--danger)'};font-weight:600;">${s.signal}</span><span>$${s.price} <span style="color:var(--muted)">${s.time}</span></span></div>`).join('')||'<span style="color:var(--muted);font-size:var(--fs-xs)">No signals yet</span>'}</div>
-          </details>
-        </div>
-      </div>`;}
-    $('monitor-content').innerHTML=html||'<p class="ph">No ticker data available.</p>';
-  }catch(e){
-    if(!$('monitor-content').innerHTML.includes('monitor-card'))
-      $('monitor-content').innerHTML='<p class="ph" style="color:var(--muted)">Waiting for ticker data...</p>';
-  }
+  }catch(e){}
 }
 function startMonitorPolling(){
   stopMonitorPolling();
@@ -5919,7 +5893,7 @@ if __name__ == "__main__":
     time.sleep(1.2)
 
     window = webview.create_window(
-        "TraderMoney 5.0.3",
+        "TraderMoney 5.0.4",
         "http://127.0.0.1:5050",
         width=1440,
         height=880,
