@@ -5405,15 +5405,25 @@ function _ind(s){return s===0||s==='0'?'—':s;}
 function _trdArrow(dir){return dir==='up'?'↗':dir==='down'?'↘':'→';}
 function _sigColor(sig){return sig==='BUY'?'var(--accent)':sig==='SELL'?'var(--danger)':'var(--muted)';}
 async function refreshMonitor(){
+  // Step 1: Show stopped state immediately (no API call needed)
+  if(!botRunning){
+    $('monitor-status').style.display='';
+    $('monitor-status').innerHTML=`<div style="display:flex;flex-direction:column;align-items:center;gap:12px;background:var(--card);border:2px solid #ef4444;border-radius:var(--radius);padding:24px;margin-bottom:var(--sp-sm);text-align:center;">
+      <span style="display:inline-block;width:16px;height:16px;border-radius:50%;background:#ef4444;box-shadow:0 0 12px #ef444488;"></span>
+      <span style="font-weight:800;font-size:1.4rem;color:#ef4444;">BOT STOPPED</span>
+      <span style="color:var(--muted);font-size:var(--fs-sm);">Configure your tickers in the sidebar and click <b>Start Bot</b> to begin monitoring.</span>
+    </div>`;
+    $('monitor-signals').style.display='none';$('monitor-signals').innerHTML='';
+    $('monitor-content').innerHTML='';return;
+  }
+  // Step 2: Show running badge from status API (fast), show loading for monitor data
   try{
-    const [mr,sr]=await Promise.all([fetch('/api/monitor'),fetch('/api/status')]);
-    const m=await mr.json();const s=await sr.json();
-    const running=!!s.running;
-    // status header
+    const sr=await fetch('/api/status');
+    const s=await sr.json();
     const pct=s.equity?((s.pl/s.equity)*100).toFixed(2):'0.00';
     const eqCls=s.pl>=0?'up':'dn';
-    $('monitor-status').style.display=botRunning?'':'none';
-    $('monitor-status').innerHTML=botRunning?`
+    $('monitor-status').style.display='';
+    $('monitor-status').innerHTML=`
       <div style="display:flex;flex-wrap:wrap;gap:var(--sp-md);align-items:center;justify-content:space-between;background:var(--card);border:2px solid #22c55e;border-radius:var(--radius);padding:var(--sp-md);margin-bottom:var(--sp-sm);">
         <div style="display:flex;align-items:center;gap:var(--sp-sm);">
           <span style="display:inline-block;width:14px;height:14px;border-radius:50%;background:#22c55e;box-shadow:0 0 10px #22c55e88;"></span>
@@ -5430,32 +5440,40 @@ async function refreshMonitor(){
           <div><span style="color:var(--muted);">Buying Power</span><br><span style="font-weight:700;">$${fmt(s.buying_power)}</span></div>
           <div><span style="color:var(--muted);">Open Pos.</span><br><span style="font-weight:700;">${s.open_positions}</span></div>
         </div>
-      </div>`:'';
-    // signal feed
-    if(running&&s.signals&&s.signals.length){
-      $('monitor-signals').style.display='';
-      const lastSignals=s.signals.slice(-20).reverse();
-      $('monitor-signals').innerHTML=`
-        <div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:var(--sp-md);margin-bottom:var(--sp-sm);">
-          <div style="font-size:var(--fs-xs);font-weight:600;color:var(--muted);margin-bottom:6px;display:flex;align-items:center;gap:6px;">
-            <svg class="icon" style="width:12px;height:12px;"><use href="#i-signal"/></svg> LIVE SIGNAL FEED
-          </div>
-          <div style="max-height:210px;overflow-y:auto;display:flex;flex-direction:column;gap:2px;">
-            ${lastSignals.map(sig=>`
-              <div style="display:flex;align-items:center;justify-content:space-between;font-size:var(--fs-xs);padding:4px 6px;border-radius:4px;background:var(--glass);">
-                <span><span style="font-weight:700;color:${_sigColor(sig.signal)}">${sig.signal}</span> <b>${sig.symbol}</b></span>
-                <span><span style="color:var(--muted)">$${sig.price}</span> <span style="color:var(--muted);font-size:10px;">${sig.time}</span></span>
-              </div>
-            `).join('')}
-          </div>
-        </div>`;
-    }else{$('monitor-signals').style.display='none';$('monitor-signals').innerHTML='';}
-    // telegram event log
+      </div>`;
+    // signal feed & event log
+    let signalsHtml='';
+    if(s.signals&&s.signals.length){
+      signalsHtml+=`<div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:var(--sp-md);">
+        <div style="font-size:var(--fs-xs);font-weight:600;color:var(--muted);margin-bottom:6px;">▲ LIVE SIGNAL FEED</div>
+        <div style="max-height:180px;overflow-y:auto;display:flex;flex-direction:column;gap:2px;">
+          ${s.signals.slice(-20).reverse().map(sig=>`
+            <div style="display:flex;align-items:center;justify-content:space-between;font-size:var(--fs-xs);padding:4px 6px;border-radius:4px;background:var(--glass);">
+              <span><span style="font-weight:700;color:${_sigColor(sig.signal)}">${sig.signal}</span> <b>${sig.symbol}</b></span>
+              <span><span style="color:var(--muted)">$${sig.price}</span> <span style="color:var(--muted);font-size:10px;">${sig.time}</span></span>
+            </div>
+          `).join('')}
+        </div>
+      </div>`;
+    }
+    $('monitor-signals').style.display=signalsHtml?'':'none';
+    $('monitor-signals').innerHTML=signalsHtml;
+    // show loading for ticker cards
+    $('monitor-content').innerHTML='<p class="ph" style="color:var(--muted)">Loading ticker data...</p>';
+  }catch(e){
+    $('monitor-status').innerHTML=`<div style="display:flex;align-items:center;gap:12px;background:var(--card);border:2px solid #22c55e;border-radius:var(--radius);padding:24px;text-align:center;">
+      <span style="display:inline-block;width:14px;height:14px;border-radius:50%;background:#22c55e;box-shadow:0 0 10px #22c55e88;"></span>
+      <span style="font-weight:800;font-size:1.1rem;color:#22c55e;">RUNNING</span>
+    </div>`;
+  }
+  // Step 3: Fetch monitor ticker data (may be slow due to yfinance)
+  try{
+    const mr=await fetch('/api/monitor');
+    const m=await mr.json();
+    // event log from telegram
     const telog=m.telegram_log||[];
-    if(running&&telog.length){
-      $('monitor-signals').style.display=''; // reuse signals slot if it was hidden
-      const telenav=telog.slice(-30).reverse();
-      const telHtml=telenav.map(e=>{
+    if(telog.length){
+      const telHtml=telog.slice(-30).reverse().map(e=>{
         const isBuy=e.msg.includes('BUY'), isSell=e.msg.includes('SELL');
         const clr=isBuy?'var(--accent)':isSell?'var(--danger)':'var(--muted)';
         return `<div style="display:flex;align-items:flex-start;gap:6px;font-size:var(--fs-xs);padding:3px 6px;border-radius:4px;background:var(--glass);">
@@ -5464,29 +5482,14 @@ async function refreshMonitor(){
           <span style="color:var(--muted);white-space:nowrap;font-size:9px;">${e.time}</span>
         </div>`;
       }).join('');
-      $('monitor-signals').innerHTML=`
-        <div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:var(--sp-md);margin-bottom:var(--sp-sm);">
-          <div style="font-size:var(--fs-xs);font-weight:600;color:var(--muted);margin-bottom:6px;display:flex;align-items:center;gap:6px;">
-            <svg class="icon" style="width:12px;height:12px;"><use href="#i-chat"/></svg> EVENT LOG
-          </div>
+      $('monitor-signals').style.display='';
+      $('monitor-signals').innerHTML+=`
+        <div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:var(--sp-md);margin-top:6px;">
+          <div style="font-size:var(--fs-xs);font-weight:600;color:var(--muted);margin-bottom:6px;">○ EVENT LOG</div>
           <div style="max-height:260px;overflow-y:auto;display:flex;flex-direction:column;gap:2px;">${telHtml}</div>
         </div>`;
-    }else if(!$('monitor-signals').innerHTML.includes('LIVE SIGNAL FEED')){
-      $('monitor-signals').style.display='none';
     }
-    // if bot not running, show ultra-clear stopped state
-    if(!botRunning){
-      $('monitor-status').style.display='';
-      $('monitor-status').innerHTML=`<div style="display:flex;flex-direction:column;align-items:center;gap:12px;background:var(--card);border:2px solid #ef4444;border-radius:var(--radius);padding:24px;margin-bottom:var(--sp-sm);text-align:center;">
-        <span style="display:inline-block;width:16px;height:16px;border-radius:50%;background:#ef4444;box-shadow:0 0 12px #ef444488;"></span>
-        <span style="font-weight:800;font-size:1.4rem;color:#ef4444;">BOT STOPPED</span>
-        <span style="color:var(--muted);font-size:var(--fs-sm);">Configure your tickers in the sidebar and click <b>Start Bot</b> to begin monitoring.</span>
-      </div>`;
-      $('monitor-signals').style.display='none';$('monitor-signals').innerHTML='';
-      $('monitor-content').innerHTML='';
-      return;
-    }
-    // batch-fetch news for all tickers (cached client-side)
+    // news cache
     const tickers=Object.keys(m.tickers||{});
     if(tickers.length){
       const newsPromises=tickers.filter(sym=>!window._newsCache||!window._newsCache[sym]||Date.now()-window._newsCache[sym].ts>120000).map(async sym=>{
@@ -5494,7 +5497,7 @@ async function refreshMonitor(){
       });
       if(newsPromises.length)await Promise.allSettled(newsPromises);
     }
-    // ticker cards
+    // render ticker cards
     if(m.error){$('monitor-content').innerHTML=`<p class="ph" style="color:var(--danger)">${m.error}</p>`;return;}
     let html='';
     for(const sym in m.tickers){
@@ -5530,7 +5533,7 @@ async function refreshMonitor(){
     $('monitor-content').innerHTML=html||'<p class="ph">No ticker data available.</p>';
   }catch(e){
     if(!$('monitor-content').innerHTML.includes('monitor-card'))
-      $('monitor-content').innerHTML='<p class="ph" style="color:var(--muted)">Loading ticker data...</p>';
+      $('monitor-content').innerHTML='<p class="ph" style="color:var(--muted)">Waiting for ticker data...</p>';
   }
 }
 function startMonitorPolling(){
