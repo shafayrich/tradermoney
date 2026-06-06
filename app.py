@@ -48,7 +48,7 @@ import webview
 from flask import Flask, Response, jsonify, request, send_file
 from flask_cors import CORS
 
-APP_VERSION = "6.0.2"
+APP_VERSION = "6.0.3"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # AI CONFIGURATION
@@ -3359,7 +3359,7 @@ FRONTEND_HTML = r"""
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>TraderMoney 6.0.2</title>
+<title>TraderMoney 6.0.3</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root {
@@ -3455,7 +3455,9 @@ body.light #sb { background: var(--surface); border-right: 1px solid var(--borde
 }
 .sidebar-actions button:hover { background: var(--glass); color: var(--text); }
 body.sidebar-collapsed #sb{width:0;overflow:hidden;padding:0;min-width:0;}
-body.sidebar-collapsed #main{margin-left:0;}
+body.sidebar-collapsed #sidebar-toggle{background:transparent;border-right-color:transparent;}
+#sidebar-toggle:hover{background:var(--glass);}
+body.sidebar-collapsed #sidebar-toggle:hover{background:var(--glass);border-right-color:var(--border);}
 body.sidebar-collapsed #sidebar-toggle svg{transform:rotate(180deg);}
 
 /* ── Bot Started Modal ── */
@@ -4322,14 +4324,11 @@ button.ghost:hover { box-shadow: none; }
     <span class="sidebar-logo">TM</span>
     <div class="sidebar-title">
       <span class="sidebar-name">TraderMoney</span>
-      <span class="sidebar-version">v6.0.2</span>
+      <span class="sidebar-version">v6.0.3</span>
     </div>
     <div class="sidebar-actions">
       <button onclick="location.reload()" title="Refresh"><svg class="icon" style="width:13px;height:13px;" viewBox="0 0 24 24"><path d="M17.65 6.35A7.958 7.958 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg></button>
       <button onclick="toggleSettings()" title="Settings"><svg class="icon" style="width:13px;height:13px;"><use href="#i-gear"/></svg></button>
-      <button id="sidebar-toggle" onclick="toggleSidebar()" title="Toggle sidebar" style="background:none;border:none;color:var(--muted);cursor:pointer;padding:2px;display:flex;align-items:center;">
-        <svg style="width:14px;height:14px;transition:transform 0.2s;" viewBox="0 0 24 24"><path fill="currentColor" d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg>
-      </button>
     </div>
   </div>
   <!-- License collapsed row (always visible) -->
@@ -4480,6 +4479,11 @@ button.ghost:hover { box-shadow: none; }
   </div>
 </div>
 
+<!-- ════ SIDEBAR TOGGLE ═══════════════════════════════════════════ -->
+<button id="sidebar-toggle" onclick="toggleSidebar()" title="Toggle sidebar" style="background:var(--bg2);border:none;border-right:1px solid var(--border);color:var(--muted);cursor:pointer;width:18px;display:flex;align-items:center;justify-content:center;flex-shrink:0;padding:0;transition:background 0.15s;z-index:10;">
+  <svg style="width:14px;height:14px;transition:transform 0.2s;" viewBox="0 0 24 24"><path fill="currentColor" d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg>
+</button>
+
 <!-- ════ MAIN ════════════════════════════════════════════════════ -->
 <div id="main">
   <div class="tab-bar" id="tabbar">
@@ -4569,7 +4573,7 @@ button.ghost:hover { box-shadow: none; }
   <div id="tab-help" class="tab">
     <div class="hb">
       <input type="text" id="help-search" placeholder="Search help... (Cmd+F)" oninput="filterHelp()" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);font-size:.82rem;margin-bottom:10px;box-sizing:border-box;">
-      <h3>TraderMoney v6.0.2 – Complete Help Guide</h3>
+      <h3>TraderMoney v6.0.3 – Complete Help Guide</h3>
       <p style="font-size:.82rem;color:var(--muted);margin-top:-4px;">Your desktop algorithmic trading terminal. All features documented below.</p>
 
       <details>
@@ -5945,7 +5949,7 @@ if __name__ == "__main__":
     time.sleep(1.2)
 
     window = webview.create_window(
-        "TraderMoney 6.0.2",
+        "TraderMoney 6.0.3",
         "http://127.0.0.1:5050",
         width=1440,
         height=880,
