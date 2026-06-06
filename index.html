@@ -782,6 +782,32 @@
 
             <div class="changelog-card">
                 <span class="tag tag-new">New</span>
+                <h3>v6.0.0 — Collapsible Sidebar, Indicators, Pro Toasts &amp; More</h3>
+                <div class="date">June 6, 2026</div>
+                <ul>
+                    <li><strong>Collapsible Sidebar:</strong> Toggle button to minimize/expand the sidebar for more screen space.</li>
+                    <li><strong>Status Bar Indicators:</strong> RSI, MACD, ADX, ATR values displayed directly in the monitor status bar.</li>
+                    <li><strong>Chart Refresh All:</strong> Reload now refreshes TradingView charts for every tracked ticker, not just the current one.</li>
+                    <li><strong>Persistent Credentials:</strong> API keys and broker settings saved across sessions (license key remains session-only).</li>
+                    <li><strong>Auto License Check:</strong> License re-validated every 2 hours to ensure uninterrupted Pro access.</li>
+                    <li><strong>AI Chat in Analysis:</strong> Chat moved to the Analysis tab for strategy discussions alongside correlation tools.</li>
+                    <li><strong>Improved News Feed:</strong> Always visible with loading spinner, default AAPL/NVDA tickers, and 5-ticker limit.</li>
+                </ul>
+            </div>
+
+            <div class="changelog-card">
+                <span class="tag tag-new">New</span>
+                <h3>v5.0.4 — Monitor Redesign &amp; News Feed</h3>
+                <div class="date">June 6, 2026</div>
+                <ul>
+                    <li><strong>Signal Feed:</strong> Replaced ticker cards with a clean mockup-style signal feed showing BUY/SELL pills, indicator chips, and timestamps.</li>
+                    <li><strong>Market News Feed:</strong> Yahoo Finance-style scrollable headlines aggregate news for all tracked tickers.</li>
+                    <li><strong>Thesis Builder Locked:</strong> Gated behind Pro license with clear toast message.</li>
+                </ul>
+            </div>
+
+            <div class="changelog-card">
+                <span class="tag tag-new">New</span>
                 <h3>v5.0.3 — Live News Strip &amp; Smoother Refresh</h3>
                 <div class="date">June 5, 2026</div>
                 <ul>
@@ -985,10 +1011,32 @@
     </footer>
 
     <script>
+        // Auto-update version number
         fetch('https://raw.githubusercontent.com/shafayrich/tradermoney/main/version.json?t=' + Date.now())
             .then(r => r.json())
             .then(data => { document.getElementById('version-number').textContent = 'v' + data.latest_version; })
-            .catch(() => { document.getElementById('version-number').textContent = 'v5.0.3'; });
+            .catch(() => { document.getElementById('version-number').textContent = 'v6.0.0'; });
+        // Platform-aware download buttons: show Windows first on Windows, macOS first on macOS
+        (function(){
+            var isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
+            var groups = document.querySelectorAll('.dl-group');
+            groups.forEach(function(g){
+                var btns = g.querySelectorAll('.dl-btn');
+                if(btns.length < 2) return;
+                // Move the appropriate OS button to the front with .primary class
+                for(var i = 0; i < btns.length; i++){
+                    var text = btns[i].textContent.trim();
+                    if((isMac && text.indexOf('macOS') >= 0) || (!isMac && text.indexOf('Windows') >= 0)){
+                        if(i !== 0){
+                            btns[0].classList.remove('primary');
+                            btns[i].classList.add('primary');
+                            g.insertBefore(btns[i], btns[0]);
+                        }
+                        break;
+                    }
+                }
+            });
+        })();
     </script>
 </body>
 </html>

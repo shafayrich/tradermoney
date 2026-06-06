@@ -48,7 +48,7 @@ import webview
 from flask import Flask, Response, jsonify, request, send_file
 from flask_cors import CORS
 
-APP_VERSION = "5.0.4"
+APP_VERSION = "6.0.0"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # AI CONFIGURATION
@@ -2220,6 +2220,8 @@ def api_get_config():
 @app.route("/api/config", methods=["POST"])
 def api_save_config():
     data = request.json or {}
+    data.pop("license_key", None)
+    data.pop("license_valid", None)
     state.config.update(data)
     if not state.config.get("license_valid"):
         state.config["broker"] = "Alpaca"
@@ -2318,6 +2320,36 @@ def api_status():
     for o in orders:
         o["time"] = to_local_time(o["time"], tz)
 
+    # Add indicator values to status
+    indicators = {}
+    try:
+        if state.engine and state.engine.symbols:
+            sym = state.engine.symbols[0]
+            import yfinance as yf
+            data = yf.download(sym, period="5d", interval="1h", progress=False)
+            if data is not None and not data.empty:
+                if isinstance(data.columns, pd.MultiIndex):
+                    data.columns = data.columns.get_level_values(0)
+                # RSI
+                delta = data["Close"].diff()
+                gain = delta.where(delta > 0, 0).rolling(14).mean()
+                loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
+                rs = gain / loss.replace(0, np.nan)
+                rsi = 100 - (100 / (1 + rs))
+                indicators["rsi"] = round(float(rsi.iloc[-1]), 1) if not pd.isna(rsi.iloc[-1]) else None
+                # MACD
+                ema12 = data["Close"].ewm(span=12).mean()
+                ema26 = data["Close"].ewm(span=26).mean()
+                macd = ema12 - ema26
+                indicators["macd"] = round(float(macd.iloc[-1]), 2) if not pd.isna(macd.iloc[-1]) else None
+                # ADX
+                high, low = data["High"], data["Low"]
+                tr = pd.concat([high - low, (high - data["Close"].shift()).abs(), (low - data["Close"].shift()).abs()], axis=1).max(axis=1)
+                atr_val = tr.rolling(14).mean()
+                indicators["atr"] = round(float(atr_val.iloc[-1]), 2) if not pd.isna(atr_val.iloc[-1]) else None
+    except Exception:
+        pass
+
     return jsonify({
         "running": state.running,
         "equity": state.dashboard["equity"],
@@ -2331,6 +2363,7 @@ def api_status():
         "orders": orders,
         "log": db.get_recent_logs(100),
         "internet_status": state.internet_status,
+        "indicators": indicators,
     })
 
 @app.route("/api/broker_status")
@@ -3320,7 +3353,7 @@ FRONTEND_HTML = r"""
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>TraderMoney 5.0.4</title>
+<title>TraderMoney 6.0.0</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root {
@@ -3415,6 +3448,9 @@ body.light #sb { background: var(--surface); border-right: 1px solid var(--borde
   cursor: pointer; transition: all 0.12s;
 }
 .sidebar-actions button:hover { background: var(--glass); color: var(--text); }
+body.sidebar-collapsed #sb{width:0;overflow:hidden;padding:0;min-width:0;}
+body.sidebar-collapsed #main{margin-left:0;}
+body.sidebar-collapsed #sidebar-toggle svg{transform:rotate(180deg);}
 
 /* ── Bot Started Modal ── */
 #bot-started-overlay {
@@ -4044,6 +4080,7 @@ body.light .cmsg .mbody code { background: rgba(0,0,0,0.06); color: #d97706; }
 .dot-flashing::before { left: -6px; animation-delay: 0s; }
 .dot-flashing::after { left: 6px; animation-delay: 0.7s; }
 @keyframes dot-flashing { 0% { background-color: var(--accent); } 50%, 100% { background-color: rgba(0,201,167,0.08); } }
+@keyframes spinner { to { transform: rotate(360deg); } }
 #chat-input-row {
   display: flex; gap: 6px; padding: 10px 14px;
   border-top: 1px solid var(--border);
@@ -4279,11 +4316,14 @@ button.ghost:hover { box-shadow: none; }
     <span class="sidebar-logo">TM</span>
     <div class="sidebar-title">
       <span class="sidebar-name">TraderMoney</span>
-      <span class="sidebar-version">v5.0.4</span>
+      <span class="sidebar-version">v6.0.0</span>
     </div>
     <div class="sidebar-actions">
       <button onclick="location.reload()" title="Refresh"><svg class="icon" style="width:13px;height:13px;" viewBox="0 0 24 24"><path d="M17.65 6.35A7.958 7.958 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg></button>
       <button onclick="toggleSettings()" title="Settings"><svg class="icon" style="width:13px;height:13px;"><use href="#i-gear"/></svg></button>
+      <button id="sidebar-toggle" onclick="toggleSidebar()" title="Toggle sidebar" style="background:none;border:none;color:var(--muted);cursor:pointer;padding:2px;display:flex;align-items:center;">
+        <svg style="width:14px;height:14px;transition:transform 0.2s;" viewBox="0 0 24 24"><path fill="currentColor" d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg>
+      </button>
     </div>
   </div>
   <!-- License collapsed row (always visible) -->
@@ -4443,7 +4483,6 @@ button.ghost:hover { box-shadow: none; }
     <button class="tbtn" data-tab="backtest"><svg class="icon"><use href="#i-backtest"/></svg>Backtest</button>
     <button class="tbtn" data-tab="analysis"><svg class="icon"><use href="#i-analysis"/></svg>Analysis</button>
     <button class="tbtn" data-tab="help"><svg class="icon"><use href="#i-help"/></svg>Help</button>
-    <button class="tbtn" data-tab="aichat"><svg class="icon"><use href="#i-chat"/></svg>AI Chat</button>
     <button class="tbtn" data-tab="monitor" id="monitor-tab-btn"><svg class="icon" style="width:12px;height:12px;"><use href="#i-chart"/></svg> Live</button>
   </div>
 
@@ -4496,11 +4535,27 @@ button.ghost:hover { box-shadow: none; }
 
   <!-- Analysis tab -->
   <div id="tab-analysis" class="tab">
-    <div class="bt-controls">
-      <button class="ghost" onclick="loadCorr()"><svg class="icon"><use href="#i-refresh"/></svg> Correlation Matrix</button>
-    </div>
-    <div style="overflow:auto;flex:1;padding:var(--sp-md);" id="corr-content">
-      <p class="ph">Click Refresh to load the correlation matrix for your tickers.</p>
+    <div style="display:flex;flex-direction:column;height:100%;">
+      <div style="display:flex;gap:var(--sp-sm);padding:var(--sp-md);border-bottom:1px solid var(--border);align-items:center;flex-shrink:0;">
+        <button class="ghost" onclick="loadCorr()"><svg class="icon"><use href="#i-refresh"/></svg> Correlation Matrix</button>
+        <div style="flex:1;"></div>
+        <span id="analysis-chat-limit" style="font-size:0.6rem;color:var(--muted);"></span>
+      </div>
+      <div style="display:flex;flex:1;overflow:hidden;">
+        <div style="overflow:auto;flex:1;padding:var(--sp-md);" id="corr-content">
+          <p class="ph">Click Correlation Matrix to load analysis for your tickers.</p>
+        </div>
+        <div id="analysis-chat" style="width:340px;border-left:1px solid var(--border);display:flex;flex-direction:column;flex-shrink:0;">
+          <div id="analysis-chat-topbar" style="padding:8px 12px;background:var(--bg2);border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;flex-shrink:0;">
+            <span style="font-weight:600;font-size:0.72rem;display:flex;align-items:center;gap:4px;"><svg class="icon" style="width:12px;height:12px;"><use href="#i-robot"/></svg> TraderBot AI</span>
+          </div>
+          <div id="analysis-chat-messages" style="flex:1;overflow-y:auto;padding:10px;display:flex;flex-direction:column;gap:8px;"></div>
+          <div id="analysis-chat-input-row" style="display:flex;gap:6px;padding:8px 10px;border-top:1px solid var(--border);background:var(--bg2);flex-shrink:0;">
+            <textarea id="analysis-chat-input" placeholder="Ask about trading..." style="flex:1;resize:none;height:32px;padding:4px 8px;font-size:0.72rem;border-radius:4px;background:var(--glass);border:1px solid var(--border2);font-family:inherit;color:var(--text);"></textarea>
+            <button onclick="sendAnalysisChat()" style="padding:0 10px;font-size:0.7rem;border-radius:4px;background:var(--accent);color:#000;border:none;cursor:pointer;font-weight:600;">Send</button>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -4508,7 +4563,7 @@ button.ghost:hover { box-shadow: none; }
   <div id="tab-help" class="tab">
     <div class="hb">
       <input type="text" id="help-search" placeholder="Search help... (Cmd+F)" oninput="filterHelp()" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);font-size:.82rem;margin-bottom:10px;box-sizing:border-box;">
-      <h3>TraderMoney v5.0.4 – Complete Help Guide</h3>
+      <h3>TraderMoney v6.0.0 – Complete Help Guide</h3>
       <p style="font-size:.82rem;color:var(--muted);margin-top:-4px;">Your desktop algorithmic trading terminal. All features documented below.</p>
 
       <details>
@@ -4882,27 +4937,7 @@ button.ghost:hover { box-shadow: none; }
     </div>
   </div>
 
-  <!-- AI Chat tab -->
-  <div id="tab-aichat" class="tab">
-    <div id="aichat-wrap">
-      <div id="chat-sessions-panel">
-        <h3><svg class="icon"><use href="#i-chat"/></svg> Chats</h3>
-        <div id="chat-sessions-list"></div>
-        <button id="chat-new-session-btn" onclick="createNewSession()">+ New Chat</button>
-      </div>
-      <div id="chat-main">
-        <div id="chat-topbar">
-          <span class="title"><svg class="icon"><use href="#i-robot"/></svg> TraderBot AI</span>
-          <span id="chat-limit"></span>
-        </div>
-        <div id="chat-messages"></div>
-        <div id="chat-input-row">
-          <textarea id="chat-input" placeholder="Ask about trading, indicators, platform usage..."></textarea>
-          <button id="chat-send" onclick="sendChat()"><svg class="icon"><use href="#i-send"/></svg> Send</button>
-        </div>
-      </div>
-    </div>
-  </div>
+
 
   <!-- Monitor tab -->
   <div id="tab-monitor" class="tab">
@@ -4921,7 +4956,7 @@ button.ghost:hover { box-shadow: none; }
 'use strict';
 const $=id=>document.getElementById(id);
 let cfg={},licValid=false,curSym='',allTickers=[],tvWidget=null,lastTvSymbol='';
-let curSessionId=null,chatInited=false,botRunning=false,lastBTData=null;
+let curSessionId=null,botRunning=false,lastBTData=null;
 
 function cs(raw){return raw.split(':')[0].trim().toUpperCase();}
 function fmt(n,d=2){return Number(n).toLocaleString(undefined,{maximumFractionDigits:d});}
@@ -4934,13 +4969,27 @@ function gc(id){const e=$(id);return e?e.checked:false;}
 function sv(id,v){const e=$(id);if(e)e.value=v;}
 function sc(id,v){const e=$(id);if(e)e.checked=!!v;}
 function lockCb(id,locked){
-  const el=$(id);if(!el)return;el.disabled=locked;
+  const el=$(id);if(!el)return;
   const lbl=el.closest('label');
-  if(lbl){lbl.style.opacity=locked?'0.35':'1';lbl.style.pointerEvents=locked?'none':'';}
+  if(locked){
+    el.disabled=false;
+    if(lbl){lbl.style.opacity='0.35';lbl.style.pointerEvents='';}
+    const handler=function(e){
+      if(!licValid){e.preventDefault();e.stopPropagation();toast('Upgrade to Pro to unlock this feature','error');return false;}
+    };
+    el.removeEventListener('click',el._lockHandler);
+    el._lockHandler=handler;
+    el.addEventListener('click',handler);
+  }else{
+    el.disabled=false;
+    if(lbl){lbl.style.opacity='';lbl.style.pointerEvents='';}
+    el.removeEventListener('click',el._lockHandler);
+    el._lockHandler=null;
+  }
 }
 
 /* ── Tab switching ── */
-const TABS=['charts','signals','history','backtest','analysis','help','aichat','monitor'];
+const TABS=['charts','signals','history','backtest','analysis','help','monitor'];
 
 /* ── Session clock ── */
 function updSess(){
@@ -5120,13 +5169,12 @@ async function aiSuggestThesis(){
   const desc=prompt('Describe your trading strategy briefly (e.g., "quick scalping on 1m charts"):','');
   if(!desc)return;
   const msg='I need help configuring a thesis called "'+name+'". My strategy: '+desc+'. Current settings: RSI period='+params.rsi_period+', MACD fast/slow/signal='+params.macd_fast+'/'+params.macd_slow+'/'+params.macd_signal+', BB period='+params.bb_period+', ADX period='+params.adx_period+', SuperTrend period='+params.supertrend_period+'. Please suggest optimal indicator parameter values for this strategy and explain why each helps.';
-  switchTab('aichat');
-  const input=$('chat-input');
+  switchTab('analysis');
+  const input=$('analysis-chat-input');
   if(input){input.value='';}
   setTimeout(async()=>{
-    await initAIChat();
-    $('chat-input').value=msg;
-    await sendChat();
+    $('analysis-chat-input').value=msg;
+    await sendAnalysisChat();
   },500);
 }
 
@@ -5239,9 +5287,12 @@ function loadTradingViewChart(symbol){
 }
 
 function reloadChart(){
-  if(lastTvSymbol)loadTradingViewChart(lastTvSymbol);
-  else{const raw=allTickers.length?allTickers:(gv('tickers','AAPL').split(',').map(s=>s.trim()).filter(s=>s));if(raw.length)loadTradingViewChart(cs(raw[0]));}
-  toast('Chart reloaded','success');
+  const syms=allTickers.length?allTickers:(gv('tickers','AAPL').split(',').map(s=>s.trim()).filter(s=>s));
+  syms.forEach(sym=>{
+    const clean=sym.split(':')[0].trim();
+    if(clean)loadTradingViewChart(clean);
+  });
+  toast('Charts reloaded for '+syms.length+' ticker(s)','success');
 }
 /* ── Ticker bar ── */
 function setTickers(list){
@@ -5271,6 +5322,10 @@ async function loadConfig(){
       body:JSON.stringify({timezone:Intl.DateTimeFormat().resolvedOptions().timeZone})});
     initUI(cfg);
     if(cfg.license_key&&cfg.license_key.trim())await validateLicense(true);
+    // Re-validate license every 2 hours
+    setInterval(async()=>{
+      if(cfg.license_key&&cfg.license_key.trim())await validateLicense(true);
+    },7200000);
     loadHistory();loadLeaderboard();
   }catch(e){toast('Config load failed','error');}
 }
@@ -5409,12 +5464,19 @@ async function pollStatus(){
 }
 setInterval(pollStatus,1500);
 
+/* ── Sidebar toggle ── */
+function toggleSidebar(){
+  document.body.classList.toggle('sidebar-collapsed');
+}
+
 /* ── Monitor ── */
 let _monitorTimer=null;
 function _ind(s){return s===0||s==='0'?'—':s;}
 function _trdArrow(dir){return dir==='up'?'↗':dir==='down'?'↘':'→';}
 function _sigColor(sig){return sig==='BUY'?'var(--accent)':sig==='SELL'?'var(--danger)':'var(--muted)';}
 async function refreshMonitor(){
+  // --- NEWS: always fetch regardless of bot state ---
+  _renderNews();
   // Step 1: Show stopped state immediately (no API call needed)
   if(!botRunning){
     $('monitor-status').style.display='';
@@ -5424,7 +5486,6 @@ async function refreshMonitor(){
       <span style="color:var(--muted);font-size:var(--fs-sm);">Configure your tickers in the sidebar and click <b>Start Bot</b> to begin monitoring.</span>
     </div>`;
     $('monitor-signals').style.display='none';$('monitor-signals').innerHTML='';
-    const mn=$('monitor-news');if(mn)mn.remove();
     return;
   }
   // Step 2: Show running badge from status API (fast), show loading for monitor data
@@ -5433,6 +5494,16 @@ async function refreshMonitor(){
     const s=await sr.json();
     const pct=s.equity?((s.pl/s.equity)*100).toFixed(2):'0.00';
     const eqCls=s.pl>=0?'up':'dn';
+    // Build indicator chips for status bar
+    let indChips='';
+    if(s.indicators){
+      const indMap={'rsi':'RSI','macd':'MACD','adx':'ADX','bb_pct':'BB%','vwap':'VWAP','atr':'ATR'};
+      for(const [k,v] of Object.entries(s.indicators)){
+        if(v!==null&&v!==undefined&&v!=='—'){
+          indChips+=`<span style="display:inline-flex;align-items:center;gap:3px;padding:1px 6px;border-radius:3px;background:var(--glass);font-size:0.6rem;border:1px solid var(--border);"><span style="color:var(--muted);font-weight:500;">${indMap[k]||k}:</span><span style="font-weight:600;">${typeof v==='number'?v.toFixed(2):v}</span></span>`;
+        }
+      }
+    }
     $('monitor-status').style.display='';
     $('monitor-status').innerHTML=`
       <div style="display:flex;flex-wrap:wrap;gap:var(--sp-md);align-items:center;justify-content:space-between;background:var(--card);border:2px solid #22c55e;border-radius:var(--radius);padding:var(--sp-md);margin-bottom:var(--sp-sm);">
@@ -5451,6 +5522,7 @@ async function refreshMonitor(){
           <div><span style="color:var(--muted);">Buying Power</span><br><span style="font-weight:700;">$${fmt(s.buying_power)}</span></div>
           <div><span style="color:var(--muted);">Open Pos.</span><br><span style="font-weight:700;">${s.open_positions}</span></div>
         </div>
+        ${indChips?`<div style="display:flex;gap:4px;flex-wrap:wrap;font-size:var(--fs-xs);">${indChips}</div>`:''}
       </div>`;
     // signal feed (styled like mockup)
     let signalsHtml='';
@@ -5478,48 +5550,70 @@ async function refreshMonitor(){
       <span style="font-weight:800;font-size:1.1rem;color:#22c55e;">RUNNING</span>
     </div>`;
   }
-  // Step 3: Fetch news for all tracked tickers
+}
+async function _renderNews(){
+  // Get tickers from status API or use defaults
+  let tickersArr=[];
   try{
-    const sr2=await fetch('/api/status');
-    const s2=await sr2.json();
-    const tickersArr=s2.tickers?s2.tickers.split(/[,;]\s*/).filter(Boolean):[];
-    if(tickersArr.length){
-      const newsPromises=tickersArr.filter(sym=>!window._newsCache||!window._newsCache[sym]||Date.now()-window._newsCache[sym].ts>120000).map(async sym=>{
-        try{const r=await fetch('/api/news/'+sym);const d=await r.json();if(!window._newsCache)window._newsCache={};window._newsCache[sym]={articles:d.articles||[],ts:Date.now()};}catch(e){}
-      });
-      if(newsPromises.length)await Promise.allSettled(newsPromises);
-      // render news feed (Yahoo Finance style)
-      const allNews=[];
-      for(const sym of tickersArr){
-        if(window._newsCache&&window._newsCache[sym]){
-          window._newsCache[sym].articles.forEach(a=>{allNews.push({sym,...a});});
-        }
-      }
-      allNews.sort((a,b)=>new Date(b.published||0)-new Date(a.published||0));
-      if(allNews.length){
-        let newsHtml='<div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:var(--sp-md);">';
-        newsHtml+=`<div style="font-size:var(--fs-xs);font-weight:600;color:var(--accent);margin-bottom:10px;text-transform:uppercase;letter-spacing:0.04em;">Market News</div>`;
-        newsHtml+=`<div style="display:flex;flex-direction:column;gap:6px;max-height:340px;overflow-y:auto;">`;
-        for(const item of allNews.slice(0,30)){
-          const color=['#3b82f6','#a855f7','#eab308','#f97316','#06b6d4','#8b5cf6','#ec4899','#14b8a6'][Math.abs(item.sym.charCodeAt(0)||0)%8];
-          newsHtml+=`<a href="${item.url}" target="_blank" style="display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:6px;background:var(--glass);text-decoration:none;transition:background 0.15s;border:1px solid transparent;" onmouseover="this.style.borderColor='var(--border2)';this.style.background='rgba(255,255,255,0.04)'" onmouseout="this.style.borderColor='transparent';this.style.background='var(--glass)'">
-            <span style="font-size:0.6rem;font-weight:600;padding:2px 6px;border-radius:3px;background:${color}20;color:${color};flex-shrink:0;text-transform:uppercase;">${item.sym}</span>
-            <span style="flex:1;font-size:0.78rem;color:var(--text2);line-height:1.3;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;">${item.title}</span>
-            <span style="font-size:0.62rem;color:var(--muted);flex-shrink:0;white-space:nowrap;">${item.source||''}</span>
-          </a>`;
-        }
-        newsHtml+='</div></div>';
-        // Create or update news container
-        let nc=$('monitor-news');
-        if(!nc){
-          nc=document.createElement('div');
-          nc.id='monitor-news';
-          $('monitor-scroll').appendChild(nc);
-        }
-        nc.innerHTML=newsHtml;
-      }
-    }
+    const sr=await fetch('/api/status');
+    const s=await sr.json();
+    tickersArr=s.tickers?s.tickers.split(/[,;]\s*/).filter(Boolean):[];
   }catch(e){}
+  if(!tickersArr.length)tickersArr=['AAPL','NVDA'];
+  // Limit to first 5 tickers to avoid rate limits
+  if(tickersArr.length>5)tickersArr=tickersArr.slice(0,5);
+  
+  // Show loading skeleton if cache empty
+  const mn=$('monitor-news');
+  if(!mn){
+    const nc=document.createElement('div');
+    nc.id='monitor-news';
+    $('monitor-scroll').appendChild(nc);
+  }
+  const needsFetch=tickersArr.filter(sym=>!window._newsCache||!window._newsCache[sym]||Date.now()-window._newsCache[sym].ts>120000);
+  if(needsFetch.length&&!window._newsLoading){
+    window._newsLoading=true;
+    $('monitor-news').innerHTML=`<div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:var(--sp-md);">
+      <div style="font-size:var(--fs-xs);font-weight:600;color:var(--accent);margin-bottom:10px;text-transform:uppercase;letter-spacing:0.04em;">Market News</div>
+      <div style="padding:16px;text-align:center;">
+        <div style="display:inline-block;width:20px;height:20px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spinner 0.7s linear infinite;margin-bottom:8px;"></div>
+        <div style="color:var(--muted);font-size:0.7rem;">Loading Ticker News — Read These While You Wait</div>
+      </div>
+    </div>`;
+    const promises=tickersArr.map(async sym=>{
+      try{const r=await fetch('/api/news/'+sym);const d=await r.json();if(!window._newsCache)window._newsCache={};window._newsCache[sym]={articles:d.articles||[],ts:Date.now()};}catch(e){}
+    });
+    await Promise.allSettled(promises);
+    window._newsLoading=false;
+  }
+  // render news
+  const allNews=[];
+  for(const sym of tickersArr){
+    if(window._newsCache&&window._newsCache[sym]){
+      window._newsCache[sym].articles.forEach(a=>{allNews.push({sym,...a});});
+    }
+  }
+  allNews.sort((a,b)=>new Date(b.published||0)-new Date(a.published||0));
+  if(allNews.length){
+    let newsHtml='<div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:var(--sp-md);">';
+    newsHtml+=`<div style="font-size:var(--fs-xs);font-weight:600;color:var(--accent);margin-bottom:10px;text-transform:uppercase;letter-spacing:0.04em;">Market News</div>`;
+    newsHtml+=`<div style="display:flex;flex-direction:column;gap:6px;max-height:340px;overflow-y:auto;">`;
+    for(const item of allNews.slice(0,30)){
+      const color=['#3b82f6','#a855f7','#eab308','#f97316','#06b6d4','#8b5cf6','#ec4899','#14b8a6'][Math.abs(item.sym.charCodeAt(0)||0)%8];
+      newsHtml+=`<a href="${item.url}" target="_blank" style="display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:6px;background:var(--glass);text-decoration:none;transition:background 0.15s;border:1px solid transparent;" onmouseover="this.style.borderColor='var(--border2)';this.style.background='rgba(255,255,255,0.04)'" onmouseout="this.style.borderColor='transparent';this.style.background='var(--glass)'">
+        <span style="font-size:0.6rem;font-weight:600;padding:2px 6px;border-radius:3px;background:${color}20;color:${color};flex-shrink:0;text-transform:uppercase;">${item.sym}</span>
+        <span style="flex:1;font-size:0.78rem;color:var(--text2);line-height:1.3;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;">${item.title}</span>
+        <span style="font-size:0.62rem;color:var(--muted);flex-shrink:0;white-space:nowrap;">${item.source||''}</span>
+      </a>`;
+    }
+    newsHtml+='</div></div>';
+    $('monitor-news').innerHTML=newsHtml;
+  }else{
+    $('monitor-news').innerHTML=`<div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:var(--sp-md);">
+      <div style="font-size:var(--fs-xs);font-weight:600;color:var(--accent);margin-bottom:10px;text-transform:uppercase;letter-spacing:0.04em;">Market News</div>
+      <div style="padding:16px;text-align:center;color:var(--muted);font-size:0.7rem;">No recent news found.</div>
+    </div>`;
+  }
 }
 function startMonitorPolling(){
   stopMonitorPolling();
@@ -5534,7 +5628,6 @@ function switchTab(name){
   document.querySelectorAll('.tbtn').forEach(x=>x.classList.remove('active'));
   const t=$('tab-'+name),b=document.querySelector(`[data-tab="${name}"]`);
   if(t)t.classList.add('active');if(b)b.classList.add('active');
-  if(name==='aichat')initAIChat();
   if(name==='charts')setTimeout(()=>{if(tvWidget&&tvWidget.resize)tvWidget.resize();},80);
   if(name==='monitor'){refreshMonitor();startMonitorPolling();}
   else stopMonitorPolling();
@@ -5729,8 +5822,8 @@ async function autoTune(){
   let summary='';
   for(const sym in lastBTData.results){const sim=lastBTData.results[sym].simulation;if(sim)summary+=`${sym}: win_rate=${sim.win_rate}%, trades=${sim.total_trades}, pnl=$${sim.total_pnl} `;}
   const msg=`Based on this backtest (${summary}), suggest the best indicator combination and SL/TP settings for TraderMoney to improve performance.`;
-  switchTab('aichat');await initAIChat();
-  $('chat-input').value=msg;await sendChat();
+  switchTab('analysis');
+  $('analysis-chat-input').value=msg;await sendAnalysisChat();
 }
 
 /* ── Correlation Matrix ── */
@@ -5781,7 +5874,6 @@ function renderMarkdown(text){
 
 /* ── AI Chat ── */
 async function initAIChat(){
-  if(chatInited)return;chatInited=true;
   await loadSessions();
   const data=await(await fetch('/api/chat/sessions')).json();
   if(data.sessions&&data.sessions.length>0)await loadSession(data.sessions[0].id);
@@ -5854,6 +5946,34 @@ async function sendChat(){
 }
 $('chat-input').addEventListener('keydown',function(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendChat();}});
 
+// Analysis Chat
+let analysisChatSessionId=null;
+async function sendAnalysisChat(){
+  const input=$('analysis-chat-input');const msg=input.value.trim();if(!msg)return;
+  input.value='';addAnalysisMsg(msg,true);
+  const typing=document.createElement('div');typing.style.cssText='color:var(--muted);font-size:0.68rem;padding:4px 8px;font-style:italic;';
+  typing.textContent='TraderBot is thinking...';$('analysis-chat-messages').appendChild(typing);
+  $('analysis-chat-messages').scrollTop=$('analysis-chat-messages').scrollHeight;
+  try{
+    const r=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:msg,session_id:analysisChatSessionId})});
+    const d=await r.json();typing.remove();
+    addAnalysisMsg(d.reply||'No response.',false);
+    if(d.session_id){analysisChatSessionId=d.session_id;}
+  }catch(e){typing.remove();addAnalysisMsg('Connection error.','false');}
+  $('analysis-chat-messages').scrollTop=$('analysis-chat-messages').scrollHeight;
+}
+function addAnalysisMsg(text,isUser){
+  const msgs=$('analysis-chat-messages');
+  const wrap=document.createElement('div');wrap.style.cssText=`max-width:85%;padding:8px 10px;border-radius:8px;font-size:0.72rem;line-height:1.4;word-break:break-word;${isUser?'align-self:flex-end;background:var(--glass);border:1px solid var(--border);border-bottom-right-radius:2px;':'align-self:flex-start;background:var(--card);border:1px solid var(--border);border-bottom-left-radius:2px;'}`;
+  const sender=document.createElement('div');sender.style.cssText='font-size:0.55rem;color:var(--accent);margin-bottom:2px;font-weight:700;text-transform:uppercase;';
+  sender.textContent=isUser?'You':'TraderBot';
+  const body=document.createElement('div');body.style.cssText='white-space:pre-wrap;';
+  body.textContent=text;
+  wrap.appendChild(sender);wrap.appendChild(body);msgs.appendChild(wrap);msgs.scrollTop=msgs.scrollHeight;
+  return wrap;
+}
+$('analysis-chat-input').addEventListener('keydown',function(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendAnalysisChat();}});
+
 /* ── Keyboard Shortcuts ── */
 document.addEventListener('keydown',e=>{
   const ctrl=e.ctrlKey||e.metaKey;
@@ -5893,7 +6013,7 @@ if __name__ == "__main__":
     time.sleep(1.2)
 
     window = webview.create_window(
-        "TraderMoney 5.0.4",
+        "TraderMoney 6.0.0",
         "http://127.0.0.1:5050",
         width=1440,
         height=880,
