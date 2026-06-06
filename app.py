@@ -5561,16 +5561,8 @@ async function refreshMonitor(){
   }
 }
 async function _renderNews(){
-  // Get tickers from status API or use defaults
-  let tickersArr=[];
-  try{
-    const sr=await fetch('/api/status');
-    const s=await sr.json();
-    tickersArr=s.tickers?s.tickers.split(/[,;]\s*/).filter(Boolean):[];
-  }catch(e){}
-  if(!tickersArr.length)tickersArr=['AAPL','NVDA'];
-  // Limit to first 5 tickers to avoid rate limits
-  if(tickersArr.length>5)tickersArr=tickersArr.slice(0,5);
+  // Popular tickers — always show top market news regardless of user config
+  const tickersArr=['AAPL','NVDA','TSLA'];
   
   // Show loading skeleton if cache empty
   const mn=$('monitor-news');
@@ -5579,7 +5571,7 @@ async function _renderNews(){
     nc.id='monitor-news';
     $('monitor-scroll').appendChild(nc);
   }
-  const needsFetch=tickersArr.filter(sym=>!window._newsCache||!window._newsCache[sym]||Date.now()-window._newsCache[sym].ts>120000);
+  const needsFetch=tickersArr.filter(sym=>!window._newsCache||!window._newsCache[sym]||Date.now()-window._newsCache[sym].ts>300000);
   if(needsFetch.length&&!window._newsLoading){
     window._newsLoading=true;
     $('monitor-news').innerHTML=`<div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:14px 18px;">
