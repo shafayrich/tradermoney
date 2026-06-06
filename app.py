@@ -48,7 +48,7 @@ import webview
 from flask import Flask, Response, jsonify, request, send_file
 from flask_cors import CORS
 
-APP_VERSION = "6.0.0"
+APP_VERSION = "6.0.1"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # AI CONFIGURATION
@@ -1899,11 +1899,14 @@ class TradingEngine(threading.Thread):
 
                                 if (mode == "auto"
                                         and self.is_licensed
-                                        and self.broker.is_connected()
-                                        and self.broker.get_market_status()):
+                                        and self.broker.is_connected()):
+                                    if not self.broker.get_market_status():
+                                        self._log(f"[Execute] Market closed — {sig} {s} @ ${price:.2f} queued but will send anyway (paper trading)")
                                     self._execute(s, sig, price, latest,
                                                   use_bracket, use_atr,
                                                   sl_pct, tp_pct, conf)
+                                elif mode == "auto" and self.is_licensed and not self.broker.is_connected():
+                                    self._log(f"[Execute] Broker disconnected — cannot execute {sig} {s}")
 
                 time.sleep(1)
             except Exception:
@@ -2364,6 +2367,8 @@ def api_status():
         "log": db.get_recent_logs(100),
         "internet_status": state.internet_status,
         "indicators": indicators,
+        "market_status": state.broker_instance.get_market_status() if state.broker_instance else None,
+        "broker_connected": state.broker_instance.is_connected() if state.broker_instance else False,
     })
 
 @app.route("/api/broker_status")
@@ -3353,7 +3358,7 @@ FRONTEND_HTML = r"""
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>TraderMoney 6.0.0</title>
+<title>TraderMoney 6.0.1</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root {
@@ -4316,7 +4321,7 @@ button.ghost:hover { box-shadow: none; }
     <span class="sidebar-logo">TM</span>
     <div class="sidebar-title">
       <span class="sidebar-name">TraderMoney</span>
-      <span class="sidebar-version">v6.0.0</span>
+      <span class="sidebar-version">v6.0.1</span>
     </div>
     <div class="sidebar-actions">
       <button onclick="location.reload()" title="Refresh"><svg class="icon" style="width:13px;height:13px;" viewBox="0 0 24 24"><path d="M17.65 6.35A7.958 7.958 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg></button>
@@ -4563,7 +4568,7 @@ button.ghost:hover { box-shadow: none; }
   <div id="tab-help" class="tab">
     <div class="hb">
       <input type="text" id="help-search" placeholder="Search help... (Cmd+F)" oninput="filterHelp()" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);font-size:.82rem;margin-bottom:10px;box-sizing:border-box;">
-      <h3>TraderMoney v6.0.0 – Complete Help Guide</h3>
+      <h3>TraderMoney v6.0.1 – Complete Help Guide</h3>
       <p style="font-size:.82rem;color:var(--muted);margin-top:-4px;">Your desktop algorithmic trading terminal. All features documented below.</p>
 
       <details>
@@ -4941,7 +4946,7 @@ button.ghost:hover { box-shadow: none; }
 
   <!-- Monitor tab -->
   <div id="tab-monitor" class="tab">
-    <div style="padding:var(--sp-md);overflow:auto;flex:1;display:flex;flex-direction:column;gap:var(--sp-md);" id="monitor-scroll">
+    <div style="padding:18px 20px;overflow:auto;flex:1;display:flex;flex-direction:column;gap:16px;" id="monitor-scroll">
       <div id="monitor-status" style="display:none;"></div>
       <div id="monitor-signals" style="display:none;"></div>
     </div>
@@ -5480,10 +5485,10 @@ async function refreshMonitor(){
   // Step 1: Show stopped state immediately (no API call needed)
   if(!botRunning){
     $('monitor-status').style.display='';
-    $('monitor-status').innerHTML=`<div style="display:flex;flex-direction:column;align-items:center;gap:12px;background:var(--card);border:2px solid #ef4444;border-radius:var(--radius);padding:24px;margin-bottom:var(--sp-sm);text-align:center;">
+    $('monitor-status').innerHTML=`<div style="display:flex;flex-direction:column;align-items:center;gap:14px;background:var(--card);border:2px solid #ef4444;border-radius:var(--radius);padding:28px 24px;text-align:center;">
       <span style="display:inline-block;width:16px;height:16px;border-radius:50%;background:#ef4444;box-shadow:0 0 12px #ef444488;"></span>
       <span style="font-weight:800;font-size:1.4rem;color:#ef4444;">BOT STOPPED</span>
-      <span style="color:var(--muted);font-size:var(--fs-sm);">Configure your tickers in the sidebar and click <b>Start Bot</b> to begin monitoring.</span>
+      <span style="color:var(--muted);font-size:var(--fs-sm);max-width:280px;">Configure your tickers in the sidebar and click <b>Start Bot</b> to begin monitoring.</span>
     </div>`;
     $('monitor-signals').style.display='none';$('monitor-signals').innerHTML='';
     return;
@@ -5505,35 +5510,35 @@ async function refreshMonitor(){
       }
     }
     $('monitor-status').style.display='';
+    const mktStatus=s.market_status?'Open':'Closed';
+    const brConnected=s.broker_connected?'Connected':'Disconnected';
     $('monitor-status').innerHTML=`
-      <div style="display:flex;flex-wrap:wrap;gap:var(--sp-md);align-items:center;justify-content:space-between;background:var(--card);border:2px solid #22c55e;border-radius:var(--radius);padding:var(--sp-md);margin-bottom:var(--sp-sm);">
-        <div style="display:flex;align-items:center;gap:var(--sp-sm);">
+      <div style="display:flex;flex-wrap:wrap;gap:14px;align-items:center;justify-content:space-between;background:var(--card);border:2px solid #22c55e;border-radius:var(--radius);padding:18px 20px;">
+        <div style="display:flex;align-items:center;gap:10px;">
           <span style="display:inline-block;width:14px;height:14px;border-radius:50%;background:#22c55e;box-shadow:0 0 10px #22c55e88;"></span>
           <span style="font-weight:800;font-size:1.1rem;color:#22c55e;">RUNNING</span>
+          <span style="font-size:0.6rem;color:var(--muted);background:var(--glass);padding:2px 8px;border-radius:4px;border:1px solid var(--border);">${s.broker||'—'} · ${s.mode||'—'}</span>
+          <span style="font-size:0.6rem;color:${mktStatus==='Open'?'var(--accent)':'var(--muted)'};">Market: ${mktStatus}</span>
+          <span style="font-size:0.6rem;color:${brConnected==='Connected'?'var(--accent)':'var(--danger)'};">${brConnected}</span>
         </div>
-        <div style="display:flex;gap:var(--sp-lg);font-size:var(--fs-xs);">
-          <span style="color:var(--muted);">Broker</span><span style="font-weight:600;">${s.broker||'—'}</span>
-          <span style="color:var(--muted);">Mode</span><span style="font-weight:600;">${s.mode||'—'}</span>
-          <span style="color:var(--muted);">Tickers</span><span style="font-weight:600;">${s.tickers||'—'}</span>
-        </div>
-        <div style="display:flex;gap:var(--sp-lg);font-size:var(--fs-xs);">
+        <div style="display:flex;gap:18px;font-size:var(--fs-xs);">
           <div><span style="color:var(--muted);">Equity</span><br><span style="font-weight:700;">$${fmt(s.equity)}</span></div>
           <div><span style="color:var(--muted);">P&L</span><br><span style="font-weight:700;color:${eqCls==='up'?'var(--accent)':'var(--danger)'}">${s.pl>=0?'+':''}${fmt(s.pl)} (${s.pl>=0?'+':''}${pct}%)</span></div>
           <div><span style="color:var(--muted);">Buying Power</span><br><span style="font-weight:700;">$${fmt(s.buying_power)}</span></div>
           <div><span style="color:var(--muted);">Open Pos.</span><br><span style="font-weight:700;">${s.open_positions}</span></div>
         </div>
-        ${indChips?`<div style="display:flex;gap:4px;flex-wrap:wrap;font-size:var(--fs-xs);">${indChips}</div>`:''}
+        ${indChips?`<div style="display:flex;gap:4px;flex-wrap:wrap;font-size:var(--fs-xs);padding-top:4px;border-top:1px solid var(--border);width:100%;">${indChips}</div>`:''}
       </div>`;
     // signal feed (styled like mockup)
     let signalsHtml='';
     if(s.signals&&s.signals.length){
-      signalsHtml+=`<div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:var(--sp-md);">
-        <div style="font-size:var(--fs-xs);font-weight:600;color:var(--accent);margin-bottom:8px;text-transform:uppercase;letter-spacing:0.04em;">Signal Feed</div>
-        <div style="max-height:200px;overflow-y:auto;display:flex;flex-direction:column;gap:4px;">
+      signalsHtml+=`<div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:14px 18px;">
+        <div style="font-size:var(--fs-xs);font-weight:600;color:var(--accent);margin-bottom:10px;text-transform:uppercase;letter-spacing:0.04em;">Signal Feed</div>
+        <div style="max-height:220px;overflow-y:auto;display:flex;flex-direction:column;gap:5px;padding-right:4px;">
           ${s.signals.slice(-20).reverse().map(sig=>{
             const sc=sig.signal==='BUY'?'#00c9a7':sig.signal==='SELL'?'#ef4444':'var(--muted)';
             const sbg=sig.signal==='BUY'?'rgba(0,201,167,0.12)':sig.signal==='SELL'?'rgba(239,68,68,0.12)':'transparent';
-            return `<div style="display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:6px;background:var(--glass);font-size:var(--fs-xs);">
+            return `<div style="display:flex;align-items:center;gap:10px;padding:7px 10px;border-radius:6px;background:var(--glass);font-size:var(--fs-xs);">
               <span style="display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:4px;background:${sbg};color:${sc};font-weight:700;font-size:0.7rem;">${sig.signal}</span>
               <b style="font-size:0.75rem;">${sig.symbol}</b>
               <span style="margin-left:auto;color:var(--muted);">$${sig.price} <span style="font-size:9px;">${sig.time}</span></span>
@@ -5545,7 +5550,7 @@ async function refreshMonitor(){
     $('monitor-signals').style.display=signalsHtml?'':'none';
     $('monitor-signals').innerHTML=signalsHtml;
   }catch(e){
-    $('monitor-status').innerHTML=`<div style="display:flex;align-items:center;gap:12px;background:var(--card);border:2px solid #22c55e;border-radius:var(--radius);padding:24px;text-align:center;">
+    $('monitor-status').innerHTML=`<div style="display:flex;align-items:center;gap:14px;background:var(--card);border:2px solid #22c55e;border-radius:var(--radius);padding:20px 24px;text-align:center;">
       <span style="display:inline-block;width:14px;height:14px;border-radius:50%;background:#22c55e;box-shadow:0 0 10px #22c55e88;"></span>
       <span style="font-weight:800;font-size:1.1rem;color:#22c55e;">RUNNING</span>
     </div>`;
@@ -5573,10 +5578,10 @@ async function _renderNews(){
   const needsFetch=tickersArr.filter(sym=>!window._newsCache||!window._newsCache[sym]||Date.now()-window._newsCache[sym].ts>120000);
   if(needsFetch.length&&!window._newsLoading){
     window._newsLoading=true;
-    $('monitor-news').innerHTML=`<div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:var(--sp-md);">
+    $('monitor-news').innerHTML=`<div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:14px 18px;">
       <div style="font-size:var(--fs-xs);font-weight:600;color:var(--accent);margin-bottom:10px;text-transform:uppercase;letter-spacing:0.04em;">Market News</div>
-      <div style="padding:16px;text-align:center;">
-        <div style="display:inline-block;width:20px;height:20px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spinner 0.7s linear infinite;margin-bottom:8px;"></div>
+      <div style="padding:20px 16px;text-align:center;">
+        <div style="display:inline-block;width:20px;height:20px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spinner 0.7s linear infinite;margin-bottom:10px;"></div>
         <div style="color:var(--muted);font-size:0.7rem;">Loading Ticker News — Read These While You Wait</div>
       </div>
     </div>`;
@@ -5595,12 +5600,12 @@ async function _renderNews(){
   }
   allNews.sort((a,b)=>new Date(b.published||0)-new Date(a.published||0));
   if(allNews.length){
-    let newsHtml='<div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:var(--sp-md);">';
+    let newsHtml='<div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:14px 18px;">';
     newsHtml+=`<div style="font-size:var(--fs-xs);font-weight:600;color:var(--accent);margin-bottom:10px;text-transform:uppercase;letter-spacing:0.04em;">Market News</div>`;
-    newsHtml+=`<div style="display:flex;flex-direction:column;gap:6px;max-height:340px;overflow-y:auto;">`;
+    newsHtml+=`<div style="display:flex;flex-direction:column;gap:6px;max-height:340px;overflow-y:auto;padding-right:4px;">`;
     for(const item of allNews.slice(0,30)){
       const color=['#3b82f6','#a855f7','#eab308','#f97316','#06b6d4','#8b5cf6','#ec4899','#14b8a6'][Math.abs(item.sym.charCodeAt(0)||0)%8];
-      newsHtml+=`<a href="${item.url}" target="_blank" style="display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:6px;background:var(--glass);text-decoration:none;transition:background 0.15s;border:1px solid transparent;" onmouseover="this.style.borderColor='var(--border2)';this.style.background='rgba(255,255,255,0.04)'" onmouseout="this.style.borderColor='transparent';this.style.background='var(--glass)'">
+      newsHtml+=`<a href="${item.url}" target="_blank" style="display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:6px;background:var(--glass);text-decoration:none;transition:background 0.15s;border:1px solid transparent;" onmouseover="this.style.borderColor='var(--border2)';this.style.background='rgba(255,255,255,0.04)'" onmouseout="this.style.borderColor='transparent';this.style.background='var(--glass)'">
         <span style="font-size:0.6rem;font-weight:600;padding:2px 6px;border-radius:3px;background:${color}20;color:${color};flex-shrink:0;text-transform:uppercase;">${item.sym}</span>
         <span style="flex:1;font-size:0.78rem;color:var(--text2);line-height:1.3;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;">${item.title}</span>
         <span style="font-size:0.62rem;color:var(--muted);flex-shrink:0;white-space:nowrap;">${item.source||''}</span>
@@ -5609,9 +5614,9 @@ async function _renderNews(){
     newsHtml+='</div></div>';
     $('monitor-news').innerHTML=newsHtml;
   }else{
-    $('monitor-news').innerHTML=`<div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:var(--sp-md);">
+    $('monitor-news').innerHTML=`<div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:14px 18px;">
       <div style="font-size:var(--fs-xs);font-weight:600;color:var(--accent);margin-bottom:10px;text-transform:uppercase;letter-spacing:0.04em;">Market News</div>
-      <div style="padding:16px;text-align:center;color:var(--muted);font-size:0.7rem;">No recent news found.</div>
+      <div style="padding:20px 16px;text-align:center;color:var(--muted);font-size:0.7rem;">No recent news found.</div>
     </div>`;
   }
 }
@@ -6013,7 +6018,7 @@ if __name__ == "__main__":
     time.sleep(1.2)
 
     window = webview.create_window(
-        "TraderMoney 6.0.0",
+        "TraderMoney 6.0.1",
         "http://127.0.0.1:5050",
         width=1440,
         height=880,
