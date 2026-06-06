@@ -48,7 +48,7 @@ import webview
 from flask import Flask, Response, jsonify, request, send_file
 from flask_cors import CORS
 
-APP_VERSION = "6.0.1"
+APP_VERSION = "6.0.2"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # AI CONFIGURATION
@@ -2369,6 +2369,7 @@ def api_status():
         "indicators": indicators,
         "market_status": state.broker_instance.get_market_status() if state.broker_instance else None,
         "broker_connected": state.broker_instance.is_connected() if state.broker_instance else False,
+        "broker_error": getattr(state, '_broker_error', None),
     })
 
 @app.route("/api/broker_status")
@@ -3358,7 +3359,7 @@ FRONTEND_HTML = r"""
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>TraderMoney 6.0.1</title>
+<title>TraderMoney 6.0.2</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root {
@@ -4321,7 +4322,7 @@ button.ghost:hover { box-shadow: none; }
     <span class="sidebar-logo">TM</span>
     <div class="sidebar-title">
       <span class="sidebar-name">TraderMoney</span>
-      <span class="sidebar-version">v6.0.1</span>
+      <span class="sidebar-version">v6.0.2</span>
     </div>
     <div class="sidebar-actions">
       <button onclick="location.reload()" title="Refresh"><svg class="icon" style="width:13px;height:13px;" viewBox="0 0 24 24"><path d="M17.65 6.35A7.958 7.958 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg></button>
@@ -4568,7 +4569,7 @@ button.ghost:hover { box-shadow: none; }
   <div id="tab-help" class="tab">
     <div class="hb">
       <input type="text" id="help-search" placeholder="Search help... (Cmd+F)" oninput="filterHelp()" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);font-size:.82rem;margin-bottom:10px;box-sizing:border-box;">
-      <h3>TraderMoney v6.0.1 – Complete Help Guide</h3>
+      <h3>TraderMoney v6.0.2 – Complete Help Guide</h3>
       <p style="font-size:.82rem;color:var(--muted);margin-top:-4px;">Your desktop algorithmic trading terminal. All features documented below.</p>
 
       <details>
@@ -4961,7 +4962,7 @@ button.ghost:hover { box-shadow: none; }
 'use strict';
 const $=id=>document.getElementById(id);
 let cfg={},licValid=false,curSym='',allTickers=[],tvWidget=null,lastTvSymbol='';
-let curSessionId=null,botRunning=false,lastBTData=null;
+let botRunning=false,lastBTData=null;
 
 function cs(raw){return raw.split(':')[0].trim().toUpperCase();}
 function fmt(n,d=2){return Number(n).toLocaleString(undefined,{maximumFractionDigits:d});}
@@ -5877,80 +5878,6 @@ function renderMarkdown(text){
   return s;
 }
 
-/* ── AI Chat ── */
-async function initAIChat(){
-  await loadSessions();
-  const data=await(await fetch('/api/chat/sessions')).json();
-  if(data.sessions&&data.sessions.length>0)await loadSession(data.sessions[0].id);
-  else await createNewSession();
-  updateChatLimitInfo();
-}
-async function loadSessions(){
-  try{const d=await(await fetch('/api/chat/sessions')).json();renderSessionList(d.sessions||[]);}catch(e){}
-}
-function renderSessionList(sessions){
-  const list=$('chat-sessions-list');list.innerHTML='';
-  sessions.forEach(s=>{
-    const item=document.createElement('div');item.className='chat-session-item'+(s.id===curSessionId?' active':'');
-    const titleSpan=document.createElement('span');titleSpan.textContent=s.title;titleSpan.style.flex='1';
-    item.appendChild(titleSpan);
-    const actions=document.createElement('span');actions.className='chat-actions';actions.style.display='none';actions.style.gap='4px';
-    const renBtn=document.createElement('button');renBtn.innerHTML='<svg class="icon" style="width:12px;height:12px"><use href="#i-edit"/></svg>';renBtn.style.background='none';renBtn.style.border='none';renBtn.style.cursor='pointer';renBtn.style.padding='2px 4px';renBtn.style.fontSize='.7rem';renBtn.title='Rename';
-    renBtn.onclick=async(e)=>{e.stopPropagation();const t=prompt('Session name:',s.title);if(t&&t.trim()){await fetch(`/api/chat/sessions/${s.id}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({title:t.trim()})});await loadSessions();}};
-    const delBtn=document.createElement('button');delBtn.innerHTML='<svg class="icon" style="width:12px;height:12px"><use href="#i-trash"/></svg>';delBtn.style.background='none';delBtn.style.border='none';delBtn.style.cursor='pointer';delBtn.style.padding='2px 4px';delBtn.style.fontSize='.7rem';delBtn.title='Delete';
-    delBtn.onclick=async(e)=>{e.stopPropagation();if(!confirm('Delete this chat?'))return;await fetch(`/api/chat/sessions/${s.id}`,{method:'DELETE'});if(s.id===curSessionId){curSessionId=null;$('chat-messages').innerHTML='';}await loadSessions();};
-    actions.appendChild(renBtn);actions.appendChild(delBtn);item.appendChild(actions);
-    item.onmouseenter=()=>actions.style.display='inline-flex';item.onmouseleave=()=>actions.style.display='none';
-    item.onclick=()=>loadSession(s.id);list.appendChild(item);
-  });
-}
-async function loadSession(sid){
-  curSessionId=sid;
-  const sessData=await(await fetch('/api/chat/sessions')).json();
-  renderSessionList(sessData.sessions||[]);
-  try{
-    const histData=await(await fetch(`/api/chat/sessions/${sid}`)).json();
-    $('chat-messages').innerHTML='';
-    (histData.messages||[]).forEach(m=>addChatMsg(m.content,m.role==='user'));
-  }catch(e){}
-  updateChatLimitInfo();
-}
-async function createNewSession(){
-  const r=await fetch('/api/chat/sessions',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title:'New Chat'})});
-  const data=await r.json();curSessionId=data.session_id;
-  await loadSessions();$('chat-messages').innerHTML='';updateChatLimitInfo();
-}
-function updateChatLimitInfo(){
-  const el=$('chat-limit');if(!el)return;
-  el.textContent=licValid?'Pro – unlimited':'Free: 5 messages/day';
-}
-function addChatMsg(text,isUser){
-  const msgs=$('chat-messages');
-  const wrap=document.createElement('div');wrap.className='cmsg '+(isUser?'user':'bot');
-  const sender=document.createElement('div');sender.className='msender';
-  sender.innerHTML=isUser?'You':'<svg class="icon" style="width:12px;height:12px"><use href="#i-robot"/></svg>TraderBot';
-  const body=document.createElement('div');body.className='mbody';
-  if(isUser)body.textContent=text;else body.innerHTML=renderMarkdown(text);
-  wrap.appendChild(sender);wrap.appendChild(body);msgs.appendChild(wrap);msgs.scrollTop=msgs.scrollHeight;
-  return wrap;
-}
-async function sendChat(){
-  const inputEl=$('chat-input');const msg=inputEl.value.trim();if(!msg)return;
-  inputEl.value='';addChatMsg(msg,true);
-  const typing=document.createElement('div');typing.className='chat-typing';
-  typing.textContent='TraderBot is thinking...';$('chat-messages').appendChild(typing);
-  $('chat-messages').scrollTop=$('chat-messages').scrollHeight;
-  const sendBtn=$('chat-send');sendBtn.disabled=true;
-  try{
-    const r=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:msg,session_id:curSessionId})});
-    const d=await r.json();typing.remove();
-    addChatMsg(d.reply||'No response.',false);
-    if(d.session_id&&d.session_id!==curSessionId){curSessionId=d.session_id;loadSessions();}
-  }catch(e){typing.remove();addChatMsg('Connection error. Please try again.',false);}
-  sendBtn.disabled=false;$('chat-messages').scrollTop=$('chat-messages').scrollHeight;
-}
-$('chat-input').addEventListener('keydown',function(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendChat();}});
-
 // Analysis Chat
 let analysisChatSessionId=null;
 async function sendAnalysisChat(){
@@ -6018,7 +5945,7 @@ if __name__ == "__main__":
     time.sleep(1.2)
 
     window = webview.create_window(
-        "TraderMoney 6.0.1",
+        "TraderMoney 6.0.2",
         "http://127.0.0.1:5050",
         width=1440,
         height=880,
