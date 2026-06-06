@@ -3454,10 +3454,10 @@ body.light #sb { background: var(--surface); border-right: 1px solid var(--borde
 }
 .sidebar-actions button:hover { background: var(--glass); color: var(--text); }
 body.sidebar-collapsed #sb{width:0;overflow:hidden;padding:0;min-width:0;}
-#sidebar-toggle{width:16px;transition:width 0.15s,background 0.15s;}
-body.sidebar-collapsed #sidebar-toggle{width:0;padding:0;border:none;background:transparent;overflow:visible;z-index:10;}
-body.sidebar-collapsed #sidebar-toggle svg{position:fixed;left:0;top:50%;margin-top:-7px;background:var(--bg);border:1px solid var(--border);border-left:none;border-radius:0 4px 4px 0;padding:6px 2px;width:12px;height:12px;transform:rotate(180deg);cursor:pointer;}
-#sidebar-toggle:hover{background:var(--glass);}
+#sidebar-toggle{position:fixed;top:18px;z-index:10;width:18px;height:24px;padding:0;border:none;background:transparent;color:var(--muted);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:left 0.2s,background 0.15s;left:310px;border-radius:0 4px 4px 0;}
+body.sidebar-collapsed #sidebar-toggle{left:0;}
+#sidebar-toggle:hover{background:var(--glass);color:var(--text);}
+body.sidebar-collapsed #sidebar-toggle svg{transform:rotate(180deg);}
 
 /* ── Bot Started Modal ── */
 #bot-started-overlay {
@@ -4479,7 +4479,7 @@ button.ghost:hover { box-shadow: none; }
 </div>
 
 <!-- ════ SIDEBAR TOGGLE ═══════════════════════════════════════════ -->
-<button id="sidebar-toggle" onclick="toggleSidebar()" title="Toggle sidebar" style="background:var(--bg2);border:none;border-right:1px solid var(--border);color:var(--muted);cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;padding:0;z-index:10;">
+<button id="sidebar-toggle" onclick="toggleSidebar()" title="Toggle sidebar">
   <svg style="width:14px;height:14px;transition:transform 0.2s;" viewBox="0 0 24 24"><path fill="currentColor" d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg>
 </button>
 
