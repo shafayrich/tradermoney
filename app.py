@@ -115,7 +115,8 @@ def acquire_lock():
         sys.exit(0)
 
 signal.signal(signal.SIGINT, lambda *_: sys.exit(0))
-signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+try: signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+except AttributeError: pass
 
 def is_internet_available() -> bool:
     try:
@@ -1887,6 +1888,9 @@ class TradingEngine(threading.Thread):
                                             top = headlines[0][:80]
                                             rationale += f" | News: {top}"
 
+                                if "/" not in s and self.broker and not self.broker.get_market_status():
+                                    rationale += " | Market closed"
+
                                 self.ui_queue.put(("signal", (s, sig, price, rationale)))
                                 db.insert_signal(_ts(), s, sig, price, rationale)
                                 try:
@@ -3454,9 +3458,9 @@ body.light #sb { background: var(--surface); border-right: 1px solid var(--borde
 }
 .sidebar-actions button:hover { background: var(--glass); color: var(--text); }
 body.sidebar-collapsed #sb{width:0;overflow:hidden;padding:0;min-width:0;}
-#sidebar-toggle{position:fixed;top:18px;z-index:10;width:18px;height:24px;padding:0;border:none;background:transparent;color:var(--muted);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:left 0.2s,background 0.15s;left:310px;border-radius:0 4px 4px 0;}
-body.sidebar-collapsed #sidebar-toggle{left:0;}
-#sidebar-toggle:hover{background:var(--glass);color:var(--text);}
+#sidebar-toggle{position:fixed;top:18px;z-index:10;width:24px;height:24px;padding:0;border:none;background:var(--glass);color:var(--muted);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:left 0.2s,background 0.15s;left:310px;border-radius:50%;border:1px solid var(--border);}
+body.sidebar-collapsed #sidebar-toggle{left:-1px;}
+#sidebar-toggle:hover{background:var(--bg2);color:var(--text);border-color:var(--accent);}
 body.sidebar-collapsed #sidebar-toggle svg{transform:rotate(180deg);}
 
 /* ── Bot Started Modal ── */
@@ -5006,9 +5010,10 @@ function updSess(){
   const o=ok=>ok?'sd so':'sd sc';
   $('ds').className=o(!wk&&(h>=22||h<5));$('dt').className=o(!wk&&(h>=23||h<6));
   $('dl').className=o(!wk&&h>=8&&h<16.5);$('dn').className=o(!wk&&h>=13.5&&h<20);
-  $('utc-clock').textContent='UTC: '+n.toISOString().slice(11,19);
+  const l=n.toLocaleString('en-US',{hour:'numeric',minute:'2-digit',second:'2-digit',hour12:true,timeZone:'UTC'});
+  $('utc-clock').textContent='UTC: '+l;
 }
-setInterval(updSess,30000);updSess();
+setInterval(updSess,1000);updSess();
 
 /* ── Broker credential helpers ── */
 function pw(id,l){return`<label>${l}</label><input type="password" id="${id}">`;}
