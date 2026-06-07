@@ -48,7 +48,7 @@ import webview
 from flask import Flask, Response, jsonify, request, send_file
 from flask_cors import CORS
 
-APP_VERSION = "6.1.0"
+APP_VERSION = "6.1.1"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # AI CONFIGURATION
@@ -3481,7 +3481,7 @@ FRONTEND_HTML = r"""
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>TraderMoney 6.1.0</title>
+<title>TraderMoney 6.1.1</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root {
@@ -3577,9 +3577,9 @@ body.light #sb { background: var(--surface); border-right: 1px solid var(--borde
 }
 .sidebar-actions button:hover { background: var(--glass); color: var(--text); }
 body.sidebar-collapsed #sb{width:0;overflow:hidden;padding:0;min-width:0;}
-#sidebar-toggle{position:fixed;top:18px;z-index:10;width:24px;height:24px;padding:0;border:none;background:var(--glass);color:var(--muted);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:left 0.2s,background 0.15s;left:310px;border-radius:50%;border:1px solid var(--border);}
-body.sidebar-collapsed #sidebar-toggle{left:-1px;}
-#sidebar-toggle:hover{background:var(--bg2);color:var(--text);border-color:var(--accent);}
+#sidebar-toggle{position:fixed;top:18px;z-index:10;width:28px;height:28px;padding:0;border:none;background:var(--bg2);color:var(--muted);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:left 0.25s ease,background 0.15s,box-shadow 0.15s;left:calc(var(--sw) + 10px);border-radius:50%;border:1px solid var(--border);box-shadow:var(--shadow);}
+body.sidebar-collapsed #sidebar-toggle{left:8px;}
+#sidebar-toggle:hover{background:var(--accent);color:#fff;border-color:var(--accent);box-shadow:0 2px 8px rgba(0,201,167,0.3);}
 body.sidebar-collapsed #sidebar-toggle svg{transform:rotate(180deg);}
 
 /* ── Bot Started Modal ── */
@@ -4374,10 +4374,18 @@ button.ghost:hover { box-shadow: none; }
 
 /* ── Sidebar Resize Handle ── */
 #sidebar-resize-handle {
-  position: absolute; top: 0; right: -2px; width: 4px; height: 100%; cursor: col-resize;
+  position: absolute; top: 0; right: -4px; width: 8px; height: 100%; cursor: col-resize;
   z-index: 10; background: transparent; transition: background 0.15s;
 }
-#sidebar-resize-handle:hover, #sidebar-resize-handle.active { background: var(--accent); }
+#sidebar-resize-handle::after {
+  content: ''; position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%);
+  width: 2px; height: 40px; border-radius: 2px;
+  background: var(--border3); transition: background 0.15s, height 0.15s;
+}
+#sidebar-resize-handle:hover::after, #sidebar-resize-handle.active::after {
+  background: var(--accent); height: 60px;
+}
+#sidebar-resize-handle:hover, #sidebar-resize-handle.active { background: transparent; }
 #sb { position: relative; }
 
 /* ── Draggable Tabs ── */
@@ -4385,13 +4393,6 @@ button.ghost:hover { box-shadow: none; }
 .tbtn[draggable="true"]:active { cursor: grabbing; }
 .tbtn.drag-over { border-bottom-color: var(--accent) !important; background: var(--accent-dim) !important; }
 .tbtn.dragging { opacity: 0.5; }
-
-/* ── Per-Tab Theme Icon ── */
-.tab-theme-icon {
-  font-size: 0.55rem; margin-left: 2px; cursor: pointer; opacity: 0.4;
-  transition: opacity 0.15s; vertical-align: middle;
-}
-.tab-theme-icon:hover { opacity: 1; }
 
 /* ── Sound Toggle ── */
 #sound-toggle {
@@ -4554,7 +4555,7 @@ button.ghost:hover { box-shadow: none; }
     <span class="sidebar-logo">TM</span>
     <div class="sidebar-title">
       <span class="sidebar-name">TraderMoney</span>
-      <span class="sidebar-version">v6.1.0</span>
+      <span class="sidebar-version">v6.1.1</span>
     </div>
     <div class="sidebar-actions">
       <button onclick="location.reload()" title="Refresh"><svg class="icon" style="width:13px;height:13px;" viewBox="0 0 24 24"><path d="M17.65 6.35A7.958 7.958 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg></button>
@@ -4737,13 +4738,13 @@ button.ghost:hover { box-shadow: none; }
 <!-- ════ MAIN ════════════════════════════════════════════════════ -->
 <div id="main">
   <div class="tab-bar" id="tabbar">
-    <button class="tbtn active" data-tab="charts"><svg class="icon"><use href="#i-chart"/></svg>Charts <span class="tab-theme-icon" onclick="event.stopPropagation();toggleTabTheme('charts')">🌙</span></button>
-    <button class="tbtn" data-tab="signals"><svg class="icon"><use href="#i-signal"/></svg>Signals <span class="tab-theme-icon" onclick="event.stopPropagation();toggleTabTheme('signals')">🌙</span></button>
-    <button class="tbtn" data-tab="history"><svg class="icon"><use href="#i-history"/></svg>History <span class="tab-theme-icon" onclick="event.stopPropagation();toggleTabTheme('history')">🌙</span></button>
-    <button class="tbtn" data-tab="backtest"><svg class="icon"><use href="#i-backtest"/></svg>Backtest <span class="tab-theme-icon" onclick="event.stopPropagation();toggleTabTheme('backtest')">🌙</span></button>
-    <button class="tbtn" data-tab="analysis"><svg class="icon"><use href="#i-analysis"/></svg>Analysis <span class="tab-theme-icon" onclick="event.stopPropagation();toggleTabTheme('analysis')">🌙</span></button>
-    <button class="tbtn" data-tab="help"><svg class="icon"><use href="#i-help"/></svg>Help <span class="tab-theme-icon" onclick="event.stopPropagation();toggleTabTheme('help')">🌙</span></button>
-    <button class="tbtn" data-tab="monitor" id="monitor-tab-btn"><svg class="icon" style="width:12px;height:12px;"><use href="#i-chart"/></svg> Live <span class="tab-theme-icon" onclick="event.stopPropagation();toggleTabTheme('monitor')">🌙</span></button>
+     <button class="tbtn active" data-tab="charts"><svg class="icon"><use href="#i-chart"/></svg>Charts</button>
+    <button class="tbtn" data-tab="signals"><svg class="icon"><use href="#i-signal"/></svg>Signals</button>
+    <button class="tbtn" data-tab="history"><svg class="icon"><use href="#i-history"/></svg>History</button>
+    <button class="tbtn" data-tab="backtest"><svg class="icon"><use href="#i-backtest"/></svg>Backtest</button>
+    <button class="tbtn" data-tab="analysis"><svg class="icon"><use href="#i-analysis"/></svg>Analysis</button>
+    <button class="tbtn" data-tab="help"><svg class="icon"><use href="#i-help"/></svg>Help</button>
+    <button class="tbtn" data-tab="monitor" id="monitor-tab-btn"><svg class="icon" style="width:12px;height:12px;"><use href="#i-chart"/></svg> Live</button>
     <button id="sound-toggle" onclick="toggleSound()" title="Sound alerts" style="margin-left:auto;flex-shrink:0;">🔇</button>
   </div>
 
@@ -4836,7 +4837,7 @@ button.ghost:hover { box-shadow: none; }
   <div id="tab-help" class="tab">
     <div class="hb">
       <input type="text" id="help-search" placeholder="Search help... (Cmd+F)" oninput="filterHelp()" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);font-size:.82rem;margin-bottom:10px;box-sizing:border-box;">
-      <h3>TraderMoney v6.1.0 – Complete Help Guide</h3>
+      <h3>TraderMoney v6.1.1 – Complete Help Guide</h3>
       <p style="font-size:.82rem;color:var(--muted);margin-top:-4px;">Your desktop algorithmic trading terminal. All features documented below.</p>
 
       <details>
@@ -4861,16 +4862,23 @@ button.ghost:hover { box-shadow: none; }
       </details>
 
       <details open>
-        <summary style="cursor:pointer;color:var(--accent);font-weight:600;">What's New in v6.1.0</summary>
+        <summary style="cursor:pointer;color:var(--accent);font-weight:600;">What's New in v6.1.1</summary>
         <div style="padding:8px 0;font-size:.82rem;line-height:1.7;">
           <ul>
+            <li><b>Removed Per-Tab Theme</b> – Global dark/light toggle now consistent across all tabs.</li>
+            <li><b>Polished Sidebar Resizer</b> – Wider drag handle with persistent visual indicator, smoother interaction.</li>
+            <li><b>Sidebar Toggle Repositioned</b> – Button follows sidebar edge dynamically, further from screen edge when collapsed.</li>
+          </ul>
+          <br>
+          <details style="font-size:.9rem;opacity:0.7;">
+            <summary>Full v6.1.0 Changelog</summary>
+            <ul>
             <li><b>Trailing Stop-Loss</b> (Pro) – Dynamic trailing stop follows price. Set trail % in Strategy section.</li>
             <li><b>Partial Position Exits (Scale Out)</b> (Pro) – Split position across two TP levels (60%/40% default).</li>
             <li><b>Multi-Timeframe Confirmation</b> (Pro) – Require confirmation on a secondary timeframe before signal emission.</li>
             <li><b>News Sentiment Override</b> (Pro) – Suppress signals when news sentiment contradicts direction.</li>
             <li><b>Draggable Tabs</b> – Drag and drop tabs to reorder. Order persists across sessions.</li>
             <li><b>Resizable Sidebar</b> – Drag the right edge of sidebar to resize from 180px to 450px.</li>
-            <li><b>Per-Tab Theme</b> – Each tab remembers its own dark/light theme preference.</li>
             <li><b>Sound Alerts</b> – Audible beeps on BUY (ascending) and SELL (descending) signals. Toggle via speaker icon.</li>
             <li><b>Real-Time Watchlist</b> – Live prices and % change in sidebar, updates every 5 seconds.</li>
             <li><b>Earnings Calendar</b> – Click "Earnings" on Charts tab to overlay earnings dates on TradingView chart.</li>
@@ -4885,6 +4893,7 @@ button.ghost:hover { box-shadow: none; }
             <li><b>Mobile Responsive</b> – Adaptive layout for mobile devices and small windows.</li>
             <li><b>Docker Support</b> – Deploy headless on any server with Docker.</li>
           </ul>
+      </details>
         </div>
       </details>
 
@@ -5888,7 +5897,6 @@ function switchTab(name){
   document.querySelectorAll('.tbtn').forEach(x=>x.classList.remove('active'));
   const t=$('tab-'+name),b=document.querySelector(`[data-tab="${name}"]`);
   if(t)t.classList.add('active');if(b)b.classList.add('active');
-  applyTabTheme(name);
   if(name==='charts')setTimeout(()=>{if(tvWidget&&tvWidget.resize)tvWidget.resize();},80);
   if(name==='monitor'){refreshMonitor();startMonitorPolling();}
   else stopMonitorPolling();
@@ -6248,26 +6256,6 @@ function initSidebarResize(){
   }catch(e){}
 }
 
-/* ── Per-Tab Theme (Feature 7) ── */
-let tabThemes={};
-function toggleTabTheme(tab){
-  const cur=tabThemes[tab]||'dark';
-  tabThemes[tab]=cur==='dark'?'light':'dark';
-  localStorage.setItem('tm_tab_themes',JSON.stringify(tabThemes));
-  applyTabTheme(tab);
-}
-function applyTabTheme(tab){
-  const theme=tabThemes[tab]||'dark';
-  if(theme==='light'){document.body.classList.add('light');}else{document.body.classList.remove('light');}
-  document.querySelectorAll('.tab-theme-icon').forEach(el=>{
-    el.textContent=theme==='dark'?'🌙':'☀️';
-    el.style.opacity=el.closest('.tab.active')||el.closest('.tbtn.active')?'1':'0.4';
-  });
-}
-function loadTabThemes(){
-  try{tabThemes=JSON.parse(localStorage.getItem('tm_tab_themes')||'{}');}catch(e){tabThemes={};}
-}
-
 /* ── Sound Alerts (Feature 8) ── */
 let soundEnabled=false;
 try{soundEnabled=JSON.parse(localStorage.getItem('tm_sound')||'false');}catch(e){}
@@ -6454,7 +6442,7 @@ function addPLBadges(monitorHtml){
 
 /* ── Boot ── */
 updateBrokerOptions();updateCreds();loadConfig();loadSettings();
-initAdvancedControls();loadTabOrder();initDraggableTabs();initSidebarResize();loadTabThemes();initNotifications();startWatchlistPolling();
+initAdvancedControls();loadTabOrder();initDraggableTabs();initSidebarResize();initNotifications();startWatchlistPolling();
 setTimeout(refreshLifetimeStats,3000);
 </script>
 </body>
