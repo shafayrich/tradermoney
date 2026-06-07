@@ -6319,10 +6319,11 @@ async function loadEarnings(){
   toast('Loading earnings calendar...','info');
   try{
     const today=new Date().toISOString().slice(0,10);
-    const apiKey='demo'; // Replace with FMP_API_KEY env var
+    const apiKey='demo';
     const r=await fetch(`https://financialmodelingprep.com/api/v3/earnings_calendar?from=${today}&to=${new Date(Date.now()+30*86400000).toISOString().slice(0,10)}&apikey=${apiKey}`);
-    const data=await r.json();
-    if(!data||data.length===0){toast('No earnings data available','info');return;}
+    const res=await r.json();
+    const data=res.earnings_calendar||res;
+    if(!Array.isArray(data)||data.length===0){toast('No earnings data available','info');return;}
     const tickers=(gv('tickers','AAPL')||'AAPL').split(',').map(cs).filter(Boolean);
     const relevant=data.filter(e=>tickers.includes(e.symbol));
     if(!relevant.length){toast('No upcoming earnings for your tickers','info');return;}
