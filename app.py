@@ -1911,23 +1911,23 @@ class TradingEngine(threading.Thread):
                                         if sig == "BUY":
                                             boost = sentiment * 0.2
                                             if sentiment > 0.1:
-                                                news_label = f" 📰+{sentiment:.2f}"
+                                                news_label = f" NEWS+{sentiment:.2f}"
                                             elif sentiment < -0.4:
                                                 self._log(f"[NewsFilter] Suppressed {sig} {s} "
                                                           f"(score: {sentiment:.2f})")
                                                 continue
                                             else:
-                                                news_label = f" 📰{sentiment:.2f}"
+                                                news_label = f" NEWS{sentiment:.2f}"
                                         else:
                                             boost = -sentiment * 0.2
                                             if sentiment < -0.1:
-                                                news_label = f" 📰{-sentiment:.2f}"
+                                                news_label = f" NEWS{-sentiment:.2f}"
                                             elif sentiment > 0.4:
                                                 self._log(f"[NewsFilter] Suppressed {sig} {s} "
                                                           f"(score: {sentiment:.2f})")
                                                 continue
                                             else:
-                                                news_label = f" 📰{sentiment:.2f}"
+                                                news_label = f" NEWS{sentiment:.2f}"
                                         conf = min(1.0, conf + boost)
                                         if headlines:
                                             top = headlines[0][:80]
@@ -4398,10 +4398,12 @@ button.ghost:hover { box-shadow: none; }
 #sound-toggle {
   background: transparent; border: none; color: var(--muted); font-size: 0.75rem;
   cursor: pointer; padding: 2px 6px; border-radius: 4px; transition: all 0.15s;
-  display: inline-flex; align-items: center; gap: 2px;
+  display: inline-flex; align-items: center;
 }
 #sound-toggle:hover { background: var(--glass); color: var(--text); }
 #sound-toggle.active { color: var(--accent); }
+#sound-toggle.active .sound-off { display: none; }
+#sound-toggle.active .sound-on { display: inline !important; }
 
 /* ── Watchlist ── */
 .wl-item {
@@ -4745,7 +4747,10 @@ button.ghost:hover { box-shadow: none; }
     <button class="tbtn" data-tab="analysis"><svg class="icon"><use href="#i-analysis"/></svg>Analysis</button>
     <button class="tbtn" data-tab="help"><svg class="icon"><use href="#i-help"/></svg>Help</button>
     <button class="tbtn" data-tab="monitor" id="monitor-tab-btn"><svg class="icon" style="width:12px;height:12px;"><use href="#i-chart"/></svg> Live</button>
-    <button id="sound-toggle" onclick="toggleSound()" title="Sound alerts" style="margin-left:auto;flex-shrink:0;">🔇</button>
+    <button id="sound-toggle" onclick="toggleSound()" title="Sound alerts" style="margin-left:auto;flex-shrink:0;">
+      <svg class="sound-off" viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/></svg>
+      <svg class="sound-on" viewBox="0 0 24 24" width="14" height="14" fill="currentColor" style="display:none;"><path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z"/></svg>
+    </button>
   </div>
 
   <!-- Charts tab -->
@@ -4999,7 +5004,7 @@ button.ghost:hover { box-shadow: none; }
           <p><b>Best for:</b> Adaptive risk management that accounts for volatility.</p>
           <p><b>Customizable:</b> ATR Period (default 14), Stop multiplier (default 2.0), TP multiplier (default 3.0).</p>
 
-          <h4>📰 News Sentiment</h4>
+          <h4>News Sentiment</h4>
           <p><b>What it does:</b> Fetches the latest 3 news headlines about each ticker from NewsAPI and analyzes sentiment via AI (Gemini 2.0 Flash). Strongly positive news boosts BUY confidence; strongly negative news boosts SELL confidence. Extremely contradictory news (BUY + very negative headlines) suppresses the signal.</p>
           <p><b>Best for:</b> Avoiding trades against the news flow. Catches earnings reactions, product launches, regulatory events.</p>
           <p><b>Requires:</b> FREE News API key at <a href="https://newsapi.org/register" target="_blank">newsapi.org/register</a> — add <code>NEWS_API_KEY=your_key</code> to <code>.env</code>. Pro license to enable the checkbox.</p>
@@ -5398,7 +5403,7 @@ function toggleTheme(){
   const saved=JSON.parse(localStorage.getItem('tm_settings')||'{}');
   saved.light=light;localStorage.setItem('tm_settings',JSON.stringify(saved));
   if(tvWidget&&lastTvSymbol)loadTradingViewChart(lastTvSymbol);
-  toast(light?'☀️ Light Mode':'🌙 Dark Mode','info');
+  toast(light?'Light Mode':'Dark Mode','info');
 }
 function applyLayout(){
   const layout=$('layout-select').value;
@@ -6307,13 +6312,13 @@ async function loadEarnings(){
     const tickers=(gv('tickers','AAPL')||'AAPL').split(',').map(cs).filter(Boolean);
     const relevant=data.filter(e=>tickers.includes(e.symbol));
     if(!relevant.length){toast('No upcoming earnings for your tickers','info');return;}
-    let msg='📊 Upcoming Earnings:<br>';
+    let msg='Upcoming Earnings:<br>';
     relevant.forEach(e=>{msg+=`${e.symbol}: ${e.date} (est: ${e.estimatedEarnings||'N/A'})<br>`;});
     if(tvWidget&&relevant.length){
       relevant.forEach(e=>{
         try{
           const d=new Date(e.date);
-          tvWidget.chart().createShape({time:d.getTime()/1000,position:'aboveBar',text:`📊 ${e.symbol}`,backgroundColor:'rgba(0,201,167,0.12)',borderColor:'#00c9a7'});
+          tvWidget.chart().createShape({time:d.getTime()/1000,position:'aboveBar',text:`${e.symbol}`,backgroundColor:'rgba(0,201,167,0.12)',borderColor:'#00c9a7'});
         }catch(e2){}
       });
     }
@@ -6370,7 +6375,7 @@ async function refreshLifetimeStats(){
     if(lb.length){
       const top=lb[0];
       statsEl.style.display='flex';
-      statsEl.innerHTML=`🏆 Lifetime: <span style="color:var(--accent);font-weight:700;">${top.win_rate.toFixed(0)}%</span> WR · ${top.total_signals} signals`;
+      statsEl.innerHTML=`Lifetime: <span style="color:var(--accent);font-weight:700;">${top.win_rate.toFixed(0)}%</span> WR · ${top.total_signals} signals`;
     }else{
       statsEl.style.display='none';
     }
