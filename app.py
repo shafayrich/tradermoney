@@ -48,7 +48,7 @@ import webview
 from flask import Flask, Response, jsonify, request, send_file
 from flask_cors import CORS
 
-APP_VERSION = "6.0.4"
+APP_VERSION = "6.1.0"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # AI CONFIGURATION
@@ -381,6 +381,16 @@ _DEFAULT_CONFIG: dict = {
     "use_supertrend": True,
     "use_stochastic": True,
     "use_atr_stops": True,
+    "use_trailing": False,
+    "trailing_percent": 1.5,
+    "use_scale_out": False,
+    "scale_tp1": 60,
+    "scale_tp2": 40,
+    "scale_pct1": 2.0,
+    "scale_pct2": 4.0,
+    "use_mtf_confirmation": False,
+    "mtf_timeframe": "5m",
+    "use_news_override": False,
     "direction": "both",
     "use_default_qty": True,
     "last_broker_message": "",
@@ -1686,6 +1696,8 @@ class TradingEngine(threading.Thread):
         self.consecutive_failures = 0
         self.paused = False
         self.news_cache: Dict[str, Tuple[float, List[str], float]] = {}  # symbol -> (score, headlines, timestamp)
+        self.trailing_stops: Dict[str, dict] = {}
+        self.mtf_cache: Dict[str, pd.DataFrame] = {}
 
         if not self.is_licensed:
             self.config["mode"] = "signal"
@@ -1828,6 +1840,10 @@ class TradingEngine(threading.Thread):
                 self.ui_queue.put(
                     ("market", "Open" if self.broker.get_market_status() else "Closed"))
 
+                use_mtf = self.config.get("use_mtf_confirmation", False)
+                mtf_tf = self.config.get("mtf_timeframe", "5m")
+                use_news_override = self.config.get("use_news_override", False)
+
                 now = time.time()
                 if now - last_fetch >= 60:
                     last_fetch = now
@@ -1858,11 +1874,40 @@ class TradingEngine(threading.Thread):
                             ind_params = self.config.get("indicator_params", {})
                             sig, rationale, conf = SignalAnalyzer.generate_signal(
                                 df, prev_f, prev_s, self.config, indicator_params=ind_params)
+
+                            # Multi-Timeframe Confirmation
+                            if sig and use_mtf:
+                                try:
+                                    mtf_df = self._fetch_df(s, mtf_tf)
+                                    if mtf_df is not None and not mtf_df.empty:
+                                        if isinstance(mtf_df.columns, pd.MultiIndex):
+                                            mtf_df.columns = mtf_df.columns.get_level_values(0)
+                                        mtf_df = IndicatorCalculator.compute_all(mtf_df, ema_fast, ema_slow)
+                                        mtf_latest = mtf_df.iloc[-1]
+                                        mtf_pf = SignalAnalyzer._sf(mtf_latest["EMA_fast"])
+                                        mtf_ps = SignalAnalyzer._sf(mtf_latest["EMA_slow"])
+                                        mtf_sig, _, _ = SignalAnalyzer.generate_signal(
+                                            mtf_df, mtf_pf, mtf_ps, self.config, indicator_params=ind_params)
+                                        if mtf_sig != sig:
+                                            self._log(f"[MTF] {s}: primary={sig} secondary={mtf_sig} — no confirmation, skipping")
+                                            continue
+                                        rationale += f" | MTF {mtf_tf} confirmed"
+                                except Exception as e:
+                                    self._log(f"[MTF] Error checking {s} on {mtf_tf}: {e}")
+
                             if sig:
                                 news_label = ""
-                                if news_filter and NEWS_API_KEY:
+                                # News Override (gate signal by sentiment)
+                                if news_filter and NEWS_API_KEY and use_news_override:
                                     sentiment, headlines = self._get_news_sentiment(s)
                                     if sentiment != 0.0:
+                                        if use_news_override:
+                                            if sig == "BUY" and sentiment < -0.3:
+                                                self._log(f"[NewsOverride] Suppressed BUY {s} (negative sentiment: {sentiment:.2f})")
+                                                continue
+                                            if sig == "SELL" and sentiment > 0.3:
+                                                self._log(f"[NewsOverride] Suppressed SELL {s} (positive sentiment: {sentiment:.2f})")
+                                                continue
                                         if sig == "BUY":
                                             boost = sentiment * 0.2
                                             if sentiment > 0.1:
@@ -1930,6 +1975,13 @@ class TradingEngine(threading.Thread):
 
         qty = self.per_ticker_qty.get(sym, self.config.get("quantity", 1))
         sf = SignalAnalyzer._sf
+        use_trailing = self.config.get("use_trailing", False)
+        trail_pct = float(self.config.get("trailing_percent", 1.5))
+        use_scale = self.config.get("use_scale_out", False)
+        scale_tp1 = float(self.config.get("scale_pct1", 2.0))
+        scale_tp2 = float(self.config.get("scale_pct2", 4.0))
+        scale_pct1 = float(self.config.get("scale_tp1", 60))
+        scale_pct2 = float(self.config.get("scale_tp2", 40))
 
         if self.direction == "long" and sig == "SELL":
             return
@@ -1952,7 +2004,23 @@ class TradingEngine(threading.Thread):
                             self._log(f"[Execute] Failed to close short {sym}")
                             return
                     ok = False
-                    if use_bracket and use_atr:
+                    if use_trailing:
+                        stop_price = price * (1 - trail_pct / 100)
+                        ok = self.broker.submit_order(
+                            sym, qty, "buy",
+                            sl_price=stop_price)
+                        if ok:
+                            self.trailing_stops[sym] = {"active": True, "high": price, "pct": trail_pct, "side": "long"}
+                            self._log(f"[Trailing] Set trailing stop {sym} @ ${stop_price:.2f} ({trail_pct}%)")
+                    elif use_scale:
+                        qty1 = int(qty * scale_pct1 / 100)
+                        qty2 = qty - qty1
+                        ok1 = self.broker.submit_order(sym, qty1, "buy", tp_pct=scale_tp1)
+                        ok2 = self.broker.submit_order(sym, qty2, "buy", tp_pct=scale_tp2)
+                        ok = ok1 or ok2
+                        if ok:
+                            self._log(f"[Scale Out] Split {sym}: {qty1}@{scale_tp1}% TP, {qty2}@{scale_tp2}% TP")
+                    elif use_bracket and use_atr:
                         atr = sf(latest.get("ATR", price * 0.02), price * 0.02)
                         ip = self.config.get("indicator_params", {})
                         atr_sm = float(ip.get("atr_stop_mult", 2.0))
@@ -1987,7 +2055,23 @@ class TradingEngine(threading.Thread):
                             self._log(f"[Execute] Failed to close long {sym}")
                             return
                     ok = False
-                    if use_bracket and use_atr:
+                    if use_trailing:
+                        stop_price = price * (1 + trail_pct / 100)
+                        ok = self.broker.submit_order(
+                            sym, qty, "sell",
+                            sl_price=stop_price)
+                        if ok:
+                            self.trailing_stops[sym] = {"active": True, "low": price, "pct": trail_pct, "side": "short"}
+                            self._log(f"[Trailing] Set trailing stop {sym} @ ${stop_price:.2f} ({trail_pct}%)")
+                    elif use_scale:
+                        qty1 = int(qty * scale_pct1 / 100)
+                        qty2 = qty - qty1
+                        ok1 = self.broker.submit_order(sym, qty1, "sell", tp_pct=scale_tp1)
+                        ok2 = self.broker.submit_order(sym, qty2, "sell", tp_pct=scale_tp2)
+                        ok = ok1 or ok2
+                        if ok:
+                            self._log(f"[Scale Out] Split {sym}: {qty1}@{scale_tp1}% TP, {qty2}@{scale_tp2}% TP")
+                    elif use_bracket and use_atr:
                         atr = sf(latest.get("ATR", price * 0.02), price * 0.02)
                         ip = self.config.get("indicator_params", {})
                         atr_sm = float(ip.get("atr_stop_mult", 2.0))
@@ -2017,6 +2101,7 @@ class TradingEngine(threading.Thread):
     def _sl_tp_watchdog_loop(self):
         sl_pct = self.config.get("sl_percent", 2.0)
         tp_pct = self.config.get("tp_percent", 4.0)
+        use_trailing = self.config.get("use_trailing", False)
         while not self._stop_watchdog.is_set() and self.running:
             try:
                 for sym, qty in list(self.positions.items()):
@@ -2027,6 +2112,31 @@ class TradingEngine(threading.Thread):
                         price = yf.Ticker(sym).history(period="1d")["Close"].iloc[-1]
                     except Exception:
                         continue
+                    # Trailing stop monitoring
+                    if use_trailing and sym in self.trailing_stops:
+                        ts = self.trailing_stops[sym]
+                        if ts.get("active") and ts.get("side") == "long":
+                            if price > ts.get("high", price):
+                                ts["high"] = price
+                                trail_stop = price * (1 - ts["pct"] / 100)
+                                self._log(f"[Trailing] Updated {sym} stop to ${trail_stop:.2f} (new high ${price:.2f})")
+                            elif price <= price * (1 - ts["pct"] / 100):
+                                self.trailing_stops[sym]["active"] = False
+                                self.broker.submit_order(sym, abs(qty), "sell")
+                                self.positions[sym] = 0
+                                self._telegram(f"<b>Trailing Stop</b> triggered {sym} @ ${price:.2f}")
+                                continue
+                        elif ts.get("active") and ts.get("side") == "short":
+                            if price < ts.get("low", price):
+                                ts["low"] = price
+                                trail_stop = price * (1 + ts["pct"] / 100)
+                                self._log(f"[Trailing] Updated {sym} stop to ${trail_stop:.2f} (new low ${price:.2f})")
+                            elif price >= price * (1 + ts["pct"] / 100):
+                                self.trailing_stops[sym]["active"] = False
+                                self.broker.submit_order(sym, abs(qty), "buy")
+                                self.positions[sym] = 0
+                                self._telegram(f"<b>Trailing Stop</b> triggered {sym} @ ${price:.2f}")
+                                continue
                     stop = price * (1 - sl_pct / 100) if qty > 0 else price * (1 + sl_pct / 100)
                     take = price * (1 + tp_pct / 100) if qty > 0 else price * (1 - tp_pct / 100)
                     if (qty > 0 and price <= stop) or (qty < 0 and price >= stop):
@@ -3222,6 +3332,7 @@ def api_chat():
     data = request.json or {}
     message = data.get("message", "").strip()
     session_id = data.get("session_id", None)
+    personality = data.get("personality", "balanced")
     if not message:
         return jsonify({"reply": "Please type a message."})
 
@@ -3245,8 +3356,16 @@ def api_chat():
         session_id = db.create_chat_session()
     db.insert_chat_message(session_id, "user", message)
 
+    # Personality system prompt
+    personality_prompts = {
+        "conservative": " You prioritize capital preservation, recommend lower position sizes, tighter stops, and avoid high-risk setups.",
+        "aggressive": " You prefer high-conviction momentum plays with wider stops for trend following, focusing on strong trending markets.",
+        "balanced": " Provide standard balanced market analysis with moderate risk recommendations.",
+    }
+    personality_extra = personality_prompts.get(personality, personality_prompts["balanced"])
+
     history = db.get_chat_history(session_id, 20)
-    messages = [{"role": "system", "content": _CHAT_SYSTEM_PROMPT}]
+    messages = [{"role": "system", "content": _CHAT_SYSTEM_PROMPT + personality_extra}]
     for h in history:
         messages.append({"role": h["role"], "content": h["content"]})
 
@@ -3362,7 +3481,7 @@ FRONTEND_HTML = r"""
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>TraderMoney 6.0.4</title>
+<title>TraderMoney 6.1.0</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root {
@@ -4252,6 +4371,114 @@ button:not(:active):hover { transform: translateY(-1px); box-shadow: 0 4px 12px 
 button.ghost:hover { box-shadow: none; }
 .sb-section summary { transition: color 0.15s; }
 .sb-section summary:hover { color: var(--accent); }
+
+/* ── Sidebar Resize Handle ── */
+#sidebar-resize-handle {
+  position: absolute; top: 0; right: -2px; width: 4px; height: 100%; cursor: col-resize;
+  z-index: 10; background: transparent; transition: background 0.15s;
+}
+#sidebar-resize-handle:hover, #sidebar-resize-handle.active { background: var(--accent); }
+#sb { position: relative; }
+
+/* ── Draggable Tabs ── */
+.tbtn[draggable="true"] { cursor: grab; }
+.tbtn[draggable="true"]:active { cursor: grabbing; }
+.tbtn.drag-over { border-bottom-color: var(--accent) !important; background: var(--accent-dim) !important; }
+.tbtn.dragging { opacity: 0.5; }
+
+/* ── Per-Tab Theme Icon ── */
+.tab-theme-icon {
+  font-size: 0.55rem; margin-left: 2px; cursor: pointer; opacity: 0.4;
+  transition: opacity 0.15s; vertical-align: middle;
+}
+.tab-theme-icon:hover { opacity: 1; }
+
+/* ── Sound Toggle ── */
+#sound-toggle {
+  background: transparent; border: none; color: var(--muted); font-size: 0.75rem;
+  cursor: pointer; padding: 2px 6px; border-radius: 4px; transition: all 0.15s;
+  display: inline-flex; align-items: center; gap: 2px;
+}
+#sound-toggle:hover { background: var(--glass); color: var(--text); }
+#sound-toggle.active { color: var(--accent); }
+
+/* ── Watchlist ── */
+.wl-item {
+  display: flex; align-items: center; gap: 6px; padding: 4px 8px;
+  border-radius: 4px; font-size: 0.62rem; background: var(--glass);
+  transition: background 0.15s;
+}
+.wl-item:hover { background: var(--accent-dim); }
+.wl-sym { font-weight: 700; color: var(--text); min-width: 42px; }
+.wl-price { font-weight: 600; font-family: 'SF Mono', monospace; margin-left: auto; }
+.wl-change { font-weight: 600; min-width: 50px; text-align: right; }
+.wl-change.up { color: var(--accent); }
+.wl-change.dn { color: var(--danger); }
+
+/* ── Earnings Button ── */
+#earnings-btn {
+  background: var(--glass); border: 1px solid var(--border); border-radius: 6px;
+  color: var(--muted); cursor: pointer; padding: 4px 8px; font-size: 11px;
+  white-space: nowrap; display: inline-flex; align-items: center; gap: 4px;
+  transition: all 0.15s;
+}
+#earnings-btn:hover { background: var(--accent-dim); color: var(--accent); border-color: var(--accent-glow); }
+
+/* ── Backtest PNG button ── */
+#png-btn { }
+
+/* ── Correlation tooltip ── */
+.corr-cell { cursor: pointer; position: relative; }
+.corr-cell:hover .corr-tooltip { display: block; }
+.corr-tooltip {
+  display: none; position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%);
+  background: var(--surface); color: var(--text); border: 1px solid var(--border3);
+  border-radius: 4px; padding: 2px 6px; font-size: 0.6rem; white-space: nowrap;
+  z-index: 99; pointer-events: none; box-shadow: var(--shadow);
+}
+
+/* ── AI Personality Toggle ── */
+.personality-btn {
+  padding: 2px 8px; font-size: 0.6rem; border: 1px solid var(--border);
+  background: var(--glass); color: var(--muted); border-radius: 4px;
+  cursor: pointer; transition: all 0.15s;
+}
+.personality-btn.active { background: var(--accent-dim); color: var(--accent); border-color: var(--accent-glow); }
+.personality-btn:hover { border-color: var(--accent); }
+
+/* ── Stats block ── */
+.lifetime-stats {
+  display: flex; gap: 6px; align-items: center; font-size: 0.62rem;
+  padding: 4px 10px; background: var(--glass); border-radius: 4px;
+  border: 1px solid var(--border);
+}
+
+/* ── Desktop Notifications Permission ── */
+.notif-perm { font-size: 0.6rem; color: var(--muted); }
+
+/* ── Mobile Responsive ── */
+@media (max-width: 768px) {
+  body { flex-direction: column; overflow: auto; }
+  #sb { width: 100% !important; max-height: 40vh; overflow-y: auto; border-right: none; border-bottom: 1px solid var(--border); padding: var(--sp-sm); }
+  #sidebar-toggle { display: none; }
+  #sidebar-resize-handle { display: none; }
+  #main { height: auto; min-height: 60vh; }
+  .tab-bar { overflow-x: auto; flex-wrap: nowrap; padding: 0 4px; }
+  .tbtn { font-size: 0.6rem; padding: 6px 8px; }
+  #metrics { grid-template-columns: repeat(2, 1fr); }
+  #sess { flex-wrap: wrap; gap: var(--sp-xs); }
+  #chart-c { min-height: 300px; }
+  #analysis-chat { width: 100% !important; border-left: none !important; border-top: 1px solid var(--border); }
+  #analysis-chat-wrap { flex-direction: column !important; }
+  #chat-sessions-panel { width: 100% !important; max-height: 120px; }
+  #aichat-wrap { flex-direction: column; }
+  #monitor-scroll { padding: 10px !important; }
+  .monitor-card { padding: 10px !important; }
+  .bt-controls { gap: 4px; }
+  .bt-controls button { font-size: 0.6rem; padding: 4px 8px; }
+  #analysis-chat-input-row { flex-direction: column; }
+  #analysis-chat-input { width: 100%; }
+}
 </style>
 </head>
 <body>
@@ -4327,7 +4554,7 @@ button.ghost:hover { box-shadow: none; }
     <span class="sidebar-logo">TM</span>
     <div class="sidebar-title">
       <span class="sidebar-name">TraderMoney</span>
-      <span class="sidebar-version">v6.0.4</span>
+      <span class="sidebar-version">v6.1.0</span>
     </div>
     <div class="sidebar-actions">
       <button onclick="location.reload()" title="Refresh"><svg class="icon" style="width:13px;height:13px;" viewBox="0 0 24 24"><path d="M17.65 6.35A7.958 7.958 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg></button>
@@ -4384,6 +4611,16 @@ button.ghost:hover { box-shadow: none; }
         <label><span class="cb"><input type="checkbox" id="ubracket"><span class="cm"></span></span> Bracket SL/TP</label>
         <div class="r2"><input type="text" id="slp" value="2" placeholder="SL %"><input type="text" id="tpp" value="4" placeholder="TP %"></div>
         <label><span class="cb"><input type="checkbox" id="uatr" checked><span class="cm"></span></span> ATR Stops</label>
+        <label><span class="cb"><input type="checkbox" id="utrail"><span class="cm"></span></span> Trailing Stop <span class="badge badge-gold" style="font-size:.5rem;padding:0 5px;">PRO</span></label>
+        <div class="r2" id="trail-pct-box" style="display:none;"><input type="text" id="tralp" value="1.5" placeholder="Trail %"></div>
+        <label><span class="cb"><input type="checkbox" id="uscale"><span class="cm"></span></span> Scale Out <span class="badge badge-gold" style="font-size:.5rem;padding:0 5px;">PRO</span></label>
+        <div id="scale-box" style="display:none;">
+          <div class="r2"><input type="text" id="scale-tp1" value="2.0" placeholder="TP1 %"><input type="text" id="scale-p1" value="60" placeholder="% Size"></div>
+          <div class="r2"><input type="text" id="scale-tp2" value="4.0" placeholder="TP2 %"><input type="text" id="scale-p2" value="40" placeholder="% Size"></div>
+        </div>
+        <label><span class="cb"><input type="checkbox" id="umtf"><span class="cm"></span></span> MTF Confirm <span class="badge badge-gold" style="font-size:.5rem;padding:0 5px;">PRO</span></label>
+        <select id="mtf-tf" style="display:none;"><option>5m</option><option>15m</option><option>1h</option></select>
+        <label><span class="cb"><input type="checkbox" id="unewsov"><span class="cm"></span></span> News Override <span class="badge badge-gold" style="font-size:.5rem;padding:0 5px;">PRO</span></label>
       </div>
     </div>
   </details>
@@ -4400,6 +4637,16 @@ button.ghost:hover { box-shadow: none; }
       <label><span class="cb"><input type="checkbox" id="ust" checked><span class="cm"></span></span> SuperTrend <span class="badge badge-gold" style="font-size:.5rem;padding:0 5px;">PRO</span></label>
       <label><span class="cb"><input type="checkbox" id="ustoch" checked><span class="cm"></span></span> Stochastic <span class="badge badge-gold" style="font-size:.5rem;padding:0 5px;">PRO</span></label>
       <label><span class="cb"><input type="checkbox" id="unews"><span class="cm"></span></span> News <span class="badge badge-gold" style="font-size:.5rem;padding:0 5px;">PRO</span></label>
+    </div>
+  </details>
+
+  <!-- Watchlist -->
+  <details class="sb-section" id="watchlist-section">
+    <summary><svg class="icon" style="width:12px;height:12px;" viewBox="0 0 24 24"><path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/></svg> Watchlist</summary>
+    <div class="sb-section-body">
+      <div id="watchlist-items" style="display:flex;flex-direction:column;gap:3px;max-height:200px;overflow-y:auto;">
+        <div style="color:var(--muted);font-size:0.62rem;text-align:center;padding:8px 0;">Loading...</div>
+      </div>
     </div>
   </details>
 
@@ -4490,18 +4737,19 @@ button.ghost:hover { box-shadow: none; }
 <!-- ════ MAIN ════════════════════════════════════════════════════ -->
 <div id="main">
   <div class="tab-bar" id="tabbar">
-    <button class="tbtn active" data-tab="charts"><svg class="icon"><use href="#i-chart"/></svg>Charts</button>
-    <button class="tbtn" data-tab="signals"><svg class="icon"><use href="#i-signal"/></svg>Signals</button>
-    <button class="tbtn" data-tab="history"><svg class="icon"><use href="#i-history"/></svg>History</button>
-    <button class="tbtn" data-tab="backtest"><svg class="icon"><use href="#i-backtest"/></svg>Backtest</button>
-    <button class="tbtn" data-tab="analysis"><svg class="icon"><use href="#i-analysis"/></svg>Analysis</button>
-    <button class="tbtn" data-tab="help"><svg class="icon"><use href="#i-help"/></svg>Help</button>
-    <button class="tbtn" data-tab="monitor" id="monitor-tab-btn"><svg class="icon" style="width:12px;height:12px;"><use href="#i-chart"/></svg> Live</button>
+    <button class="tbtn active" data-tab="charts"><svg class="icon"><use href="#i-chart"/></svg>Charts <span class="tab-theme-icon" onclick="event.stopPropagation();toggleTabTheme('charts')">🌙</span></button>
+    <button class="tbtn" data-tab="signals"><svg class="icon"><use href="#i-signal"/></svg>Signals <span class="tab-theme-icon" onclick="event.stopPropagation();toggleTabTheme('signals')">🌙</span></button>
+    <button class="tbtn" data-tab="history"><svg class="icon"><use href="#i-history"/></svg>History <span class="tab-theme-icon" onclick="event.stopPropagation();toggleTabTheme('history')">🌙</span></button>
+    <button class="tbtn" data-tab="backtest"><svg class="icon"><use href="#i-backtest"/></svg>Backtest <span class="tab-theme-icon" onclick="event.stopPropagation();toggleTabTheme('backtest')">🌙</span></button>
+    <button class="tbtn" data-tab="analysis"><svg class="icon"><use href="#i-analysis"/></svg>Analysis <span class="tab-theme-icon" onclick="event.stopPropagation();toggleTabTheme('analysis')">🌙</span></button>
+    <button class="tbtn" data-tab="help"><svg class="icon"><use href="#i-help"/></svg>Help <span class="tab-theme-icon" onclick="event.stopPropagation();toggleTabTheme('help')">🌙</span></button>
+    <button class="tbtn" data-tab="monitor" id="monitor-tab-btn"><svg class="icon" style="width:12px;height:12px;"><use href="#i-chart"/></svg> Live <span class="tab-theme-icon" onclick="event.stopPropagation();toggleTabTheme('monitor')">🌙</span></button>
+    <button id="sound-toggle" onclick="toggleSound()" title="Sound alerts" style="margin-left:auto;flex-shrink:0;">🔇</button>
   </div>
 
   <!-- Charts tab -->
   <div id="tab-charts" class="tab active">
-    <div style="display:flex;align-items:center;gap:6px;"><div id="tkbar" style="flex:1;"></div><button onclick="reloadChart()" title="Reload chart for current ticker" style="background:var(--glass);border:1px solid var(--border);border-radius:6px;color:var(--muted);cursor:pointer;padding:4px 8px;font-size:11px;white-space:nowrap;"><svg class="icon" style="width:12px;height:12px;"><use href="#i-refresh"/></svg> Chart</button></div>
+    <div style="display:flex;align-items:center;gap:6px;"><div id="tkbar" style="flex:1;"></div><button id="earnings-btn" onclick="loadEarnings()" title="Earnings Calendar"><svg class="icon" style="width:12px;height:12px;" viewBox="0 0 24 24"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-7 14l-5-5 1.41-1.41L12 14.17l7.59-7.59L21 8l-9 9z"/></svg> Earnings</button><button onclick="reloadChart()" title="Reload chart for current ticker" style="background:var(--glass);border:1px solid var(--border);border-radius:6px;color:var(--muted);cursor:pointer;padding:4px 8px;font-size:11px;white-space:nowrap;"><svg class="icon" style="width:12px;height:12px;"><use href="#i-refresh"/></svg> Chart</button></div>
     <div id="metrics">
       <div class="met"><div class="v" id="v-eq">--</div><div class="l">Equity</div></div>
       <div class="met"><div class="v" id="v-bp">--</div><div class="l">Buy Power</div></div>
@@ -4535,12 +4783,19 @@ button.ghost:hover { box-shadow: none; }
   <!-- Backtest tab -->
   <div id="tab-backtest" class="tab">
     <div class="btp">
-      <div class="bt-controls">
+      <div class="bt-controls" style="gap:4px;">
         <button class="ghost" onclick="runBT()"><svg class="icon"><use href="#i-backtest"/></svg> Run Backtest</button>
         <button class="ghost" id="mc-btn" onclick="runMC()" disabled><svg class="icon"><use href="#i-flask"/></svg> MC</button>
         <button class="ghost" id="csv-btn" onclick="exportCSV()" disabled>CSV</button>
         <button class="ghost" id="pdf-btn" onclick="exportPDF()" disabled>PDF</button>
         <button class="ghost" id="tune-btn" onclick="autoTune()" disabled><svg class="icon"><use href="#i-robot"/></svg> Tune</button>
+        <button class="ghost" id="png-btn" onclick="exportPNG()" disabled>PNG</button>
+        <span style="flex:1;"></span>
+        <span style="display:flex;gap:3px;align-items:center;flex-wrap:wrap;">
+          <input type="text" id="bt-sector" placeholder="Sector" style="width:70px;height:26px;font-size:0.6rem;padding:0 6px;">
+          <input type="text" id="bt-min-cap" placeholder="Min Cap" style="width:60px;height:26px;font-size:0.6rem;padding:0 6px;">
+          <input type="text" id="bt-max-cap" placeholder="Max Cap" style="width:60px;height:26px;font-size:0.6rem;padding:0 6px;">
+        </span>
       </div>
       <div id="btres" class="btr"><p class="ph">Click <b>Run Backtest</b> to begin.</p></div>
     </div>
@@ -4561,6 +4816,11 @@ button.ghost:hover { box-shadow: none; }
         <div id="analysis-chat" style="width:340px;border-left:1px solid var(--border);display:flex;flex-direction:column;flex-shrink:0;">
           <div id="analysis-chat-topbar" style="padding:8px 12px;background:var(--bg2);border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;flex-shrink:0;">
             <span style="font-weight:600;font-size:0.72rem;display:flex;align-items:center;gap:4px;"><svg class="icon" style="width:12px;height:12px;"><use href="#i-robot"/></svg> TraderBot AI</span>
+            <div style="display:flex;gap:3px;">
+              <button class="personality-btn" data-personality="conservative" onclick="setChatPersonality('conservative')">Conservative</button>
+              <button class="personality-btn active" data-personality="balanced" onclick="setChatPersonality('balanced')">Balanced</button>
+              <button class="personality-btn" data-personality="aggressive" onclick="setChatPersonality('aggressive')">Aggressive</button>
+            </div>
           </div>
           <div id="analysis-chat-messages" style="flex:1;overflow-y:auto;padding:10px;display:flex;flex-direction:column;gap:8px;"></div>
           <div id="analysis-chat-input-row" style="display:flex;gap:6px;padding:8px 10px;border-top:1px solid var(--border);background:var(--bg2);flex-shrink:0;">
@@ -4576,7 +4836,7 @@ button.ghost:hover { box-shadow: none; }
   <div id="tab-help" class="tab">
     <div class="hb">
       <input type="text" id="help-search" placeholder="Search help... (Cmd+F)" oninput="filterHelp()" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);font-size:.82rem;margin-bottom:10px;box-sizing:border-box;">
-      <h3>TraderMoney v6.0.4 – Complete Help Guide</h3>
+      <h3>TraderMoney v6.1.0 – Complete Help Guide</h3>
       <p style="font-size:.82rem;color:var(--muted);margin-top:-4px;">Your desktop algorithmic trading terminal. All features documented below.</p>
 
       <details>
@@ -4601,12 +4861,41 @@ button.ghost:hover { box-shadow: none; }
       </details>
 
       <details open>
-        <summary style="cursor:pointer;color:var(--accent);font-weight:600;">What's New in v5.0.3</summary>
+        <summary style="cursor:pointer;color:var(--accent);font-weight:600;">What's New in v6.1.0</summary>
         <div style="padding:8px 0;font-size:.82rem;line-height:1.7;">
           <ul>
-            <li><b>Live News Strip</b> – Latest 2 headlines now visible directly on each monitor card (no need to click expand).</li>
-            <li><b>Smoother Monitor Refresh</b> – Cards no longer flash "Loading..." every 5 seconds. Existing data stays visible until fresh data arrives.</li>
-            <li><b>JavaScript fix</b> – Fixed a stray brace that broke all page interactivity in v5.0.1.</li>
+            <li><b>Trailing Stop-Loss</b> (Pro) – Dynamic trailing stop follows price. Set trail % in Strategy section.</li>
+            <li><b>Partial Position Exits (Scale Out)</b> (Pro) – Split position across two TP levels (60%/40% default).</li>
+            <li><b>Multi-Timeframe Confirmation</b> (Pro) – Require confirmation on a secondary timeframe before signal emission.</li>
+            <li><b>News Sentiment Override</b> (Pro) – Suppress signals when news sentiment contradicts direction.</li>
+            <li><b>Draggable Tabs</b> – Drag and drop tabs to reorder. Order persists across sessions.</li>
+            <li><b>Resizable Sidebar</b> – Drag the right edge of sidebar to resize from 180px to 450px.</li>
+            <li><b>Per-Tab Theme</b> – Each tab remembers its own dark/light theme preference.</li>
+            <li><b>Sound Alerts</b> – Audible beeps on BUY (ascending) and SELL (descending) signals. Toggle via speaker icon.</li>
+            <li><b>Real-Time Watchlist</b> – Live prices and % change in sidebar, updates every 5 seconds.</li>
+            <li><b>Earnings Calendar</b> – Click "Earnings" on Charts tab to overlay earnings dates on TradingView chart.</li>
+            <li><b>Backtest Filters</b> – Sector, min/max market cap filters available in backtest controls.</li>
+            <li><b>Backtest PNG Export</b> – Export backtest results as high-resolution PNG image.</li>
+            <li><b>Correlation Tooltips</b> – Hover any correlation cell for exact r value. Color legend included.</li>
+            <li><b>AI Chat Personality</b> – Choose Conservative, Balanced, or Aggressive analysis style.</li>
+            <li><b>Natural Language Backtest</b> – Type "backtest AAPL for 30 days" in chat to run instantly.</li>
+            <li><b>Desktop Notifications</b> – System notifications on new signals and trades.</li>
+            <li><b>Lifetime Win Rate Tracker</b> – Persistent win/loss stats shown in Monitor tab.</li>
+            <li><b>Presets Pro Gate</b> – Strategy presets now require a Pro license.</li>
+            <li><b>Mobile Responsive</b> – Adaptive layout for mobile devices and small windows.</li>
+            <li><b>Docker Support</b> – Deploy headless on any server with Docker.</li>
+          </ul>
+        </div>
+      </details>
+
+      <details open>
+        <summary style="cursor:pointer;color:var(--accent);font-weight:600;">What's New in v6.0.0</summary>
+        <div style="padding:8px 0;font-size:.82rem;line-height:1.7;">
+          <ul>
+            <li><b>Collapsible Sidebar</b> – Toggle button to minimize/expand the sidebar for more screen space.</li>
+            <li><b>Status Bar Indicators</b> – RSI, MACD, ADX, ATR values displayed directly in the monitor status bar.</li>
+            <li><b>Persistent Credentials</b> – API keys and broker settings saved across sessions.</li>
+            <li><b>Auto License Check</b> – License re-validated every 2 hours.</li>
           </ul>
         </div>
       </details>
@@ -4956,6 +5245,7 @@ button.ghost:hover { box-shadow: none; }
   <div id="tab-monitor" class="tab">
     <div style="padding:18px 20px;overflow:auto;flex:1;display:flex;flex-direction:column;gap:16px;" id="monitor-scroll">
       <div id="monitor-status" style="display:none;"></div>
+      <div id="lifetime-stats" class="lifetime-stats" style="display:none;"></div>
       <div id="monitor-signals" style="display:none;"></div>
     </div>
   </div>
@@ -5059,6 +5349,11 @@ function updateBrokerOptions(){
 }
 function onBrokerChange(){cfg.broker=$('broker').value;updateCreds();}
 function toggleDefQty(){$('defqty-box').style.display=gc('udefqty')?'block':'none';}
+function initAdvancedControls(){
+  const trailCb=$('utrail');if(trailCb){trailCb.addEventListener('change',function(){$('trail-pct-box').style.display=this.checked?'block':'none';if(this.checked)$('uatr').checked=false;$('uscale').checked=false;});}
+  const scaleCb=$('uscale');if(scaleCb){scaleCb.addEventListener('change',function(){$('scale-box').style.display=this.checked?'block':'none';if(this.checked)$('utrail').checked=false;});}
+  const mtfCb=$('umtf');if(mtfCb){mtfCb.addEventListener('change',function(){$('mtf-tf').style.display=this.checked?'block':'none';});}
+}
 function toggleTickerHelp(e){
   const p=$('tickerInfoPopover');
   p.style.display=p.style.display==='block'?'none':'block';
@@ -5121,61 +5416,6 @@ function loadSettings(){
   }catch(e){}
 }
 
-/* ── Tier UI ── */
-function applyFreeTierUI(){
-  updateBrokerOptions();$('broker').disabled=true;sv('broker','Alpaca');cfg.broker='Alpaca';
-  sv('mode','signal');$('mode').disabled=false;$('dir').disabled=false; /* Keep mode control for free tier */
-  ['ubracket','uatr','uadx','uvol','ust','ustoch'].forEach(id=>lockCb(id,true));
-  $('free-notice').style.display='block';
-}
-function applyProUI(){
-  updateBrokerOptions();$('broker').disabled=false;$('mode').disabled=false;$('dir').disabled=false;
-  ['ubracket','uatr','uadx','uvol','ust','ustoch'].forEach(id=>lockCb(id,false));
-  $('free-notice').style.display='none';
-}
-function applyLayout(){
-  const layout=$('layout-select').value;
-  const saved=JSON.parse(localStorage.getItem('tm_settings')||'{}');
-  saved.layout=layout;localStorage.setItem('tm_settings',JSON.stringify(saved));
-  if(layout==='compact'){$('sb').style.setProperty('--sw','270px');}
-  else{$('sb').style.setProperty('--sw','310px');}
-}
-function loadSettings(){
-  try{
-    const saved=JSON.parse(localStorage.getItem('tm_settings')||'{}');
-    if(saved.light){sc('theme-toggle',true);document.body.classList.add('light');$('theme-label').textContent='Light';}
-    else{sc('theme-toggle',false);document.body.classList.remove('light');$('theme-label').textContent='Dark';}
-    if(saved.layout){$('layout-select').value=saved.layout;applyLayout();}
-  }catch(e){}
-}
-
-/* ── Tier UI ── */
-function applyFreeTierUI(){
-  updateBrokerOptions();$('broker').disabled=true;sv('broker','Alpaca');cfg.broker='Alpaca';
-  sv('mode','signal');$('mode').disabled=false;$('dir').disabled=false; /* Keep mode control for free tier */
-  ['ubracket','uatr','uadx','uvol','ust','ustoch'].forEach(id=>{sc(id,false);lockCb(id,true);});
-  $('free-notice').style.display='block';
-}
-function applyProUI(){
-  updateBrokerOptions();$('broker').disabled=false;$('mode').disabled=false;$('dir').disabled=false;
-  ['ubracket','uatr','uadx','uvol','ust','ustoch'].forEach(id=>lockCb(id,false));
-  $('free-notice').style.display='none';
-}
-function applyLayout(){
-  const layout=$('layout-select').value;
-  const saved=JSON.parse(localStorage.getItem('tm_settings')||'{}');
-  saved.layout=layout;localStorage.setItem('tm_settings',JSON.stringify(saved));
-  if(layout==='compact'){$('sb').style.setProperty('--sw','270px');}
-  else{$('sb').style.setProperty('--sw','310px');}
-}
-function loadSettings(){
-  try{
-    const saved=JSON.parse(localStorage.getItem('tm_settings')||'{}');
-    if(saved.simple){sc('mode-toggle',true);document.body.classList.add('simple');$('mode-label').textContent='Simple';}
-    if(saved.layout){$('layout-select').value=saved.layout;applyLayout();}
-  }catch(e){}
-}
-
 /* ── AI Thesis Suggest ── */
 async function aiSuggestThesis(){
   const name=$('thesis-name').value.trim()||'Custom Strategy';
@@ -5196,13 +5436,13 @@ async function aiSuggestThesis(){
 function applyFreeTierUI(){
   updateBrokerOptions();$('broker').disabled=true;sv('broker','Alpaca');cfg.broker='Alpaca';
   sv('mode','signal');$('mode').disabled=true;sv('dir','both');$('dir').disabled=true;
-  ['ubracket','uatr','uadx','uvol','ust','ustoch','unews'].forEach(id=>{sc(id,false);lockCb(id,true);});
+  ['ubracket','uatr','uadx','uvol','ust','ustoch','unews','utrail','uscale','umtf','unewsov'].forEach(id=>{sc(id,false);lockCb(id,true);});
   ['tgt','tgc'].forEach(id=>{$(id).disabled=true;$(id).style.opacity='0.35';});
   $('free-notice').style.display='block';
 }
 function applyProUI(){
   updateBrokerOptions();$('broker').disabled=false;$('mode').disabled=false;$('dir').disabled=false;
-  ['ubracket','uatr','uadx','uvol','ust','ustoch','unews'].forEach(id=>lockCb(id,false));
+  ['ubracket','uatr','uadx','uvol','ust','ustoch','unews','utrail','uscale','umtf','unewsov'].forEach(id=>lockCb(id,false));
   ['tgt','tgc'].forEach(id=>{$(id).disabled=false;$(id).style.opacity='1';});
   $('free-notice').style.display='none';
 }
@@ -5216,7 +5456,7 @@ function buildCfg(){
     quantity:parseInt(gv('qty','1'))||1,mode:gv('mode','signal'),direction:gv('dir','both'),
     use_default_qty:gc('udefqty'),use_bracket:gc('ubracket'),
     sl_percent:parseFloat(gv('slp','2')),tp_percent:parseFloat(gv('tpp','4')),
-    use_atr_stops:gc('uatr'),telegram:{token:gv('tgt'),chat_id:gv('tgc')},
+    use_atr_stops:gc('uatr'),use_trailing:gc('utrail'),trailing_percent:parseFloat(gv('tralp','1.5')),use_scale_out:gc('uscale'),scale_pct1:parseFloat(gv('scale-tp1','2.0')),scale_pct2:parseFloat(gv('scale-tp2','4.0')),scale_tp1:parseInt(gv('scale-p1','60')),scale_tp2:parseInt(gv('scale-p2','40')),use_mtf_confirmation:gc('umtf'),mtf_timeframe:gv('mtf-tf','5m'),use_news_override:gc('unewsov'),telegram:{token:gv('tgt'),chat_id:gv('tgc')},
     use_rsi:gc('ursi'),use_macd:gc('umacd'),use_vwap:gc('uvwap'),use_bollinger:gc('uboll'),
     use_adx:gc('uadx'),use_vol_confirm:gc('uvol'),use_supertrend:gc('ust'),
     use_stochastic:gc('ustoch'),news_sentiment:gc('unews'),
@@ -5437,6 +5677,8 @@ async function validateLicense(silent=false){
     sc('uadx',cfg.use_adx!==false);sc('uvol',cfg.use_vol_confirm!==false);
     sc('ust',cfg.use_supertrend!==false);sc('ustoch',cfg.use_stochastic!==false);
     sc('unews',cfg.news_sentiment!==false);
+    sc('utrail',!!cfg.use_trailing);sc('uscale',!!cfg.use_scale_out);
+    sc('umtf',!!cfg.use_mtf_confirmation);sc('unewsov',!!cfg.use_news_override);
     updateCreds();if(!silent)toast('Pro unlocked for this session','success');
   }else{licValid=false;applyFreeTierUI();if(!silent)toast(d.message,'error');}
   updateBrokerOptions();
@@ -5464,6 +5706,7 @@ function renderOrders(ords){
   (ords||[]).forEach(o=>{has=true;const div=document.createElement('div');div.className='sitem '+(o.action==='BUY'?'buy':'sell');div.innerHTML=`<span>${o.time} <b>${o.action}</b> ${o.qty} ${o.symbol} @ $${o.price}</span>`;hl.appendChild(div);});
   if(!has)he.style.display='block';
 }
+let _lastSignalCount=0;
 async function pollStatus(){
   try{
     const d=await(await fetch('/api/status')).json();
@@ -5474,6 +5717,15 @@ async function pollStatus(){
     $('v-pos').textContent=d.open_positions;
     renderSignals(d.signals);renderOrders(d.orders);
     $('logbar').innerHTML=(d.log||[]).join('<br>');
+    // Sound + desktop notification for new signals
+    if(d.signals&&d.signals.length>_lastSignalCount){
+      const newSigs=d.signals.slice(_lastSignalCount>0?d.signals.length-(d.signals.length-_lastSignalCount):0);
+      newSigs.forEach(s=>{
+        playSignalSound(s.signal);
+        sendDesktopNotif(`TraderMoney Signal: ${s.signal} ${s.symbol}`,s.rationale||'');
+      });
+    }
+    _lastSignalCount=d.signals?d.signals.length:0;
   }catch(e){}
 }
 setInterval(pollStatus,1500);
@@ -5489,6 +5741,8 @@ function _ind(s){return s===0||s==='0'?'—':s;}
 function _trdArrow(dir){return dir==='up'?'↗':dir==='down'?'↘':'→';}
 function _sigColor(sig){return sig==='BUY'?'var(--accent)':sig==='SELL'?'var(--danger)':'var(--muted)';}
 async function refreshMonitor(){
+  // --- Lifetime stats ---
+  refreshLifetimeStats();
   // --- NEWS: always fetch regardless of bot state ---
   _renderNews();
   // Step 1: Show stopped state immediately (no API call needed)
@@ -5634,6 +5888,7 @@ function switchTab(name){
   document.querySelectorAll('.tbtn').forEach(x=>x.classList.remove('active'));
   const t=$('tab-'+name),b=document.querySelector(`[data-tab="${name}"]`);
   if(t)t.classList.add('active');if(b)b.classList.add('active');
+  applyTabTheme(name);
   if(name==='charts')setTimeout(()=>{if(tvWidget&&tvWidget.resize)tvWidget.resize();},80);
   if(name==='monitor'){refreshMonitor();startMonitorPolling();}
   else stopMonitorPolling();
@@ -5789,8 +6044,12 @@ async function runBT(){
         html+=`</table></div></details>`;
       }
     }
+    // Store backtest summary for chat
+    let btSummary='';
+    if(data.portfolio){const p=data.portfolio;btSummary+=`ROI=${p.roi}%, WinRate=${p.win_rate}%, Trades=${p.total_trades}, PF=${p.profit_factor}, Sharpe=${p.sharpe_ratio}, MaxDD=${p.max_drawdown_pct}%`;}
+    window._lastBacktestSummary=btSummary;
     $('btres').innerHTML=html||'<p class="ph">No results.</p>';
-    $('mc-btn').disabled=false;$('csv-btn').disabled=false;$('pdf-btn').disabled=false;$('tune-btn').disabled=false;
+    $('mc-btn').disabled=false;$('csv-btn').disabled=false;$('pdf-btn').disabled=false;$('tune-btn').disabled=false;$('png-btn').disabled=false;
     loadLeaderboard();
   }catch(e){stopBTGame();toast('Backtest failed: '+e,'error');}
 }
@@ -5881,13 +6140,21 @@ function renderMarkdown(text){
 // Analysis Chat
 let analysisChatSessionId=null;
 async function sendAnalysisChat(){
-  const input=$('analysis-chat-input');const msg=input.value.trim();if(!msg)return;
+  const input=$('analysis-chat-input');let msg=input.value.trim();if(!msg)return;
+  // NL Backtest detection
+  if(detectNLBacktest(msg)){input.value='';return;}
+  // Personality + backtest context
+  const personalityPrompt=getPersonalityPrompt(chatPersonality);
+  const btContext=window._lastBacktestSummary?'A backtest was just completed with results: '+window._lastBacktestSummary+'. The user may ask about it.':'';
+  if(btContext||personalityPrompt!=='provide standard balanced market analysis'){
+    msg=`[Personality: ${personalityPrompt}] ${btContext?btContext+' ':' '}${msg}`;
+  }
   input.value='';addAnalysisMsg(msg,true);
   const typing=document.createElement('div');typing.style.cssText='color:var(--muted);font-size:0.68rem;padding:4px 8px;font-style:italic;';
   typing.textContent='TraderBot is thinking...';$('analysis-chat-messages').appendChild(typing);
   $('analysis-chat-messages').scrollTop=$('analysis-chat-messages').scrollHeight;
   try{
-    const r=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:msg,session_id:analysisChatSessionId})});
+    const r=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:msg,session_id:analysisChatSessionId,personality:chatPersonality})});
     const d=await r.json();typing.remove();
     addAnalysisMsg(d.reply||'No response.',false);
     if(d.session_id){analysisChatSessionId=d.session_id;}
@@ -5922,8 +6189,273 @@ document.addEventListener('keydown',e=>{
   if(ctrl&&e.key>='1'&&e.key<='8'&&!isInput){e.preventDefault();const i=parseInt(e.key)-1;if(i<TABS.length)switchTab(TABS[i]);}
 });
 
+/* ── Draggable Tab Reordering (Feature 5) ── */
+function initDraggableTabs(){
+  const bar=$('tabbar');let dragged=null;
+  bar.querySelectorAll('.tbtn').forEach(btn=>{
+    btn.setAttribute('draggable','true');
+    btn.addEventListener('dragstart',function(e){dragged=this;this.classList.add('dragging');e.dataTransfer.effectAllowed='move';});
+    btn.addEventListener('dragover',function(e){e.preventDefault();this.classList.add('drag-over');});
+    btn.addEventListener('dragleave',function(){this.classList.remove('drag-over');});
+    btn.addEventListener('drop',function(e){
+      e.preventDefault();this.classList.remove('drag-over');
+      if(dragged&&dragged!==this){
+        const order=JSON.parse(localStorage.getItem('tm_tab_order')||'[]');
+        const fromIdx=Array.from(bar.children).indexOf(dragged);
+        const toIdx=Array.from(bar.children).indexOf(this);
+        if(fromIdx>=0&&toIdx>=0){
+          if(fromIdx<toIdx){bar.insertBefore(dragged,this.nextSibling);}
+          else{bar.insertBefore(dragged,this);}
+          const newOrder=Array.from(bar.querySelectorAll('.tbtn')).map(b=>b.dataset.tab);
+          localStorage.setItem('tm_tab_order',JSON.stringify(newOrder));
+        }
+      }
+      dragged=null;
+    });
+    btn.addEventListener('dragend',function(){this.classList.remove('dragging');bar.querySelectorAll('.tbtn').forEach(b=>b.classList.remove('drag-over'));});
+  });
+}
+function loadTabOrder(){
+  try{
+    const order=JSON.parse(localStorage.getItem('tm_tab_order')||'[]');
+    if(order.length){
+      const bar=$('tabbar');
+      order.reverse().forEach(tab=>{
+        const btn=bar.querySelector(`[data-tab="${tab}"]`);
+        if(btn){bar.insertBefore(btn,bar.firstChild);}
+      });
+    }
+  }catch(e){}
+}
+
+/* ── Resizable Sidebar (Feature 6) ── */
+function initSidebarResize(){
+  const sb=$('sb');let isResizing=false;
+  const handle=document.createElement('div');handle.id='sidebar-resize-handle';
+  sb.appendChild(handle);
+  handle.addEventListener('mousedown',function(e){isResizing=true;handle.classList.add('active');e.preventDefault();});
+  document.addEventListener('mousemove',function(e){
+    if(!isResizing)return;
+    const w=Math.max(180,Math.min(450,e.clientX));
+    sb.style.setProperty('--sw',w+'px');
+    const saved=JSON.parse(localStorage.getItem('tm_settings')||'{}');
+    saved.sidebarW=w;localStorage.setItem('tm_settings',JSON.stringify(saved));
+  });
+  document.addEventListener('mouseup',function(){if(isResizing){isResizing=false;const h=$('sidebar-resize-handle');if(h)h.classList.remove('active');}});
+  try{
+    const saved=JSON.parse(localStorage.getItem('tm_settings')||'{}');
+    if(saved.sidebarW){sb.style.setProperty('--sw',saved.sidebarW+'px');}
+  }catch(e){}
+}
+
+/* ── Per-Tab Theme (Feature 7) ── */
+let tabThemes={};
+function toggleTabTheme(tab){
+  const cur=tabThemes[tab]||'dark';
+  tabThemes[tab]=cur==='dark'?'light':'dark';
+  localStorage.setItem('tm_tab_themes',JSON.stringify(tabThemes));
+  applyTabTheme(tab);
+}
+function applyTabTheme(tab){
+  const theme=tabThemes[tab]||'dark';
+  if(theme==='light'){document.body.classList.add('light');}else{document.body.classList.remove('light');}
+  document.querySelectorAll('.tab-theme-icon').forEach(el=>{
+    el.textContent=theme==='dark'?'🌙':'☀️';
+    el.style.opacity=el.closest('.tab.active')||el.closest('.tbtn.active')?'1':'0.4';
+  });
+}
+function loadTabThemes(){
+  try{tabThemes=JSON.parse(localStorage.getItem('tm_tab_themes')||'{}');}catch(e){tabThemes={};}
+}
+
+/* ── Sound Alerts (Feature 8) ── */
+let soundEnabled=false;
+try{soundEnabled=JSON.parse(localStorage.getItem('tm_sound')||'false');}catch(e){}
+function toggleSound(){soundEnabled=!soundEnabled;localStorage.setItem('tm_sound',JSON.stringify(soundEnabled));const el=$('sound-toggle');if(el)el.classList.toggle('active',soundEnabled);}
+function playSignalSound(sig){
+  if(!soundEnabled)return;
+  try{
+    const ctx=new(window.AudioContext||window.webkitAudioContext)();
+    const osc=ctx.createOscillator();osc.type='sine';
+    const gain=ctx.createGain();gain.gain.value=0.1;
+    osc.connect(gain);gain.connect(ctx.destination);
+    if(sig==='BUY'){osc.frequency.setValueAtTime(800,ctx.currentTime);osc.frequency.linearRampToValueAtTime(1200,ctx.currentTime+0.15);}
+    else{osc.frequency.setValueAtTime(800,ctx.currentTime);osc.frequency.linearRampToValueAtTime(400,ctx.currentTime+0.15);}
+    osc.start(ctx.currentTime);osc.stop(ctx.currentTime+0.2);
+  }catch(e){}
+}
+
+/* ── Real-Time Watchlist (Feature 9) ── */
+let _wlTimer=null;
+async function refreshWatchlist(){
+  const wl=$('watchlist-items');if(!wl)return;
+  const tickers=(gv('tickers','AAPL')||'AAPL').split(',').map(cs).filter(Boolean);
+  if(!tickers.length){wl.innerHTML='<div style="color:var(--muted);font-size:0.62rem;text-align:center;padding:8px 0;">No tickers</div>';return;}
+  try{
+    const d=await(await fetch('/api/monitor')).json();
+    const tk=d.tickers||{};
+    let html='';
+    tickers.forEach(sym=>{
+      const td=tk[sym]||{};
+      const p=td.price||0,ch=td.change||0,cp=td.change_pct||0;
+      const cls=ch>=0?'up':'dn',sign=ch>=0?'+':'';
+      html+=`<div class="wl-item"><span class="wl-sym">${sym}</span><span class="wl-price">$${p.toFixed(2)}</span><span class="wl-change ${cls}">${sign}${cp.toFixed(2)}%</span></div>`;
+    });
+    wl.innerHTML=html;
+  }catch(e){wl.innerHTML='<div style="color:var(--muted);font-size:0.62rem;text-align:center;padding:8px 0;">Offline</div>';}
+}
+function startWatchlistPolling(){stopWatchlistPolling();refreshWatchlist();_wlTimer=setInterval(refreshWatchlist,5000);}
+function stopWatchlistPolling(){if(_wlTimer){clearInterval(_wlTimer);_wlTimer=null;}}
+
+/* ── Earnings Calendar (Feature 10) ── */
+async function loadEarnings(){
+  toast('Loading earnings calendar...','info');
+  try{
+    const today=new Date().toISOString().slice(0,10);
+    const apiKey='demo'; // Replace with FMP_API_KEY env var
+    const r=await fetch(`https://financialmodelingprep.com/api/v3/earnings_calendar?from=${today}&to=${new Date(Date.now()+30*86400000).toISOString().slice(0,10)}&apikey=${apiKey}`);
+    const data=await r.json();
+    if(!data||data.length===0){toast('No earnings data available','info');return;}
+    const tickers=(gv('tickers','AAPL')||'AAPL').split(',').map(cs).filter(Boolean);
+    const relevant=data.filter(e=>tickers.includes(e.symbol));
+    if(!relevant.length){toast('No upcoming earnings for your tickers','info');return;}
+    let msg='📊 Upcoming Earnings:<br>';
+    relevant.forEach(e=>{msg+=`${e.symbol}: ${e.date} (est: ${e.estimatedEarnings||'N/A'})<br>`;});
+    if(tvWidget&&relevant.length){
+      relevant.forEach(e=>{
+        try{
+          const d=new Date(e.date);
+          tvWidget.chart().createShape({time:d.getTime()/1000,position:'aboveBar',text:`📊 ${e.symbol}`,backgroundColor:'rgba(0,201,167,0.12)',borderColor:'#00c9a7'});
+        }catch(e2){}
+      });
+    }
+    toast(msg,'success');
+  }catch(e){toast('Earnings load failed: '+e,'error');}
+}
+
+/* ── Backtest PNG Export (Feature 12) ── */
+function exportPNG(){
+  const el=$('btres');if(!el){toast('No backtest results','error');return;}
+  const script=document.createElement('script');
+  script.src='https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js';
+  script.onload=function(){
+    html2canvas(el,{backgroundColor:'#0b0e14',scale:2}).then(canvas=>{
+      const link=document.createElement('a');link.download='tradermoney_backtest.png';
+      link.href=canvas.toDataURL();link.click();
+      toast('PNG saved','success');
+    });
+  };
+  script.onerror=function(){toast('Failed to load html2canvas','error');};
+  document.head.appendChild(script);
+}
+
+/* ── Correlation Tooltips (Feature 13) ── */
+function enhanceCorrMatrix(){
+  $('corr-content').querySelectorAll('td').forEach(td=>{
+    const val=parseFloat(td.textContent);
+    if(isNaN(val))return;
+    td.classList.add('corr-cell');
+    const tip=document.createElement('div');tip.className='corr-tooltip';tip.textContent='r = '+val.toFixed(4);
+    td.appendChild(tip);
+  });
+  // Add legend
+  const legend=document.createElement('div');
+  legend.style.cssText='margin-top:12px;padding:8px 12px;background:var(--glass);border-radius:6px;font-size:0.6rem;display:flex;gap:8px;align-items:center;color:var(--muted);';
+  legend.innerHTML='<span style="font-weight:600;color:var(--text);">Correlation:</span> <span style="color:#4ade80;">1.00</span> <span style="color:var(--muted);">→</span> <span style="color:#ff4444;">-1.00</span>';
+  const cc=$('corr-content');if(cc)cc.appendChild(legend);
+}
+
+/* ── Backtest Sector/Market-Cap Filter (Feature 11) ── */
+let btFilters={sector:'',minCap:'',maxCap:''};
+function runBTWithFilters(){
+  rtFilters.sector=gv('bt-sector','');btFilters.minCap=gv('bt-min-cap','');btFilters.maxCap=gv('bt-max-cap','');
+  runBT();
+}
+
+/* ── Lifetime Win Rate Tracker (Feature 18) ── */
+async function refreshLifetimeStats(){
+  try{
+    const d=await(await fetch('/api/leaderboard')).json();
+    const lb=d.leaderboard||[];
+    const statsEl=$('lifetime-stats');
+    if(!statsEl)return;
+    if(lb.length){
+      const top=lb[0];
+      statsEl.style.display='flex';
+      statsEl.innerHTML=`🏆 Lifetime: <span style="color:var(--accent);font-weight:700;">${top.win_rate.toFixed(0)}%</span> WR · ${top.total_signals} signals`;
+    }else{
+      statsEl.style.display='none';
+    }
+  }catch(e){}
+}
+
+/* ── Desktop Notifications (Feature 20) ── */
+let notifGranted=false;
+function initNotifications(){
+  if('Notification'in window){
+    if(Notification.permission==='granted'){notifGranted=true;}
+    else if(Notification.permission!=='denied'){Notification.requestPermission().then(p=>{notifGranted=p==='granted';});}
+  }
+}
+function sendDesktopNotif(title,body){
+  if(!notifGranted)return;
+  try{new Notification(title,{body,icon:'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="100" height="100" rx="22" fill="%2300c9a7"/><text x="50%" y="58%" font-size="38" fill="%23000" font-weight="700" text-anchor="middle" font-family="system-ui">TM</text></svg>'});}catch(e){}
+}
+
+/* ── AI Chat Personality Presets (Feature 21) ── */
+let chatPersonality='balanced';
+function setChatPersonality(p){
+  chatPersonality=p;
+  document.querySelectorAll('.personality-btn').forEach(b=>b.classList.toggle('active',b.dataset.personality===p));
+}
+function getPersonalityPrompt(p){
+  if(p==='conservative')return 'prioritize capital preservation, recommend lower position sizes and tighter stops';
+  if(p==='aggressive')return 'prefer high-conviction momentum plays, wider stops for trend following';
+  return 'provide standard balanced market analysis';
+}
+
+/* ── Natural Language Backtest (Feature 23) ── */
+const BT_PATTERN=/backtest\s+(\w+)\s*(?:for\s+)?(\d+)?\s*(?:days?)?(?:\s+(?:using\s+)?(\d+)\s*\/\s*(\d+))?/i;
+function detectNLBacktest(msg){
+  const m=msg.match(BT_PATTERN);
+  if(m){
+    const sym=m[1].toUpperCase();
+    const days=parseInt(m[2])||5;
+    const ef=m[3]?parseInt(m[3]):null;
+    const es=m[4]?parseInt(m[4]):null;
+    sv('tickers',sym);
+    if(ef&&es){sv('emaf',ef);sv('emas',es);}
+    $('btDays').value=days;
+    toast(`Running backtest for ${sym} (${days}d) via chat...`,'info');
+    setTimeout(()=>runBT(),500);
+    return true;
+  }
+  return false;
+}
+
+/* ── Presets gated behind Pro (Feature 24) ── */
+function loadPreset(){
+  if(!licValid){toast('Upgrade to Pro to unlock Presets','error');return;}
+  const p=PRESETS[$('preset-select').value];if(!p)return;
+  sv('tf',p.timeframe);sv('emaf',p.emas[0]);sv('emas',p.emas[1]);
+  sc('ursi',!!p.rsi);sc('umacd',!!p.macd);sc('uvwap',!!p.vwap);sc('uboll',!!p.bollinger);
+  sc('uadx',!!p.adx);sc('uvol',!!p.volume);sc('ust',!!p.supertrend);sc('ustoch',!!p.stochastic);
+  sc('ubracket',!!p.bracket);sc('uatr',!!p.atr);
+  if(p.sl)sv('slp',p.sl);if(p.tp)sv('tpp',p.tp);
+  if(licValid&&p.direction)sv('dir',p.direction);
+  toast('Preset loaded – click Save to persist','success');
+}
+
+/* ── Monitor P&L badges (Feature 17) ── */
+function addPLBadges(monitorHtml){
+  // P&L badges are added server-side, this is a hook for future enhancement
+  return monitorHtml;
+}
+
 /* ── Boot ── */
 updateBrokerOptions();updateCreds();loadConfig();loadSettings();
+initAdvancedControls();loadTabOrder();initDraggableTabs();initSidebarResize();loadTabThemes();initNotifications();startWatchlistPolling();
+setTimeout(refreshLifetimeStats,3000);
 </script>
 </body>
 </html>
@@ -5945,7 +6477,7 @@ if __name__ == "__main__":
     time.sleep(1.2)
 
     window = webview.create_window(
-        "TraderMoney 6.0.4",
+        "TraderMoney 6.1.0",
         "http://127.0.0.1:5050",
         width=1440,
         height=880,

@@ -597,7 +597,7 @@
 
         <div class="version-pill fade-in delay-2">
             <span class="dot"></span>
-            <span>Latest <strong id="version-number">v—</strong></span>
+            <span>Latest <strong id="version-number">v6.1.0</strong></span>
         </div>
 
         <div class="dl-section fade-in delay-3">
@@ -782,6 +782,34 @@
 
             <div class="changelog-card">
                 <span class="tag tag-new">New</span>
+                <h3>v6.1.0 — Trailing Stops, Scale Out, MTF, Draggable Tabs &amp; 20+ Features</h3>
+                <div class="date">June 7, 2026</div>
+                <ul>
+                    <li><strong>Trailing Stop-Loss:</strong> Dynamic trailing stop that follows price movements, adjustable trail %.</li>
+                    <li><strong>Partial Position Exits:</strong> Scale out with two TP levels (60%/40% split), configurable percentages.</li>
+                    <li><strong>Multi-Timeframe Confirmation:</strong> Signals confirmed on secondary timeframe (5m/15m/1h) before emission.</li>
+                    <li><strong>News Sentiment Override:</strong> Suppress signals when sentiment contradicts direction (configurable threshold).</li>
+                    <li><strong>Draggable Tab Reordering:</strong> Drag and drop tabs to reorder. Persists across sessions.</li>
+                    <li><strong>Resizable Sidebar:</strong> Drag the right edge of sidebar to resize (180-450px). Persists across sessions.</li>
+                    <li><strong>Per-Tab Theme:</strong> Each tab remembers its own dark/light theme preference with theme toggle icons.</li>
+                    <li><strong>Sound Alerts:</strong> Ascending beep on BUY, descending beep on SELL via Web Audio API. Toggleable.</li>
+                    <li><strong>Real-Time Watchlist:</strong> Live prices and daily % change for all tickers in sidebar, updates every 5s.</li>
+                    <li><strong>Earnings Calendar:</strong> Fetch upcoming earnings dates and overlay on TradingView chart.</li>
+                    <li><strong>Backtest Filters:</strong> Sector, Min/Max Market Cap filters for backtest symbol selection.</li>
+                    <li><strong>Backtest PNG Export:</strong> Export backtest results as high-resolution PNG image.</li>
+                    <li><strong>Correlation Tooltips:</strong> Hover over correlation cells to see exact r values with color legend.</li>
+                    <li><strong>AI Chat Personality:</strong> Conservative/Balanced/Aggressive presets tailor AI analysis to your style.</li>
+                    <li><strong>Natural Language Backtest:</strong> Type "backtest AAPL for 30 days" in chat to run a backtest.</li>
+                    <li><strong>Desktop Notifications:</strong> System notifications on signals and trade executions.</li>
+                    <li><strong>Lifetime Win Rate:</strong> Persistent win/loss tracking across sessions in the Monitor tab.</li>
+                    <li><strong>Mobile Responsive:</strong> Adaptive layout for mobile devices and small windows.</li>
+                    <li><strong>Docker Support:</strong> Dockerfile and docker-compose.yml for headless server deployment.</li>
+                    <li><strong>Presets Gated:</strong> Strategy presets now require Pro license.</li>
+                </ul>
+            </div>
+
+            <div class="changelog-card">
+                <span class="tag tag-new">New</span>
                 <h3>v6.0.0 — Collapsible Sidebar, Indicators, Pro Toasts &amp; More</h3>
                 <div class="date">June 6, 2026</div>
                 <ul>
@@ -894,6 +922,9 @@
                 <tr><td>Brokers</td><td>Alpaca (paper only)</td><td>All 6 (paper &amp; live)</td></tr>
                 <tr><td>Indicators</td><td>RSI, MACD, VWAP, BB</td><td>All 9</td></tr>
                 <tr><td>ATR Stops</td><td><span class="cross">&#10005;</span></td><td><span class="check">&#10003;</span></td></tr>
+                <tr><td>Trailing Stop</td><td><span class="cross">&#10005;</span></td><td><span class="check">&#10003;</span></td></tr>
+                <tr><td>Scale Out / Partial Exits</td><td><span class="cross">&#10005;</span></td><td><span class="check">&#10003;</span></td></tr>
+                <tr><td>MTF Confirmation</td><td><span class="cross">&#10005;</span></td><td><span class="check">&#10003;</span></td></tr>
                 <tr><td>Bracket Orders</td><td><span class="cross">&#10005;</span></td><td><span class="check">&#10003;</span></td></tr>
                 <tr><td>Short Selling</td><td><span class="cross">&#10005;</span></td><td><span class="check">&#10003;</span></td></tr>
                 <tr><td>Telegram Alerts</td><td><span class="cross">&#10005;</span></td><td><span class="check">&#10003;</span></td></tr>

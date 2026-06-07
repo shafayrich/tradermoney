@@ -1,0 +1,16 @@
+version: "3.8"
+
+services:
+  tradermoney:
+    build: .
+    container_name: tradermoney
+    ports:
+      - "5050:5050"
+    volumes:
+      - ./:/app
+      - ~/.tradermoney_data.db:/root/.tradermoney_data.db
+      - ~/.tradermoney_config.enc:/root/.tradermoney_config.enc
+    environment:
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - NEWS_API_KEY=${NEWS_API_KEY}
+    restart: unless-stopped
