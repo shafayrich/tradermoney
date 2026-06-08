@@ -48,7 +48,7 @@ import webview
 from flask import Flask, Response, jsonify, request, send_file
 from flask_cors import CORS
 
-APP_VERSION = "6.1.4"
+APP_VERSION = "6.1.5"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # AI CONFIGURATION
@@ -3467,6 +3467,31 @@ def api_news(symbol):
     except Exception:
         return jsonify({"articles": []})
 
+@app.route("/api/news/feed", methods=["GET"])
+def api_news_feed():
+    import xml.etree.ElementTree as ET
+    feeds = [
+        ("Yahoo Finance", "https://finance.yahoo.com/news/rssindex"),
+        ("CNBC", "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=100003114"),
+        ("MarketWatch", "https://feeds.marketwatch.com/marketwatch/topstories"),
+    ]
+    articles = []
+    for name, url in feeds:
+        try:
+            resp = urllib.request.urlopen(url, timeout=5)
+            tree = ET.parse(resp)
+            root = tree.getroot()
+            for item in root.findall(".//item"):
+                title = item.findtext("title", "")
+                link = item.findtext("link", "")
+                pubdate = item.findtext("pubDate", "")[:16]
+                if title:
+                    articles.append({"title": title, "url": link, "source": name, "published": pubdate})
+        except Exception:
+            continue
+    articles.sort(key=lambda a: a["published"], reverse=True)
+    return jsonify({"articles": articles[:30]})
+
 
 @app.route("/api/thesis/list", methods=["GET"])
 def list_theses():
@@ -3514,7 +3539,7 @@ FRONTEND_HTML = r"""
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>TraderMoney 6.1.4</title>
+<title>TraderMoney 6.1.5</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root {
@@ -4591,7 +4616,7 @@ button.ghost:hover { box-shadow: none; }
     <span class="sidebar-logo">TM</span>
     <div class="sidebar-title">
       <span class="sidebar-name">TraderMoney</span>
-      <span class="sidebar-version">v6.1.4</span>
+      <span class="sidebar-version">v6.1.5</span>
     </div>
     <div class="sidebar-actions">
       <button onclick="location.reload()" title="Refresh"><svg class="icon" style="width:13px;height:13px;" viewBox="0 0 24 24"><path d="M17.65 6.35A7.958 7.958 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg></button>
@@ -4876,7 +4901,7 @@ button.ghost:hover { box-shadow: none; }
   <div id="tab-help" class="tab">
     <div class="hb">
       <input type="text" id="help-search" placeholder="Search help... (Cmd+F)" oninput="filterHelp()" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);font-size:.82rem;margin-bottom:10px;box-sizing:border-box;">
-      <h3>TraderMoney v6.1.4 – Complete Help Guide</h3>
+      <h3>TraderMoney v6.1.5 – Complete Help Guide</h3>
       <p style="font-size:.82rem;color:var(--muted);margin-top:-4px;">Your desktop algorithmic trading terminal. All features documented below.</p>
 
       <details>
@@ -4901,23 +4926,21 @@ button.ghost:hover { box-shadow: none; }
       </details>
 
       <details open>
-        <summary style="cursor:pointer;color:var(--accent);font-weight:600;">What's New in v6.1.4</summary>
+        <summary style="cursor:pointer;color:var(--accent);font-weight:600;">What's New in v6.1.5</summary>
         <div style="padding:8px 0;font-size:.82rem;line-height:1.7;">
           <ul>
-            <li><b>News Uses Your Tickers</b> – News section now shows headlines for your configured tickers instead of hardcoded AAPL/NVDA/TSLA.</li>
-            <li><b>Live News Updates</b> – News refresh interval reduced from 5 min to 1 min for more responsive updates.</li>
-            <li><b>Dynamic Ticker Add/Remove</b> – Bot now picks up ticker changes instantly without restart. Adds/removes tracking on the fly.</li>
-            <li><b>Refresh Chart Updates Ticker Bar</b> – Clicking the Chart refresh button now also refreshes the top ticker bar.</li>
+            <li><b>Multi-Source News Feed</b> – News now aggregates from Yahoo Finance, CNBC, and MarketWatch RSS feeds alongside NewsAPI for richer coverage.</li>
+            <li><b>Live Section Responsiveness</b> – Monitor now refreshes immediately when bot starts/stops instead of waiting for the next poll cycle.</li>
+            <li><b>Always News</b> – General market news from RSS feeds ensures the news section always has content, even without ticker-specific articles.</li>
           </ul>
           <br>
           <details style="font-size:.9rem;opacity:0.7;">
-            <summary>Full v6.1.3 Changelog</summary>
+            <summary>Full v6.1.4 Changelog</summary>
             <ul>
-            <li><b>Fixed Auto-Trade Execution</b> – Server no longer silently downgrades auto-trade to signal mode when license re-validation fails. Mode synced back to UI.</li>
-            <li><b>Order Fallback</b> – If bracket/trailing/scale-out order fails, falls back to simple market order.</li>
-            <li><b>Earnings Calendar Fix</b> – Fixed API response parsing for FMP earnings calendar data.</li>
-            <li><b>Sound Toggle SVGs</b> – Replaced emoji with Apple-style speaker SVGs.</li>
-            <li><b>Zero Emojis</b> – All emoji characters removed app-wide.</li>
+            <li><b>News Uses Your Tickers</b> – News section now shows headlines for your configured tickers instead of hardcoded AAPL/NVDA/TSLA.</li>
+            <li><b>Live News Updates</b> – News refresh interval reduced from 5 min to 1 min.</li>
+            <li><b>Dynamic Ticker Add/Remove</b> – Bot picks up ticker changes without restart.</li>
+            <li><b>Refresh Chart Updates Ticker Bar</b> – Chart refresh also updates top ticker bar.</li>
           </ul>
           </details>
         </div>
@@ -5693,14 +5716,16 @@ async function startBot(){
   toast(d.message,d.status==='ok'?'success':'error');
   if(d.status!=='ok'){$('bstatus').textContent=d.message;$('bstatus').className='err';}
   else{botRunning=true;showBotStarted(d);if(d.mode&&d.mode!==cfg.mode){sv('mode',d.mode);cfg.mode=d.mode;}}
+  refreshMonitor();
 }
 async function stopBot(){
   const btn=$('stopBtn');btn.textContent='Stopping...';btn.disabled=true;
   await fetch('/api/stop',{method:'POST'});
   btn.textContent='\u25A0 Stop Bot';btn.disabled=false;
   botRunning=false;toast('Bot stopped','success');
+  refreshMonitor();
 }
-async function killSwitch(){await fetch('/api/kill',{method:'POST'});botRunning=false;toast('Kill switch activated','error');}
+async function killSwitch(){await fetch('/api/kill',{method:'POST'});botRunning=false;toast('Kill switch activated','error');refreshMonitor();}
 
 async function validateLicense(silent=false){
   const key=gv('lickey').trim();if(!key){if(!silent)toast('Enter a license key','error');return;}
@@ -5880,6 +5905,10 @@ async function _renderNews(){
     const promises=tickersArr.map(async sym=>{
       try{const r=await fetch('/api/news/'+sym);const d=await r.json();if(!window._newsCache)window._newsCache={};window._newsCache[sym]={articles:d.articles||[],ts:Date.now()};}catch(e){}
     });
+    // Also fetch general RSS feed
+    promises.push((async()=>{
+      try{const r=await fetch('/api/news/feed');const d=await r.json();window._rssNews=d.articles||[];}catch(e){}
+    })());
     await Promise.allSettled(promises);
     window._newsLoading=false;
   }
@@ -5889,6 +5918,10 @@ async function _renderNews(){
     if(window._newsCache&&window._newsCache[sym]){
       window._newsCache[sym].articles.forEach(a=>{allNews.push({sym,...a});});
     }
+  }
+  // Also add RSS feed articles
+  if(window._rssNews&&window._rssNews.length){
+    window._rssNews.forEach(a=>{allNews.push({sym:'Feed',...a});});
   }
   allNews.sort((a,b)=>new Date(b.published||0)-new Date(a.published||0));
   if(allNews.length){
@@ -6507,7 +6540,7 @@ if __name__ == "__main__":
     time.sleep(1.2)
 
     window = webview.create_window(
-        "TraderMoney 6.1.4",
+        "TraderMoney 6.1.5",
         "http://127.0.0.1:5050",
         width=1440,
         height=880,
