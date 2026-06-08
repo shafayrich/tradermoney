@@ -6507,7 +6507,7 @@ if __name__ == "__main__":
     time.sleep(1.2)
 
     window = webview.create_window(
-        "TraderMoney 6.1.0",
+        "TraderMoney 6.1.4",
         "http://127.0.0.1:5050",
         width=1440,
         height=880,
