@@ -5797,7 +5797,9 @@ function toggleSidebar(){
 }
 
 /* ── Monitor ── */
-let _monitorTimer=null;
+let _monitorTimer=null,_newsTimer=null;
+/* 24/7 news poller - starts on load, never stops */
+function startNewsPoller(){if(!_newsTimer)_newsTimer=setInterval(_renderNews,60000);}
 function _ind(s){return s===0||s==='0'?'—':s;}
 function _trdArrow(dir){return dir==='up'?'↗':dir==='down'?'↘':'→';}
 function _sigColor(sig){return sig==='BUY'?'var(--accent)':sig==='SELL'?'var(--danger)':'var(--muted)';}
@@ -6517,7 +6519,7 @@ function addPLBadges(monitorHtml){
 
 /* ── Boot ── */
 updateBrokerOptions();updateCreds();loadConfig();loadSettings();
-initAdvancedControls();loadTabOrder();initDraggableTabs();initSidebarResize();initNotifications();startWatchlistPolling();
+initAdvancedControls();loadTabOrder();initDraggableTabs();initSidebarResize();initNotifications();startWatchlistPolling();startNewsPoller();_renderNews();
 setTimeout(refreshLifetimeStats,3000);
 </script>
 </body>
