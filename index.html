@@ -597,7 +597,7 @@
 
         <div class="version-pill fade-in delay-2">
             <span class="dot"></span>
-            <span>Latest <strong id="version-number">v6.1.3</strong></span>
+            <span>Latest <strong id="version-number">v6.1.4</strong></span>
         </div>
 
         <div class="dl-section fade-in delay-3">
@@ -782,12 +782,26 @@
 
             <div class="changelog-card">
                 <span class="tag tag-new">New</span>
+                <h3>v6.1.4 — News Uses Your Tickers &amp; Dynamic Ticker Add/Remove</h3>
+                <div class="date">June 8, 2026</div>
+                <ul>
+                    <li><strong>News Uses Your Tickers:</strong> News section now shows headlines for your configured tickers instead of hardcoded AAPL/NVDA/TSLA.</li>
+                    <li><strong>Live News Updates:</strong> News refresh interval reduced from 5 min to 1 min for more responsive updates.</li>
+                    <li><strong>Dynamic Ticker Add/Remove:</strong> Bot picks up ticker changes instantly without restart. Adds/removes tracking on the fly.</li>
+                    <li><strong>Refresh Chart Updates Ticker Bar:</strong> Clicking the Chart refresh button now also refreshes the top ticker bar.</li>
+                </ul>
+            </div>
+
+            <div class="changelog-card">
+                <span class="tag">Updated</span>
                 <h3>v6.1.3 — Auto-Trade Fix &amp; Execution Reliability</h3>
                 <div class="date">June 7, 2026</div>
                 <ul>
                     <li><strong>Fixed Auto-Trade:</strong> Server no longer silently downgrades "Auto Trade" to "Signal Only" when license re-validation fails. UI now shows actual running mode.</li>
                     <li><strong>Order Fallback:</strong> If bracket/trailing/scale-out order fails, auto-retries with a simple market order.</li>
-                    <li><strong>Mode Sync:</strong> Bot start response includes actual mode; UI dropdown reflects reality.</li>
+                    <li><strong>Earnings Calendar Fix:</strong> Fixed API response parsing for FMP earnings calendar data.</li>
+                    <li><strong>Sound Toggle SVGs:</strong> Replaced emoji with Apple-style speaker SVGs.</li>
+                    <li><strong>Zero Emojis:</strong> All emoji characters removed app-wide.</li>
                 </ul>
             </div>
 

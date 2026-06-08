@@ -48,7 +48,7 @@ import webview
 from flask import Flask, Response, jsonify, request, send_file
 from flask_cors import CORS
 
-APP_VERSION = "6.1.3"
+APP_VERSION = "6.1.4"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # AI CONFIGURATION
@@ -1847,6 +1847,25 @@ class TradingEngine(threading.Thread):
                 now = time.time()
                 if now - last_fetch >= 60:
                     last_fetch = now
+                    # Re-read tickers from config so add/remove works without restart
+                    fresh_tickers = self.config.get("tickers", "AAPL")
+                    fresh_list = [clean_symbol(s.strip().split(":")[0]) for s in fresh_tickers.split(",") if s.strip()]
+                    if not self.is_licensed and len(fresh_list) > 1:
+                        fresh_list = [fresh_list[0]]
+                    for s in fresh_list:
+                        if s not in self.symbols:
+                            self.symbols.append(s)
+                            self.positions[s] = 0
+                            self.prev_ema[s] = (None, None)
+                            self._log(f"[Ticker] Added {s} to live tracking")
+                            self._telegram(f"<b>Ticker Added (live)</b> {s}")
+                    for s in list(self.symbols):
+                        if s not in fresh_list:
+                            self.symbols.remove(s)
+                            self.positions.pop(s, None)
+                            self.prev_ema.pop(s, None)
+                            self.trailing_stops.pop(s, None)
+                            self._log(f"[Ticker] Removed {s} from live tracking")
                     for s in self.symbols:
                         try:
                             df = self._fetch_df(s, interval)
@@ -3495,7 +3514,7 @@ FRONTEND_HTML = r"""
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>TraderMoney 6.1.3</title>
+<title>TraderMoney 6.1.4</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root {
@@ -4572,7 +4591,7 @@ button.ghost:hover { box-shadow: none; }
     <span class="sidebar-logo">TM</span>
     <div class="sidebar-title">
       <span class="sidebar-name">TraderMoney</span>
-      <span class="sidebar-version">v6.1.3</span>
+      <span class="sidebar-version">v6.1.4</span>
     </div>
     <div class="sidebar-actions">
       <button onclick="location.reload()" title="Refresh"><svg class="icon" style="width:13px;height:13px;" viewBox="0 0 24 24"><path d="M17.65 6.35A7.958 7.958 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg></button>
@@ -4857,7 +4876,7 @@ button.ghost:hover { box-shadow: none; }
   <div id="tab-help" class="tab">
     <div class="hb">
       <input type="text" id="help-search" placeholder="Search help... (Cmd+F)" oninput="filterHelp()" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);font-size:.82rem;margin-bottom:10px;box-sizing:border-box;">
-      <h3>TraderMoney v6.1.3 – Complete Help Guide</h3>
+      <h3>TraderMoney v6.1.4 – Complete Help Guide</h3>
       <p style="font-size:.82rem;color:var(--muted);margin-top:-4px;">Your desktop algorithmic trading terminal. All features documented below.</p>
 
       <details>
@@ -4882,38 +4901,25 @@ button.ghost:hover { box-shadow: none; }
       </details>
 
       <details open>
-        <summary style="cursor:pointer;color:var(--accent);font-weight:600;">What's New in v6.1.3</summary>
+        <summary style="cursor:pointer;color:var(--accent);font-weight:600;">What's New in v6.1.4</summary>
         <div style="padding:8px 0;font-size:.82rem;line-height:1.7;">
           <ul>
-            <li><b>Fixed Auto-Trade Execution</b> – Server no longer silently downgrades auto-trade to signal mode when license re-validation fails. Mode is now synced back to UI.</li>
-            <li><b>Order Fallback</b> – If bracket/trailing/scale-out order fails, falls back to simple market order so trades still execute.</li>
-            <li><b>Better Error Reporting</b> – UI now shows the actual mode the bot is running in.</li>
+            <li><b>News Uses Your Tickers</b> – News section now shows headlines for your configured tickers instead of hardcoded AAPL/NVDA/TSLA.</li>
+            <li><b>Live News Updates</b> – News refresh interval reduced from 5 min to 1 min for more responsive updates.</li>
+            <li><b>Dynamic Ticker Add/Remove</b> – Bot now picks up ticker changes instantly without restart. Adds/removes tracking on the fly.</li>
+            <li><b>Refresh Chart Updates Ticker Bar</b> – Clicking the Chart refresh button now also refreshes the top ticker bar.</li>
           </ul>
           <br>
           <details style="font-size:.9rem;opacity:0.7;">
-            <summary>Full v6.1.2 Changelog</summary>
+            <summary>Full v6.1.3 Changelog</summary>
             <ul>
-            <li><b>Trailing Stop-Loss</b> (Pro) – Dynamic trailing stop follows price. Set trail % in Strategy section.</li>
-            <li><b>Partial Position Exits (Scale Out)</b> (Pro) – Split position across two TP levels (60%/40% default).</li>
-            <li><b>Multi-Timeframe Confirmation</b> (Pro) – Require confirmation on a secondary timeframe before signal emission.</li>
-            <li><b>News Sentiment Override</b> (Pro) – Suppress signals when news sentiment contradicts direction.</li>
-            <li><b>Draggable Tabs</b> – Drag and drop tabs to reorder. Order persists across sessions.</li>
-            <li><b>Resizable Sidebar</b> – Drag the right edge of sidebar to resize from 180px to 450px.</li>
-            <li><b>Sound Alerts</b> – Audible beeps on BUY (ascending) and SELL (descending) signals. Toggle via speaker icon.</li>
-            <li><b>Real-Time Watchlist</b> – Live prices and % change in sidebar, updates every 5 seconds.</li>
-            <li><b>Earnings Calendar</b> – Click "Earnings" on Charts tab to overlay earnings dates on TradingView chart.</li>
-            <li><b>Backtest Filters</b> – Sector, min/max market cap filters available in backtest controls.</li>
-            <li><b>Backtest PNG Export</b> – Export backtest results as high-resolution PNG image.</li>
-            <li><b>Correlation Tooltips</b> – Hover any correlation cell for exact r value. Color legend included.</li>
-            <li><b>AI Chat Personality</b> – Choose Conservative, Balanced, or Aggressive analysis style.</li>
-            <li><b>Natural Language Backtest</b> – Type "backtest AAPL for 30 days" in chat to run instantly.</li>
-            <li><b>Desktop Notifications</b> – System notifications on new signals and trades.</li>
-            <li><b>Lifetime Win Rate Tracker</b> – Persistent win/loss stats shown in Monitor tab.</li>
-            <li><b>Presets Pro Gate</b> – Strategy presets now require a Pro license.</li>
-            <li><b>Mobile Responsive</b> – Adaptive layout for mobile devices and small windows.</li>
-            <li><b>Docker Support</b> – Deploy headless on any server with Docker.</li>
+            <li><b>Fixed Auto-Trade Execution</b> – Server no longer silently downgrades auto-trade to signal mode when license re-validation fails. Mode synced back to UI.</li>
+            <li><b>Order Fallback</b> – If bracket/trailing/scale-out order fails, falls back to simple market order.</li>
+            <li><b>Earnings Calendar Fix</b> – Fixed API response parsing for FMP earnings calendar data.</li>
+            <li><b>Sound Toggle SVGs</b> – Replaced emoji with Apple-style speaker SVGs.</li>
+            <li><b>Zero Emojis</b> – All emoji characters removed app-wide.</li>
           </ul>
-      </details>
+          </details>
         </div>
       </details>
 
@@ -5570,6 +5576,7 @@ function loadTradingViewChart(symbol){
 }
 
 function reloadChart(){
+  refreshTickers();
   const syms=allTickers.length?allTickers:(gv('tickers','AAPL').split(',').map(s=>s.trim()).filter(s=>s));
   syms.forEach(sym=>{
     const clean=sym.split(':')[0].trim();
@@ -5849,8 +5856,9 @@ async function refreshMonitor(){
   }
 }
 async function _renderNews(){
-  // Popular tickers — always show top market news regardless of user config
-  const tickersArr=['AAPL','NVDA','TSLA'];
+  // Use user's configured tickers
+  const raw=(gv('tickers','AAPL,SPY,QQQ')).split(',').map(s=>s.trim().split(':')[0]).filter(s=>s);
+  const tickersArr=raw.length?raw:['AAPL','SPY','QQQ'];
   
   // Show loading skeleton if cache empty
   const mn=$('monitor-news');
@@ -5859,7 +5867,7 @@ async function _renderNews(){
     nc.id='monitor-news';
     $('monitor-scroll').appendChild(nc);
   }
-  const needsFetch=tickersArr.filter(sym=>!window._newsCache||!window._newsCache[sym]||Date.now()-window._newsCache[sym].ts>300000);
+  const needsFetch=tickersArr.filter(sym=>!window._newsCache||!window._newsCache[sym]||Date.now()-window._newsCache[sym].ts>60000);
   if(needsFetch.length&&!window._newsLoading){
     window._newsLoading=true;
     $('monitor-news').innerHTML=`<div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:14px 18px;">
