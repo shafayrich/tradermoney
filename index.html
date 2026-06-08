@@ -597,7 +597,7 @@
 
         <div class="version-pill fade-in delay-2">
             <span class="dot"></span>
-            <span>Latest <strong id="version-number">v6.1.2</strong></span>
+            <span>Latest <strong id="version-number">v6.1.3</strong></span>
         </div>
 
         <div class="dl-section fade-in delay-3">
@@ -782,6 +782,17 @@
 
             <div class="changelog-card">
                 <span class="tag tag-new">New</span>
+                <h3>v6.1.3 — Auto-Trade Fix &amp; Execution Reliability</h3>
+                <div class="date">June 7, 2026</div>
+                <ul>
+                    <li><strong>Fixed Auto-Trade:</strong> Server no longer silently downgrades "Auto Trade" to "Signal Only" when license re-validation fails. UI now shows actual running mode.</li>
+                    <li><strong>Order Fallback:</strong> If bracket/trailing/scale-out order fails, auto-retries with a simple market order.</li>
+                    <li><strong>Mode Sync:</strong> Bot start response includes actual mode; UI dropdown reflects reality.</li>
+                </ul>
+            </div>
+
+            <div class="changelog-card">
+                <span class="tag">Updated</span>
                 <h3>v6.1.2 — Sound SVGs &amp; Emoji Cleanup</h3>
                 <div class="date">June 7, 2026</div>
                 <ul>

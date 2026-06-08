@@ -48,7 +48,7 @@ import webview
 from flask import Flask, Response, jsonify, request, send_file
 from flask_cors import CORS
 
-APP_VERSION = "6.1.2"
+APP_VERSION = "6.1.3"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # AI CONFIGURATION
@@ -2035,6 +2035,10 @@ class TradingEngine(threading.Thread):
                     else:
                         ok = self.broker.submit_order(sym, qty, "buy")
 
+                    if not ok:
+                        self._log(f"[Execute] Bracket order failed for {sym}, trying simple market order")
+                        ok = self.broker.submit_order(sym, qty, "buy")
+
                     if ok:
                         self.positions[sym] = qty
                         self.ui_queue.put(("order", (sym, "BUY", qty, price)))
@@ -2084,6 +2088,10 @@ class TradingEngine(threading.Thread):
                         ok = self.broker.submit_order(
                             sym, qty, "sell", sl_pct=sl_pct, tp_pct=tp_pct)
                     else:
+                        ok = self.broker.submit_order(sym, qty, "sell")
+
+                    if not ok:
+                        self._log(f"[Execute] Bracket order failed for {sym}, trying simple market order")
                         ok = self.broker.submit_order(sym, qty, "sell")
 
                     if ok:
@@ -2391,11 +2399,17 @@ def api_start():
     state.config["last_broker_message"] = "Connected"
     EncryptedConfigManager.save(state.config)
 
+    actual_mode = state.config.get("mode", "signal")
+    requested_mode = data.get("mode", "signal")
+    mode_warn = ""
+    if requested_mode == "auto" and actual_mode != "auto":
+        mode_warn = f" Mode downgraded to {actual_mode} (license issue)."
+
     state.engine = TradingEngine(state.ui_queue, state.config, state.broker_instance)
     state.engine.running = True
     state.engine.start()
     state.running = True
-    return jsonify({"status": "ok", "message": f"Bot started ({broker_choice})"})
+    return jsonify({"status": "ok", "message": f"Bot started ({broker_choice}).{mode_warn}", "mode": actual_mode})
 
 @app.route("/api/stop", methods=["POST"])
 def api_stop():
@@ -3481,7 +3495,7 @@ FRONTEND_HTML = r"""
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>TraderMoney 6.1.2</title>
+<title>TraderMoney 6.1.3</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root {
@@ -4558,7 +4572,7 @@ button.ghost:hover { box-shadow: none; }
     <span class="sidebar-logo">TM</span>
     <div class="sidebar-title">
       <span class="sidebar-name">TraderMoney</span>
-      <span class="sidebar-version">v6.1.2</span>
+      <span class="sidebar-version">v6.1.3</span>
     </div>
     <div class="sidebar-actions">
       <button onclick="location.reload()" title="Refresh"><svg class="icon" style="width:13px;height:13px;" viewBox="0 0 24 24"><path d="M17.65 6.35A7.958 7.958 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg></button>
@@ -4843,7 +4857,7 @@ button.ghost:hover { box-shadow: none; }
   <div id="tab-help" class="tab">
     <div class="hb">
       <input type="text" id="help-search" placeholder="Search help... (Cmd+F)" oninput="filterHelp()" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);font-size:.82rem;margin-bottom:10px;box-sizing:border-box;">
-      <h3>TraderMoney v6.1.2 – Complete Help Guide</h3>
+      <h3>TraderMoney v6.1.3 – Complete Help Guide</h3>
       <p style="font-size:.82rem;color:var(--muted);margin-top:-4px;">Your desktop algorithmic trading terminal. All features documented below.</p>
 
       <details>
@@ -4868,16 +4882,16 @@ button.ghost:hover { box-shadow: none; }
       </details>
 
       <details open>
-        <summary style="cursor:pointer;color:var(--accent);font-weight:600;">What's New in v6.1.2</summary>
+        <summary style="cursor:pointer;color:var(--accent);font-weight:600;">What's New in v6.1.3</summary>
         <div style="padding:8px 0;font-size:.82rem;line-height:1.7;">
           <ul>
-            <li><b>Sound Toggle SVG Icons</b> – Replaced emoji with Apple-style speaker SVGs (muted X icon / volume waves icon).</li>
-            <li><b>Toggle Click Sound</b> – Brief tone when enabling/disabling sound (1200Hz on, 600Hz off).</li>
-            <li><b>Zero Emojis</b> – All emoji characters removed from the entire application.</li>
+            <li><b>Fixed Auto-Trade Execution</b> – Server no longer silently downgrades auto-trade to signal mode when license re-validation fails. Mode is now synced back to UI.</li>
+            <li><b>Order Fallback</b> – If bracket/trailing/scale-out order fails, falls back to simple market order so trades still execute.</li>
+            <li><b>Better Error Reporting</b> – UI now shows the actual mode the bot is running in.</li>
           </ul>
           <br>
           <details style="font-size:.9rem;opacity:0.7;">
-            <summary>Full v6.1.0 Changelog</summary>
+            <summary>Full v6.1.2 Changelog</summary>
             <ul>
             <li><b>Trailing Stop-Loss</b> (Pro) – Dynamic trailing stop follows price. Set trail % in Strategy section.</li>
             <li><b>Partial Position Exits (Scale Out)</b> (Pro) – Split position across two TP levels (60%/40% default).</li>
@@ -5671,7 +5685,7 @@ async function startBot(){
   btn.textContent='\u25B6 Start Bot';btn.disabled=false;
   toast(d.message,d.status==='ok'?'success':'error');
   if(d.status!=='ok'){$('bstatus').textContent=d.message;$('bstatus').className='err';}
-  else{botRunning=true;showBotStarted(d);}
+  else{botRunning=true;showBotStarted(d);if(d.mode&&d.mode!==cfg.mode){sv('mode',d.mode);cfg.mode=d.mode;}}
 }
 async function stopBot(){
   const btn=$('stopBtn');btn.textContent='Stopping...';btn.disabled=true;
