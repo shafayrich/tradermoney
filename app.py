@@ -329,7 +329,6 @@ class EncryptedConfigManager:
             if os.path.exists(CONFIG_FILE):
                 with open(CONFIG_FILE, "rb") as f:
                     data = json.loads(cipher.decrypt(f.read()).decode())
-                data.pop("license_key", None)
                 data.pop("license_valid", None)
                 return data
         except Exception:
@@ -338,7 +337,7 @@ class EncryptedConfigManager:
 
     @staticmethod
     def save(config: dict):
-        clean = {k: v for k, v in config.items() if k not in ("license_key", "license_valid")}
+        clean = {k: v for k, v in config.items() if k not in ("license_valid",)}
         try:
             cipher = _get_fernet()
             plain = json.dumps(clean, indent=2).encode()
@@ -2364,7 +2363,6 @@ def api_get_config():
 @app.route("/api/config", methods=["POST"])
 def api_save_config():
     data = request.json or {}
-    data.pop("license_key", None)
     data.pop("license_valid", None)
     state.config.update(data)
     if not state.config.get("license_valid"):
@@ -2598,7 +2596,8 @@ def api_validate_license():
     if valid:
         state.config["license_key"] = key
         state.config["license_valid"] = True
-        return jsonify({"valid": True, "message": "License verified for this session"})
+        EncryptedConfigManager.save(state.config)
+        return jsonify({"valid": True, "message": "License verified"})
     state.config["license_valid"] = False
     return jsonify({"valid": False, "message": msg})
 
@@ -5636,10 +5635,10 @@ async function loadConfig(){
       body:JSON.stringify({timezone:Intl.DateTimeFormat().resolvedOptions().timeZone})});
     initUI(cfg);
     if(cfg.license_key&&cfg.license_key.trim())await validateLicense(true);
-    // Re-validate license every 2 hours
+    // Re-validate license every 15 minutes
     setInterval(async()=>{
-      if(cfg.license_key&&cfg.license_key.trim())await validateLicense(true);
-    },7200000);
+      if(gv('lickey').trim())await validateLicense(true);
+    },900000);
     loadHistory();loadLeaderboard();
   }catch(e){toast('Config load failed','error');}
 }
@@ -5649,7 +5648,7 @@ function loadHistory(){
 async function saveConfig(){
   cfg=buildCfg();
   await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg)});
-  toast('Config saved (license is session-only)','success');
+  toast('Config saved','success');
 }
 
 const DEF={broker:'Alpaca',tickers:'AAPL',mode:'signal',direction:'both',use_default_qty:true,quantity:1,emas:[9,50],use_bracket:false,sl_percent:2,tp_percent:4,timeframe:'1m',telegram:{},use_rsi:true,use_macd:true,use_vwap:true,use_bollinger:true,use_adx:true,use_vol_confirm:true,use_supertrend:true,use_stochastic:true,use_atr_stops:true,alpaca:{api_key:'',secret_key:'',paper:true},ibkr:{host:'',port:'',client_id:''},tradier:{access_token:'',account_id:'',sandbox:false},binance:{api_key:'',api_secret:'',testnet:true},bybit:{api_key:'',api_secret:'',testnet:true},okx:{api_key:'',api_secret:'',api_passphrase:'',demo:true}};
