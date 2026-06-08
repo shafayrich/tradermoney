@@ -2,5 +2,5 @@
   "download_url_intel": "https://github.com/shafayrich/tradermoney/releases/latest/download/TraderMoney_macOS_Intel.tar.gz",
   "download_url_silicon": "https://github.com/shafayrich/tradermoney/releases/latest/download/TraderMoney_macOS_AppleSilicon.tar.gz",
   "download_url_windows": "https://github.com/shafayrich/tradermoney/releases/latest/download/TraderMoney_Windows.zip",
-  "latest_version": "6.1.5"
+  "latest_version": "6.1.6"
 }
