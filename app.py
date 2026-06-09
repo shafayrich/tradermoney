@@ -48,7 +48,7 @@ import webview
 from flask import Flask, Response, jsonify, request, send_file
 from flask_cors import CORS
 
-APP_VERSION = "6.1.6"
+APP_VERSION = "6.1.7"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # AI CONFIGURATION
@@ -329,7 +329,6 @@ class EncryptedConfigManager:
             if os.path.exists(CONFIG_FILE):
                 with open(CONFIG_FILE, "rb") as f:
                     data = json.loads(cipher.decrypt(f.read()).decode())
-                data.pop("license_valid", None)
                 return data
         except Exception:
             pass
@@ -337,7 +336,7 @@ class EncryptedConfigManager:
 
     @staticmethod
     def save(config: dict):
-        clean = {k: v for k, v in config.items() if k not in ("license_valid",)}
+        clean = {k: v for k, v in config.items()}
         try:
             cipher = _get_fernet()
             plain = json.dumps(clean, indent=2).encode()
@@ -442,8 +441,10 @@ class AppState:
             self.config["indicator_params"] = merged
         if "custom_theses" not in self.config:
             self.config["custom_theses"] = []
-        self.config["license_valid"] = False
-        self.config["license_key"] = ""
+        if "license_valid" not in self.config:
+            self.config["license_valid"] = False
+        if "license_key" not in self.config:
+            self.config["license_key"] = ""
         self.ui_queue: queue.Queue = queue.Queue()
         self.engine: Optional["TradingEngine"] = None
         self.broker_instance: Optional["BaseBroker"] = None
@@ -772,15 +773,27 @@ class IBKRBroker(BaseBroker):
             self._emit_error("IBKR not connected – cannot submit order.")
             return False
         try:
-            from ib_insync import Stock, MarketOrder
+            from ib_insync import Stock, MarketOrder, StopOrder, LimitOrder
 
             async def _place():
                 c = Stock(symbol, "SMART", "USD")
                 await self.ib.qualifyContractsAsync(c)
-                self.ib.placeOrder(c, MarketOrder("BUY" if side == "buy" else "SELL", qty))
+                # Primary market order
+                order = MarketOrder("BUY" if side == "buy" else "SELL", qty)
+                trade = self.ib.placeOrder(c, order)
+                # Wait a moment for fill, then place SL/TP if provided
+                await asyncio.sleep(0.5)
+                if sl_price is not None:
+                    sl_side = "SELL" if side == "buy" else "BUY"
+                    stop_order = StopOrder(sl_side, abs(qty), round(sl_price, 2))
+                    self.ib.placeOrder(c, stop_order)
+                if tp_price is not None:
+                    tp_side = "SELL" if side == "buy" else "BUY"
+                    limit_order = LimitOrder(tp_side, abs(qty), round(tp_price, 2))
+                    self.ib.placeOrder(c, limit_order)
 
             self._run_coro(_place())
-            self._emit_log(f"Order submitted: {side.upper()} {qty} {symbol}")
+            self._emit_log(f"Order submitted: {side.upper()} {qty} {symbol} with SL/TP")
             return True
         except Exception as e:
             self._emit_error(f"IBKR order error: {e}")
@@ -910,6 +923,7 @@ class TradierBroker(BaseBroker):
             self._emit_error("Tradier not connected – cannot submit order.")
             return False
         try:
+            # Place the main market order
             r = self.session.post(
                 f"{self._base}/accounts/{self.account_id}/orders",
                 data={"class": "equity", "symbol": symbol, "side": side,
@@ -919,7 +933,25 @@ class TradierBroker(BaseBroker):
             if r.status_code not in (200, 201) or err:
                 self._emit_error(f"Tradier order rejected: {err or r.text[:200]}")
                 return False
-            self._emit_log(f"Order submitted: {side.upper()} {qty} {symbol}")
+            # Place SL and TP as separate orders if provided
+            if sl_price is not None or tp_price is not None:
+                import time as _time
+                _time.sleep(0.3)
+                if sl_price is not None:
+                    sl_side = "sell" if side == "buy" else "buy"
+                    self.session.post(
+                        f"{self._base}/accounts/{self.account_id}/orders",
+                        data={"class": "equity", "symbol": symbol, "side": sl_side,
+                              "quantity": str(qty), "type": "stop", "stop_price": str(round(sl_price, 2)), "duration": "gtc"},
+                        timeout=10)
+                if tp_price is not None:
+                    tp_side = "sell" if side == "buy" else "buy"
+                    self.session.post(
+                        f"{self._base}/accounts/{self.account_id}/orders",
+                        data={"class": "equity", "symbol": symbol, "side": tp_side,
+                              "quantity": str(qty), "type": "limit", "price": str(round(tp_price, 2)), "duration": "gtc"},
+                        timeout=10)
+            self._emit_log(f"Order submitted: {side.upper()} {qty} {symbol} with SL/TP")
             return True
         except Exception as e:
             self._emit_error(f"Tradier submit_order: {e}")
@@ -1059,14 +1091,34 @@ class BinanceBroker(BaseBroker):
             self._emit_error("Binance not connected – cannot submit order.")
             return False
         try:
+            normalised = self._norm(symbol)
+            bn_side = "BUY" if side == "buy" else "SELL"
+            # Place the main market order
             resp = self.client.new_order(
-                symbol=self._norm(symbol),
-                side="BUY" if side == "buy" else "SELL",
+                symbol=normalised,
+                side=bn_side,
                 type="MARKET", quantity=round(float(qty), 6))
             if resp.get("status") not in ("FILLED", "NEW", "PARTIALLY_FILLED"):
                 self._emit_error(f"Binance order status: {resp}")
                 return False
-            self._emit_log(f"Order submitted: {side.upper()} {qty} {symbol}")
+            # Place SL and TP as separate stop-limit/limit orders if provided
+            if sl_price is not None or tp_price is not None:
+                import time as _time
+                _time.sleep(0.3)
+                if sl_price is not None:
+                    sl_side = "SELL" if side == "buy" else "BUY"
+                    self.client.new_order(
+                        symbol=normalised, side=sl_side,
+                        type="STOP_LOSS_LIMIT", quantity=round(float(qty), 6),
+                        price=round(sl_price * 0.99, 6), stopPrice=round(sl_price, 6),
+                        timeInForce="GTC")
+                if tp_price is not None:
+                    tp_side = "SELL" if side == "buy" else "BUY"
+                    self.client.new_order(
+                        symbol=normalised, side=tp_side,
+                        type="LIMIT", quantity=round(float(qty), 6),
+                        price=round(tp_price, 6), timeInForce="GTC")
+            self._emit_log(f"Order submitted: {bn_side} {qty} {symbol} with SL/TP")
             return True
         except Exception as e:
             self._emit_error(f"Binance submit_order: {e}")
@@ -1356,8 +1408,10 @@ class OKXBroker(BaseBroker):
             self._emit_error("OKX not connected – cannot submit order.")
             return False
         try:
+            norm = self._norm(symbol)
+            # Place the main market order
             resp = self._trade_api.place_order(
-                instId=self._norm(symbol), tdMode="cash",
+                instId=norm, tdMode="cash",
                 side=side, ordType="market", sz=str(round(float(qty), 6)))
             items = resp.get("data", [{}])
             s_code = str(items[0].get("sCode", "-1")) if items else "-1"
@@ -1365,7 +1419,27 @@ class OKXBroker(BaseBroker):
                 s_msg = items[0].get("sMsg", str(resp)) if items else str(resp)
                 self._emit_error(f"OKX order rejected (sCode={s_code}): {s_msg}")
                 return False
-            self._emit_log(f"Order submitted: {side.upper()} {qty} {symbol}")
+            # Place SL and TP as algo orders if provided
+            if sl_price is not None or tp_price is not None:
+                import time as _time
+                _time.sleep(0.3)
+                if sl_price is not None:
+                    sl_side = "sell" if side == "buy" else "buy"
+                    self._trade_api.set_position_algo(
+                        instId=norm, tdMode="cash",
+                        algoClOrdId="sl_" + str(int(_time.time())),
+                        tpTriggerPx="", tpOrdPx="",
+                        slTriggerPx=str(round(sl_price, 4)), slOrdPx=str(round(sl_price, 4)),
+                        sz=str(round(float(qty), 6)))
+                if tp_price is not None:
+                    tp_side = "sell" if side == "buy" else "buy"
+                    self._trade_api.set_position_algo(
+                        instId=norm, tdMode="cash",
+                        algoClOrdId="tp_" + str(int(_time.time())),
+                        tpTriggerPx=str(round(tp_price, 4)), tpOrdPx=str(round(tp_price, 4)),
+                        slTriggerPx="", slOrdPx="",
+                        sz=str(round(float(qty), 6)))
+            self._emit_log(f"Order submitted: {side.upper()} {qty} {symbol} with SL/TP")
             return True
         except Exception as e:
             self._emit_error(f"OKX submit_order: {e}")
@@ -2363,11 +2437,7 @@ def api_get_config():
 @app.route("/api/config", methods=["POST"])
 def api_save_config():
     data = request.json or {}
-    data.pop("license_valid", None)
     state.config.update(data)
-    if not state.config.get("license_valid"):
-        state.config["broker"] = "Alpaca"
-        state.config["mode"] = "signal"
     EncryptedConfigManager.save(state.config)
     return jsonify({"status": "ok", "message": "Configuration saved"})
 
@@ -2600,6 +2670,63 @@ def api_validate_license():
         return jsonify({"valid": True, "message": "License verified"})
     state.config["license_valid"] = False
     return jsonify({"valid": False, "message": msg})
+
+# Periodic background checker state
+_license_check_thread: Optional[threading.Thread] = None
+_news_status_cache: dict = {"active": False, "last_checked": 0, "message": ""}
+_news_status_lock = threading.Lock()
+
+def _check_news_api_health() -> bool:
+    if not NEWS_API_KEY:
+        return False
+    try:
+        resp = http_requests.get(
+            f"https://newsapi.org/v2/everything?q=AAPL&apiKey={NEWS_API_KEY}&pageSize=1",
+            timeout=5
+        )
+        data = resp.json()
+        return resp.status_code == 200 and ("articles" in data or "status" in data)
+    except Exception:
+        return False
+
+def _periodic_checks():
+    while True:
+        try:
+            key = state.config.get("license_key", "").strip()
+            if key:
+                valid, msg = verify_gumroad_license(key)
+                prev_valid = state.config.get("license_valid", False)
+                state.config["license_valid"] = valid
+                if prev_valid and not valid and state.engine and state.engine.running:
+                    state.engine.running = False
+                    state.running = False
+                    db.insert_log("License invalidated - bot stopped")
+                    state.ui_queue.put({"type": "license_revoked", "message": msg})
+                EncryptedConfigManager.save(state.config)
+            with _news_status_lock:
+                _news_status_cache["active"] = _check_news_api_health()
+                _news_status_cache["last_checked"] = time.time()
+                if not _news_status_cache["active"]:
+                    _news_status_cache["message"] = "NewsAPI key invalid or unreachable"
+                else:
+                    _news_status_cache["message"] = "NewsAPI active"
+        except Exception:
+            pass
+        time.sleep(900)  # 15 minutes
+
+@app.route("/api/license-status", methods=["GET"])
+def api_license_status():
+    with _news_status_lock:
+        news_ok = _news_status_cache.get("active", False)
+        news_msg = _news_status_cache.get("message", "")
+        news_checked = _news_status_cache.get("last_checked", 0)
+    return jsonify({
+        "license_valid": state.config.get("license_valid", False),
+        "license_key": bool(state.config.get("license_key", "").strip()),
+        "news_active": news_ok,
+        "news_message": news_msg,
+        "news_last_checked": news_checked
+    })
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # BACKTEST ROUTES  [FIX 1: corrected P&L accounting]
@@ -3446,25 +3573,41 @@ def delete_thesis():
 
 @app.route("/api/news/<symbol>", methods=["GET"])
 def api_news(symbol):
-    if not NEWS_API_KEY:
-        return jsonify({"articles": []})
+    # Try yfinance first (no API key needed)
+    articles = []
     try:
-        resp = http_requests.get(
-            f"https://newsapi.org/v2/everything?q={symbol}"
-            f"&apiKey={NEWS_API_KEY}&pageSize=5&sortBy=publishedAt",
-            timeout=5)
-        articles = resp.json().get("articles", [])
-        result = []
-        for a in articles:
-            result.append({
-                "title": a.get("title", ""),
-                "url": a.get("url", ""),
-                "source": a.get("source", {}).get("name", ""),
-                "published": a.get("publishedAt", "")[:10],
-            })
-        return jsonify({"articles": result})
+        import yfinance as yf
+        ticker = yf.Ticker(symbol)
+        raw_news = ticker.news
+        if raw_news:
+            for item in raw_news[:10]:
+                articles.append({
+                    "title": item.get("title", ""),
+                    "url": item.get("link", item.get("url", "")),
+                    "source": item.get("publisher", "Yahoo Finance"),
+                    "published": item.get("providerPublishTime", "") or str(datetime.now().date()),
+                })
     except Exception:
-        return jsonify({"articles": []})
+        pass
+    
+    # Fallback to NewsAPI if key is set and yfinance returned nothing
+    if not articles and NEWS_API_KEY:
+        try:
+            resp = http_requests.get(
+                f"https://newsapi.org/v2/everything?q={symbol}"
+                f"&apiKey={NEWS_API_KEY}&pageSize=5&sortBy=publishedAt",
+                timeout=5)
+            for a in resp.json().get("articles", []):
+                articles.append({
+                    "title": a.get("title", ""),
+                    "url": a.get("url", ""),
+                    "source": a.get("source", {}).get("name", ""),
+                    "published": a.get("publishedAt", "")[:10],
+                })
+        except Exception:
+            pass
+    
+    return jsonify({"articles": articles})
 
 @app.route("/api/news/feed", methods=["GET"])
 def api_news_feed():
@@ -3538,7 +3681,7 @@ FRONTEND_HTML = r"""
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>TraderMoney 6.1.6</title>
+<title>TraderMoney 6.1.7</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root {
@@ -4615,7 +4758,7 @@ button.ghost:hover { box-shadow: none; }
     <span class="sidebar-logo">TM</span>
     <div class="sidebar-title">
       <span class="sidebar-name">TraderMoney</span>
-      <span class="sidebar-version">v6.1.6</span>
+      <span class="sidebar-version">v6.1.7</span>
     </div>
     <div class="sidebar-actions">
       <button onclick="location.reload()" title="Refresh"><svg class="icon" style="width:13px;height:13px;" viewBox="0 0 24 24"><path d="M17.65 6.35A7.958 7.958 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg></button>
@@ -4900,7 +5043,7 @@ button.ghost:hover { box-shadow: none; }
   <div id="tab-help" class="tab">
     <div class="hb">
       <input type="text" id="help-search" placeholder="Search help... (Cmd+F)" oninput="filterHelp()" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);font-size:.82rem;margin-bottom:10px;box-sizing:border-box;">
-      <h3>TraderMoney v6.1.6 – Complete Help Guide</h3>
+      <h3>TraderMoney v6.1.7 – Complete Help Guide</h3>
       <p style="font-size:.82rem;color:var(--muted);margin-top:-4px;">Your desktop algorithmic trading terminal. All features documented below.</p>
 
       <details>
@@ -4925,22 +5068,23 @@ button.ghost:hover { box-shadow: none; }
       </details>
 
       <details open>
-        <summary style="cursor:pointer;color:var(--accent);font-weight:600;">What's New in v6.1.6</summary>
+        <summary style="cursor:pointer;color:var(--accent);font-weight:600;">What's New in v6.1.7</summary>
         <div style="padding:8px 0;font-size:.82rem;line-height:1.7;">
           <ul>
-            <li><b>24/7 News Polling</b> – News now updates around the clock on a dedicated 60s timer, independent of the monitor tab or bot state.</li>
-            <li><b>Multi-Source News Feed</b> – News aggregates from Yahoo Finance, CNBC, and MarketWatch RSS feeds alongside NewsAPI for richer coverage.</li>
-            <li><b>Always News</b> – General market news from RSS feeds ensures the news section always has content.</li>
-            <li><b>Live Section Responsiveness</b> – Monitor refreshes immediately when bot starts/stops.</li>
+            <li><b>Native TP/SL for All Brokers</b> – Stop-loss and take-profit orders are now placed natively alongside market orders for IBKR, Tradier, Binance, Bybit, and OKX. Automatic SL/TP on every trade, no watchdog dependency.</li>
+            <li><b>Free Yahoo Finance News</b> – News section now uses yfinance to fetch free, API-key-free news for all tracked tickers. No NewsAPI key required.</li>
+            <li><b>24/7 Market News Feed</b> – Continuous market news from Yahoo Finance, CNBC, and MarketWatch RSS feeds, always visible in the Live tab.</li>
+            <li><b>News Refreshes Every 5 Minutes</b> – News polling interval optimized to 5 minutes for balanced freshness and performance.</li>
           </ul>
           <br>
           <details style="font-size:.9rem;opacity:0.7;">
-            <summary>Full v6.1.4 Changelog</summary>
+            <summary>Full v6.1.6 Changelog</summary>
             <ul>
-            <li><b>News Uses Your Tickers</b> – News section now shows headlines for your configured tickers instead of hardcoded AAPL/NVDA/TSLA.</li>
-            <li><b>Live News Updates</b> – News refresh interval reduced from 5 min to 1 min.</li>
-            <li><b>Dynamic Ticker Add/Remove</b> – Bot picks up ticker changes without restart.</li>
-            <li><b>Refresh Chart Updates Ticker Bar</b> – Chart refresh also updates top ticker bar.</li>
+            <li><b>24/7 News Polling</b> – News now updates around the clock on a dedicated timer, independent of the monitor tab or bot state.</li>
+            <li><b>Multi-Source News Feed</b> – News aggregates from Yahoo Finance, CNBC, and MarketWatch RSS feeds alongside NewsAPI for richer coverage.</li>
+            <li><b>Always News</b> – General market news from RSS feeds ensures the news section always has content.</li>
+            <li><b>Live Section Responsiveness</b> – Monitor refreshes immediately when bot starts/stops.</li>
+            <li><b>News Uses Your Tickers</b> – News section now shows headlines for your configured tickers.</li>
           </ul>
           </details>
         </div>
@@ -5315,9 +5459,9 @@ button.ghost:hover { box-shadow: none; }
 <script src="https://s3.tradingview.com/tv.js"></script>
 <script>
 'use strict';
-const $=id=>document.getElementById(id);
-let cfg={},licValid=false,curSym='',allTickers=[],tvWidget=null,lastTvSymbol='';
-let botRunning=false,lastBTData=null;
+ const $=id=>document.getElementById(id);
+ let cfg={},licValid=false,curSym='',allTickers=[],tvWidget=null,lastTvSymbol='';
+ let botRunning=false,lastBTData=null,_newsActive=false;
 
 function cs(raw){return raw.split(':')[0].trim().toUpperCase();}
 function fmt(n,d=2){return Number(n).toLocaleString(undefined,{maximumFractionDigits:d});}
@@ -5552,12 +5696,12 @@ function collectIndicatorParams(){
 }
 
 function initUI(c){
-  if(!c)return;
-  licValid=false;
-  cfg.alpaca=c.alpaca||{};cfg.ibkr=c.ibkr||{};cfg.tradier=c.tradier||{};
-  cfg.binance=c.binance||{};cfg.bybit=c.bybit||{};cfg.okx=c.okx||{};
-  cfg.broker='Alpaca';
-  applyFreeTierUI();
+   if(!c)return;
+   licValid=c.license_valid===true;
+   cfg.alpaca=c.alpaca||{};cfg.ibkr=c.ibkr||{};cfg.tradier=c.tradier||{};
+   cfg.binance=c.binance||{};cfg.bybit=c.bybit||{};cfg.okx=c.okx||{};
+   cfg.broker=c.broker||'Alpaca';
+   if(licValid)applyProUI();else applyFreeTierUI();
   sv('tickers',c.tickers||'AAPL');sv('tf',c.timeframe||'1m');
   sv('emaf',c.emas?c.emas[0]:9);sv('emas',c.emas?c.emas[1]:50);
   sc('udefqty',c.use_default_qty!==false);toggleDefQty();
@@ -5635,10 +5779,8 @@ async function loadConfig(){
       body:JSON.stringify({timezone:Intl.DateTimeFormat().resolvedOptions().timeZone})});
     initUI(cfg);
     if(cfg.license_key&&cfg.license_key.trim())await validateLicense(true);
-    // Re-validate license every 15 minutes
-    setInterval(async()=>{
-      if(gv('lickey').trim())await validateLicense(true);
-    },900000);
+    await pollLicenseStatus();
+    setInterval(pollLicenseStatus,900000);
     loadHistory();loadLeaderboard();
   }catch(e){toast('Config load failed','error');}
 }
@@ -5728,22 +5870,39 @@ async function stopBot(){
 async function killSwitch(){await fetch('/api/kill',{method:'POST'});botRunning=false;toast('Kill switch activated','error');refreshMonitor();}
 
 async function validateLicense(silent=false){
-  const key=gv('lickey').trim();if(!key){if(!silent)toast('Enter a license key','error');return;}
-  const r=await fetch('/api/validate_license',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({license_key:key})});
-  const d=await r.json();
-  if(d.valid){
-    licValid=true;applyProUI();
-    sv('mode',cfg.mode||'signal');sv('dir',cfg.direction||'both');
-    sc('ubracket',!!cfg.use_bracket);sc('uatr',cfg.use_atr_stops!==false);
-    sc('uadx',cfg.use_adx!==false);sc('uvol',cfg.use_vol_confirm!==false);
-    sc('ust',cfg.use_supertrend!==false);sc('ustoch',cfg.use_stochastic!==false);
-    sc('unews',cfg.news_sentiment!==false);
-    sc('utrail',!!cfg.use_trailing);sc('uscale',!!cfg.use_scale_out);
-    sc('umtf',!!cfg.use_mtf_confirmation);sc('unewsov',!!cfg.use_news_override);
-    updateCreds();if(!silent)toast('Pro unlocked for this session','success');
-  }else{licValid=false;applyFreeTierUI();if(!silent)toast(d.message,'error');}
-  updateBrokerOptions();
-}
+   const key=gv('lickey').trim();if(!key){if(!silent)toast('Enter a license key','error');return;}
+   const r=await fetch('/api/validate_license',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({license_key:key})});
+   const d=await r.json();
+   if(d.valid){
+     licValid=true;applyProUI();
+     sv('mode',cfg.mode||'signal');sv('dir',cfg.direction||'both');
+     sc('ubracket',!!cfg.use_bracket);sc('uatr',cfg.use_atr_stops!==false);
+     sc('uadx',cfg.use_adx!==false);sc('uvol',cfg.use_vol_confirm!==false);
+     sc('ust',cfg.use_supertrend!==false);sc('ustoch',cfg.use_stochastic!==false);
+     sc('unews',cfg.news_sentiment!==false);
+     sc('utrail',!!cfg.use_trailing);sc('uscale',!!cfg.use_scale_out);
+     sc('umtf',!!cfg.use_mtf_confirmation);sc('unewsov',!!cfg.use_news_override);
+     updateCreds();if(!silent)toast('Pro unlocked for this session','success');
+   }else{licValid=false;applyFreeTierUI();if(!silent)toast(d.message,'error');}
+   updateBrokerOptions();
+ }
+
+async function pollLicenseStatus(){
+   try{
+     const r=await fetch('/api/license-status');
+     const d=await r.json();
+     const prev=licValid;
+     licValid=d.license_valid;
+     if(d.news_active!==_newsActive){
+       _newsActive=d.news_active;
+       if(!d.news_active)console.warn('NewsAPI inactive:',d.news_message||'Unknown error');
+     }
+     if(!d.license_valid&&prev){
+       applyFreeTierUI();
+       toast('License check failed - Pro features locked','error');
+     }
+   }catch(e){}
+ }
 
 async function checkUpdate(){
   try{const d=await(await fetch('/api/update')).json();if(d.update_available){$('upd').style.display='block';$('udl').href=d.download_url;toast('Update available!','success');}else toast('Up to date!','success');}catch(e){}
@@ -5798,8 +5957,8 @@ function toggleSidebar(){
 
 /* ── Monitor ── */
 let _monitorTimer=null,_newsTimer=null;
-/* 24/7 news poller - starts on load, never stops */
-function startNewsPoller(){if(!_newsTimer)_newsTimer=setInterval(_renderNews,60000);}
+/* 24/7 news poller - starts on load, never stops - refreshes every 5 minutes */
+function startNewsPoller(){if(!_newsTimer)_newsTimer=setInterval(_renderNews,300000);}
 function _ind(s){return s===0||s==='0'?'—':s;}
 function _trdArrow(dir){return dir==='up'?'↗':dir==='down'?'↘':'→';}
 function _sigColor(sig){return sig==='BUY'?'var(--accent)':sig==='SELL'?'var(--danger)':'var(--muted)';}
@@ -5894,16 +6053,16 @@ async function _renderNews(){
     nc.id='monitor-news';
     $('monitor-scroll').appendChild(nc);
   }
-  const needsFetch=tickersArr.filter(sym=>!window._newsCache||!window._newsCache[sym]||Date.now()-window._newsCache[sym].ts>60000);
-  if(needsFetch.length&&!window._newsLoading){
-    window._newsLoading=true;
-    $('monitor-news').innerHTML=`<div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:14px 18px;">
-      <div style="font-size:var(--fs-xs);font-weight:600;color:var(--accent);margin-bottom:10px;text-transform:uppercase;letter-spacing:0.04em;">Market News</div>
-      <div style="padding:20px 16px;text-align:center;">
-        <div style="display:inline-block;width:20px;height:20px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spinner 0.7s linear infinite;margin-bottom:10px;"></div>
-        <div style="color:var(--muted);font-size:0.7rem;">Loading Ticker News — Read These While You Wait</div>
-      </div>
-    </div>`;
+  const needsFetch=tickersArr.filter(sym=>!window._newsCache||!window._newsCache[sym]||Date.now()-window._newsCache[sym].ts>300000);
+if(needsFetch.length&&!window._newsLoading){
+     window._newsLoading=true;
+     $('monitor-news').innerHTML=`<div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:14px 18px;">
+       <div style="font-size:var(--fs-xs);font-weight:600;color:var(--accent);margin-bottom:10px;text-transform:uppercase;letter-spacing:0.04em;">Market News ${_newsActive?'<span style="color:#22c55e;font-size:0.6rem;">● Active</span>':'<span style="color:#ef4444;font-size:0.6rem;">● Inactive</span>'}</div>
+       <div style="padding:20px 16px;text-align:center;">
+         <div style="display:inline-block;width:20px;height:20px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spinner 0.7s linear infinite;margin-bottom:10px;"></div>
+         <div style="color:var(--muted);font-size:0.7rem;">Loading Ticker News — Read These While You Wait</div>
+       </div>
+     </div>`;
     const promises=tickersArr.map(async sym=>{
       try{const r=await fetch('/api/news/'+sym);const d=await r.json();if(!window._newsCache)window._newsCache={};window._newsCache[sym]={articles:d.articles||[],ts:Date.now()};}catch(e){}
     });
@@ -5926,9 +6085,9 @@ async function _renderNews(){
     window._rssNews.forEach(a=>{allNews.push({sym:'Feed',...a});});
   }
   allNews.sort((a,b)=>new Date(b.published||0)-new Date(a.published||0));
-  if(allNews.length){
-    let newsHtml='<div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:14px 18px;">';
-    newsHtml+=`<div style="font-size:var(--fs-xs);font-weight:600;color:var(--accent);margin-bottom:10px;text-transform:uppercase;letter-spacing:0.04em;">Market News</div>`;
+if(allNews.length){
+     let newsHtml='<div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:14px 18px;">';
+     newsHtml+=`<div style="font-size:var(--fs-xs);font-weight:600;color:var(--accent);margin-bottom:10px;text-transform:uppercase;letter-spacing:0.04em;">Market News ${_newsActive?'<span style="color:#22c55e;font-size:0.6rem;">● Active</span>':'<span style="color:#ef4444;font-size:0.6rem;">● Inactive</span>'}</div>`;
     newsHtml+=`<div style="display:flex;flex-direction:column;gap:6px;max-height:340px;overflow-y:auto;padding-right:4px;">`;
     for(const item of allNews.slice(0,30)){
       const color=['#3b82f6','#a855f7','#eab308','#f97316','#06b6d4','#8b5cf6','#ec4899','#14b8a6'][Math.abs(item.sym.charCodeAt(0)||0)%8];
@@ -5940,13 +6099,13 @@ async function _renderNews(){
     }
     newsHtml+='</div></div>';
     $('monitor-news').innerHTML=newsHtml;
-  }else{
-    $('monitor-news').innerHTML=`<div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:14px 18px;">
-      <div style="font-size:var(--fs-xs);font-weight:600;color:var(--accent);margin-bottom:10px;text-transform:uppercase;letter-spacing:0.04em;">Market News</div>
-      <div style="padding:20px 16px;text-align:center;color:var(--muted);font-size:0.7rem;">No recent news found.</div>
-    </div>`;
-  }
-}
+}else{
+     $('monitor-news').innerHTML=`<div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:14px 18px;">
+       <div style="font-size:var(--fs-xs);font-weight:600;color:var(--accent);margin-bottom:10px;text-transform:uppercase;letter-spacing:0.04em;">Market News ${_newsActive?'<span style="color:#22c55e;font-size:0.6rem;">● Active</span>':'<span style="color:#ef4444;font-size:0.6rem;">● Inactive</span>'}</div>
+       <div style="padding:20px 16px;text-align:center;color:var(--muted);font-size:0.7rem;">No recent news found.</div>
+     </div>`;
+   }
+ }
 function startMonitorPolling(){
   stopMonitorPolling();
   refreshMonitor();
@@ -6537,12 +6696,21 @@ if __name__ == "__main__":
     acquire_lock()
     db.clean_candle_cache()
 
+    # Initial news health check
+    _news_status_cache["active"] = _check_news_api_health()
+    _news_status_cache["last_checked"] = time.time()
+    _news_status_cache["message"] = "NewsAPI active" if _news_status_cache["active"] else "NewsAPI key invalid or missing"
+
+    # Start periodic checker thread
+    _license_check_thread = threading.Thread(target=_periodic_checks, daemon=True)
+    _license_check_thread.start()
+
     flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()
     time.sleep(1.2)
 
     window = webview.create_window(
-        "TraderMoney 6.1.6",
+        "TraderMoney 6.1.7",
         "http://127.0.0.1:5050",
         width=1440,
         height=880,
