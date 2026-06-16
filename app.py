@@ -55,7 +55,7 @@ import webview
 from flask import Flask, Response, jsonify, request, send_file
 from flask_cors import CORS
 
-APP_VERSION = "6.1.8"
+APP_VERSION = "6.1.18"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # AI CONFIGURATION
