@@ -55,7 +55,7 @@ import webview
 from flask import Flask, Response, jsonify, request, send_file
 from flask_cors import CORS
 
-APP_VERSION = "7.0.0"
+APP_VERSION = "7.0.1"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # AI CONFIGURATION
@@ -605,7 +605,7 @@ class AlpacaBroker(BaseBroker):
             self._emit_error("Alpaca not connected – cannot submit order.")
             return False
         try:
-            if sl_price is None and tp_price is None and sl_pct is None:
+            if sl_price is None and tp_price is None and sl_pct is None and tp_pct is None:
                 self.api.submit_order(symbol=symbol, qty=qty, side=side, type="market", time_in_force="day")
                 self._emit_log(f"Order submitted: {side.upper()} {qty} {symbol}")
             else:
@@ -617,20 +617,30 @@ class AlpacaBroker(BaseBroker):
                     if price is None:
                         self._emit_error(f"Cannot determine price for {symbol} — bracket order aborted.")
                         return False
+                    sl = sl_pct if sl_pct is not None else 2.0
+                    tp = tp_pct if tp_pct is not None else 4.0
                     if side == "buy":
-                        stop = round(price * (1 - sl_pct / 100), 2)
-                        limit = round(price * (1 + tp_pct / 100), 2)
+                        stop = round(price * (1 - sl / 100), 2)
+                        limit = round(price * (1 + tp / 100), 2)
                     else:
-                        stop = round(price * (1 + sl_pct / 100), 2)
-                        limit = round(price * (1 - tp_pct / 100), 2)
+                        stop = round(price * (1 + sl / 100), 2)
+                        limit = round(price * (1 - tp / 100), 2)
                 self.api.submit_order(
-                    symbol=symbol, qty=qty, side=side, type="market", time_in_force="gtc",
+                    symbol=symbol, qty=qty, side=side, type="market", time_in_force="day",
                     order_class="bracket",
                     stop_loss={"stop_price": str(stop)}, take_profit={"limit_price": str(limit)})
                 self._emit_log(f"Bracket order submitted: {side.upper()} {qty} {symbol} SL={stop} TP={limit}")
             return True
         except Exception as e:
             self._emit_error(f"Order failed ({symbol} {side}): {e}")
+            # If bracket order fails, try simple market order
+            if sl_price is not None or tp_price is not None or sl_pct is not None or tp_pct is not None:
+                try:
+                    self.api.submit_order(symbol=symbol, qty=qty, side=side, type="market", time_in_force="day")
+                    self._emit_log(f"Fallback order submitted: {side.upper()} {qty} {symbol} (without SL/TP)")
+                    return True
+                except Exception as e2:
+                    self._emit_error(f"Fallback order also failed ({symbol} {side}): {e2}")
             return False
 
     def close_all_positions(self):
@@ -1784,6 +1794,22 @@ class SignalAnalyzer:
 # ═══════════════════════════════════════════════════════════════════════════════
 # TRADING ENGINE
 # ═══════════════════════════════════════════════════════════════════════════════
+class OrderItem:
+    def __init__(self, symbol: str, qty: float, side: str, order_type: str = "market",
+                 sl_pct: float = None, tp_pct: float = None,
+                 sl_price: float = None, tp_price: float = None,
+                 retries: int = 3):
+        self.symbol = symbol
+        self.qty = qty
+        self.side = side
+        self.order_type = order_type
+        self.sl_pct = sl_pct
+        self.tp_pct = tp_pct
+        self.sl_price = sl_price
+        self.tp_price = tp_price
+        self.retries = retries
+        self.attempts = 0
+
 class TradingEngine(threading.Thread):
     def __init__(self, ui_queue: queue.Queue, config: dict, broker: BaseBroker):
         super().__init__(daemon=True)
@@ -1804,6 +1830,8 @@ class TradingEngine(threading.Thread):
         self.news_cache: Dict[str, Tuple[float, List[str], float]] = {}  # symbol -> (score, headlines, timestamp)
         self.trailing_stops: Dict[str, dict] = {}
         self.mtf_cache: Dict[str, pd.DataFrame] = {}
+        self.bracket_positions: set = set()  # symbols with active native broker bracket orders
+        self.order_queue: queue.Queue = queue.Queue()  # order execution queue
 
         if not self.is_licensed:
             self.config["mode"] = "signal"
@@ -1816,6 +1844,59 @@ class TradingEngine(threading.Thread):
                 self.config[k] = False
             first = self.config.get("tickers", "AAPL").split(",")[0].strip()
             self.config["tickers"] = first
+
+    def _queue_order(self, symbol, qty, side, order_type="market",
+                     sl_pct=None, tp_pct=None, sl_price=None, tp_price=None,
+                     callback=None):
+        """Queue an order for execution. Returns False if queue is full, True otherwise."""
+        item = OrderItem(symbol, qty, side, order_type,
+                         sl_pct, tp_pct, sl_price, tp_price)
+        item.callback = callback
+        try:
+            self.order_queue.put(item, timeout=1)
+            self._log(f"[OrderQueue] Queued {side.upper()} {qty} {symbol}")
+            return True
+        except Exception:
+            self._log(f"[OrderQueue] Failed to queue {side.upper()} {qty} {symbol}")
+            return False
+
+    def _order_processor(self):
+        """Background thread that processes queued orders with retry logic."""
+        while self.running:
+            try:
+                item: OrderItem = self.order_queue.get(timeout=1)
+            except Exception:
+                continue
+            if item is None:
+                continue
+            success = False
+            while item.attempts < item.retries and self.running:
+                item.attempts += 1
+                try:
+                    ok = self.broker.submit_order(
+                        item.symbol, item.qty, item.side, item.order_type,
+                        item.sl_pct, item.tp_pct, item.sl_price, item.tp_price)
+                    if ok:
+                        success = True
+                        self._log(f"[OrderQueue] Executed {item.side.upper()} {item.qty} {item.symbol} "
+                                  f"(attempt {item.attempts}/{item.retries})")
+                        break
+                    else:
+                        self._log(f"[OrderQueue] Attempt {item.attempts}/{item.retries} failed for "
+                                  f"{item.side.upper()} {item.qty} {item.symbol}")
+                except Exception as e:
+                    self._log(f"[OrderQueue] Error (attempt {item.attempts}/{item.retries}) "
+                              f"for {item.side.upper()} {item.qty} {item.symbol}: {e}")
+                if item.attempts < item.retries and self.running:
+                    time.sleep(2)
+            if not success:
+                self.ui_queue.put(("error",
+                    f"Order failed after {item.retries} attempts: {item.side.upper()} {item.qty} {item.symbol}"))
+            if hasattr(item, 'callback') and item.callback:
+                try:
+                    item.callback(success)
+                except Exception as e:
+                    self._log(f"[OrderQueue] Callback error: {e}")
 
     def _log(self, msg: str):
         self.ui_queue.put(("log", msg))
@@ -1914,8 +1995,10 @@ class TradingEngine(threading.Thread):
         self.ui_queue.put(("status", f"Running {len(self.symbols)} symbol(s)"))
         self._telegram(f"<b>TraderMoney Started</b>\n{', '.join(self.symbols)} | {mode}")
 
-        if use_bracket and self.broker.name != "Alpaca":
+        if use_bracket:
             threading.Thread(target=self._sl_tp_watchdog_loop, daemon=True).start()
+
+        threading.Thread(target=self._order_processor, daemon=True).start()
 
         last_fetch = 0.0
         while self.running:
@@ -2091,6 +2174,21 @@ class TradingEngine(threading.Thread):
         self.broker.stop_stream()
         self.ui_queue.put(("status", "Bot stopped"))
 
+    def _submit_with_retry(self, symbol, qty, side, order_type="market",
+                           sl_pct=None, tp_pct=None, sl_price=None, tp_price=None,
+                           timeout=30) -> bool:
+        """Queue order and wait for execution with retry logic."""
+        result = [None]
+        event = threading.Event()
+        def callback(success):
+            result[0] = success
+            event.set()
+        self._queue_order(symbol, qty, side, order_type,
+                          sl_pct, tp_pct, sl_price, tp_price,
+                          callback=callback)
+        event.wait(timeout=timeout)
+        return result[0] if result[0] is not None else False
+
     def _execute(self, sym: str, sig: str, price: float, latest: pd.Series,
                  use_bracket: bool, use_atr: bool,
                  sl_pct: float, tp_pct: float, conf: float):
@@ -2122,16 +2220,17 @@ class TradingEngine(threading.Thread):
                 if pos <= 0:
                     if pos < 0:
                         self._log(f"[Execute] Closing short {sym} before BUY")
-                        ok = self.broker.submit_order(sym, abs(pos), "buy")
+                        ok = self._submit_with_retry(sym, abs(pos), "buy")
                         if ok:
                             self.positions[sym] = 0
+                            self.bracket_positions.discard(sym)
                         else:
                             self._log(f"[Execute] Failed to close short {sym}")
                             return
                     ok = False
                     if use_trailing:
                         stop_price = price * (1 - trail_pct / 100)
-                        ok = self.broker.submit_order(
+                        ok = self._submit_with_retry(
                             sym, qty, "buy",
                             sl_price=stop_price)
                         if ok:
@@ -2140,8 +2239,8 @@ class TradingEngine(threading.Thread):
                     elif use_scale:
                         qty1 = int(qty * scale_pct1 / 100)
                         qty2 = qty - qty1
-                        ok1 = self.broker.submit_order(sym, qty1, "buy", tp_pct=scale_tp1)
-                        ok2 = self.broker.submit_order(sym, qty2, "buy", tp_pct=scale_tp2)
+                        ok1 = self._submit_with_retry(sym, qty1, "buy", tp_pct=scale_tp1)
+                        ok2 = self._submit_with_retry(sym, qty2, "buy", tp_pct=scale_tp2)
                         ok = ok1 or ok2
                         if ok:
                             self._log(f"[Scale Out] Split {sym}: {qty1}@{scale_tp1}% TP, {qty2}@{scale_tp2}% TP")
@@ -2150,22 +2249,24 @@ class TradingEngine(threading.Thread):
                         ip = self.config.get("indicator_params", {})
                         atr_sm = float(ip.get("atr_stop_mult", 2.0))
                         atr_tm = float(ip.get("atr_tp_mult", 3.0))
-                        ok = self.broker.submit_order(
+                        ok = self._submit_with_retry(
                             sym, qty, "buy",
                             sl_price=price - atr_sm * atr,
                             tp_price=price + atr_tm * atr)
                     elif use_bracket:
-                        ok = self.broker.submit_order(
+                        ok = self._submit_with_retry(
                             sym, qty, "buy", sl_pct=sl_pct, tp_pct=tp_pct)
                     else:
-                        ok = self.broker.submit_order(sym, qty, "buy")
+                        ok = self._submit_with_retry(sym, qty, "buy")
 
                     if not ok:
                         self._log(f"[Execute] Bracket order failed for {sym}, trying simple market order")
-                        ok = self.broker.submit_order(sym, qty, "buy")
+                        ok = self._submit_with_retry(sym, qty, "buy")
 
                     if ok:
                         self.positions[sym] = qty
+                        if use_bracket:
+                            self.bracket_positions.add(sym)
                         self.ui_queue.put(("order", (sym, "BUY", qty, price)))
                         db.insert_trade(_ts(), sym, "BUY", qty, price)
                         self._telegram(f"<b>BUY</b> {qty} {sym} @ ${price:.2f} "
@@ -2177,16 +2278,17 @@ class TradingEngine(threading.Thread):
                 if pos >= 0:
                     if pos > 0:
                         self._log(f"[Execute] Closing long {sym} before SELL")
-                        ok = self.broker.submit_order(sym, pos, "sell")
+                        ok = self._submit_with_retry(sym, pos, "sell")
                         if ok:
                             self.positions[sym] = 0
+                            self.bracket_positions.discard(sym)
                         else:
                             self._log(f"[Execute] Failed to close long {sym}")
                             return
                     ok = False
                     if use_trailing:
                         stop_price = price * (1 + trail_pct / 100)
-                        ok = self.broker.submit_order(
+                        ok = self._submit_with_retry(
                             sym, qty, "sell",
                             sl_price=stop_price)
                         if ok:
@@ -2195,8 +2297,8 @@ class TradingEngine(threading.Thread):
                     elif use_scale:
                         qty1 = int(qty * scale_pct1 / 100)
                         qty2 = qty - qty1
-                        ok1 = self.broker.submit_order(sym, qty1, "sell", tp_pct=scale_tp1)
-                        ok2 = self.broker.submit_order(sym, qty2, "sell", tp_pct=scale_tp2)
+                        ok1 = self._submit_with_retry(sym, qty1, "sell", tp_pct=scale_tp1)
+                        ok2 = self._submit_with_retry(sym, qty2, "sell", tp_pct=scale_tp2)
                         ok = ok1 or ok2
                         if ok:
                             self._log(f"[Scale Out] Split {sym}: {qty1}@{scale_tp1}% TP, {qty2}@{scale_tp2}% TP")
@@ -2205,22 +2307,24 @@ class TradingEngine(threading.Thread):
                         ip = self.config.get("indicator_params", {})
                         atr_sm = float(ip.get("atr_stop_mult", 2.0))
                         atr_tm = float(ip.get("atr_tp_mult", 3.0))
-                        ok = self.broker.submit_order(
+                        ok = self._submit_with_retry(
                             sym, qty, "sell",
                             sl_price=price + atr_sm * atr,
                             tp_price=price - atr_tm * atr)
                     elif use_bracket:
-                        ok = self.broker.submit_order(
+                        ok = self._submit_with_retry(
                             sym, qty, "sell", sl_pct=sl_pct, tp_pct=tp_pct)
                     else:
-                        ok = self.broker.submit_order(sym, qty, "sell")
+                        ok = self._submit_with_retry(sym, qty, "sell")
 
                     if not ok:
                         self._log(f"[Execute] Bracket order failed for {sym}, trying simple market order")
-                        ok = self.broker.submit_order(sym, qty, "sell")
+                        ok = self._submit_with_retry(sym, qty, "sell")
 
                     if ok:
                         self.positions[sym] = -qty
+                        if use_bracket:
+                            self.bracket_positions.add(sym)
                         self.ui_queue.put(("order", (sym, "SELL", qty, price)))
                         db.insert_trade(_ts(), sym, "SELL", qty, price)
                         self._telegram(f"<b>SELL</b> {qty} {sym} @ ${price:.2f} "
@@ -2240,6 +2344,9 @@ class TradingEngine(threading.Thread):
                 for sym, qty in list(self.positions.items()):
                     if qty == 0:
                         continue
+                    # Skip symbols with active native broker bracket orders
+                    if sym in self.bracket_positions:
+                        continue
                     try:
                         import yfinance as yf
                         price = yf.Ticker(sym).history(period="1d")["Close"].iloc[-1]
@@ -2257,6 +2364,7 @@ class TradingEngine(threading.Thread):
                                 self.trailing_stops[sym]["active"] = False
                                 self.broker.submit_order(sym, abs(qty), "sell")
                                 self.positions[sym] = 0
+                                self.bracket_positions.discard(sym)
                                 self._telegram(f"<b>Trailing Stop</b> triggered {sym} @ ${price:.2f}")
                                 continue
                         elif ts.get("active") and ts.get("side") == "short":
@@ -2268,6 +2376,7 @@ class TradingEngine(threading.Thread):
                                 self.trailing_stops[sym]["active"] = False
                                 self.broker.submit_order(sym, abs(qty), "buy")
                                 self.positions[sym] = 0
+                                self.bracket_positions.discard(sym)
                                 self._telegram(f"<b>Trailing Stop</b> triggered {sym} @ ${price:.2f}")
                                 continue
                     stop = price * (1 - sl_pct / 100) if qty > 0 else price * (1 + sl_pct / 100)
@@ -2276,11 +2385,15 @@ class TradingEngine(threading.Thread):
                         self.broker.submit_order(
                             sym, abs(qty), "sell" if qty > 0 else "buy")
                         self.positions[sym] = 0
+                        self.bracket_positions.discard(sym)
+                        self.trailing_stops.pop(sym, None)
                         self._telegram(f"<b>Stop Loss</b> triggered {sym} @ ${price:.2f}")
                     elif (qty > 0 and price >= take) or (qty < 0 and price <= take):
                         self.broker.submit_order(
                             sym, abs(qty), "sell" if qty > 0 else "buy")
                         self.positions[sym] = 0
+                        self.bracket_positions.discard(sym)
+                        self.trailing_stops.pop(sym, None)
                         self._telegram(f"<b>Take Profit</b> triggered {sym} @ ${price:.2f}")
             except Exception:
                 pass
@@ -3645,7 +3758,40 @@ def api_news(symbol):
     except Exception as e:
         pass
     
-    # 2. Fallback to NewsAPI if key is set
+    # 2. Try Google News RSS (free, no API key)
+    if len(articles) < 10:
+        try:
+            import xml.etree.ElementTree as ET
+            gurl = f"https://news.google.com/rss/search?q={symbol}+stock&hl=en-US&gl=US&ceid=US:en"
+            gresp = urllib.request.urlopen(gurl, timeout=5)
+            gtree = ET.parse(gresp)
+            groot = gtree.getroot()
+            for item in groot.findall(".//item"):
+                title = item.findtext("title", "")
+                link = item.findtext("link", "")
+                if not link or link in seen_urls:
+                    continue
+                seen_urls.add(link)
+                pub = item.findtext("pubDate", "")[:16] or str(datetime.now().date())
+                desc = item.findtext("description", "") or ""
+                image = None
+                if desc:
+                    import re as _re
+                    m = _re.search(r'<img[^>]+src=["\']([^"\']+)["\']', desc)
+                    if m:
+                        image = m.group(1)
+                articles.append({
+                    "title": title,
+                    "url": link,
+                    "source": "Google News",
+                    "published": pub,
+                    "image": image,
+                    "description": desc[:200] if desc else "",
+                })
+        except Exception:
+            pass
+
+    # 3. Fallback to NewsAPI if key is set
     if NEWS_API_KEY and len(articles) < 10:
         try:
             resp = http_requests.get(
@@ -3669,9 +3815,36 @@ def api_news(symbol):
                     })
         except Exception:
             pass
+
+    # 4. Try Seeking Alpha RSS for specific ticker
+    if len(articles) < 5:
+        try:
+            import xml.etree.ElementTree as ET
+            sa_url = f"https://seekingalpha.com/symbol/{symbol}/news?format=rss"
+            sa_resp = urllib.request.urlopen(sa_url, timeout=5)
+            sa_tree = ET.parse(sa_resp)
+            sa_root = sa_tree.getroot()
+            for item in sa_root.findall(".//item"):
+                title = item.findtext("title", "")
+                link = item.findtext("link", "")
+                if not link or link in seen_urls:
+                    continue
+                seen_urls.add(link)
+                pub = item.findtext("pubDate", "")[:16] or str(datetime.now().date())
+                sa_image_elem = item.find("{http://search.yahoo.com/mrss/}content")
+                sa_image = sa_image_elem.attrib.get('url', '') if sa_image_elem is not None else None
+                articles.append({
+                    "title": title,
+                    "url": link,
+                    "source": "Seeking Alpha",
+                    "published": pub,
+                    "image": sa_image,
+                })
+        except Exception:
+            pass
     
-    # Sort by published date (newest first) and limit to top 20
-    articles = articles[:20]
+    # Sort by published date (newest first) and limit to top 25
+    articles = articles[:25]
     return jsonify({"articles": articles, "source_count": len(seen_urls)})
 
 @app.route("/api/news/feed", methods=["GET"])
@@ -3684,6 +3857,15 @@ def api_news_feed():
         ("CNBC", "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=100003114"),
         ("MarketWatch", "https://feeds.marketwatch.com/marketwatch/topstories"),
         ("Reuters", "https://feeds.reuters.com/finance/markets"),
+        ("Bloomberg", "https://feeds.bloomberg.com/markets/news.rss"),
+        ("Seeking Alpha", "https://seekingalpha.com/feed.xml"),
+        ("Investing.com", "https://www.investing.com/rss/news.rss"),
+        ("Benzinga", "https://feeds.benzinga.com/benzinga/news"),
+        ("The Motley Fool", "https://www.fool.com/feed/index.rss"),
+        ("Business Insider", "https://feeds.businessinsider.com/money/markets"),
+        ("Zero Hedge", "https://feeds.feedburner.com/zerohedge/feed?format=xml"),
+        ("CoinDesk", "https://www.coindesk.com/arc/outboundfeeds/rss/"),
+        ("Financial Times", "https://www.ft.com/rss/markets"),
     ]
     articles = []
     seen_urls = set()
@@ -3781,7 +3963,7 @@ FRONTEND_HTML = r"""
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>TraderMoney 7.0.0</title>
+<title>TraderMoney 7.0.1</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root {
@@ -4858,7 +5040,7 @@ button.ghost:hover { box-shadow: none; }
     <span class="sidebar-logo">TM</span>
     <div class="sidebar-title">
       <span class="sidebar-name">TraderMoney</span>
-      <span class="sidebar-version">v7.0.0</span>
+      <span class="sidebar-version">v7.0.1</span>
     </div>
     <div class="sidebar-actions">
       <button onclick="location.reload()" title="Refresh"><svg class="icon" style="width:13px;height:13px;" viewBox="0 0 24 24"><path d="M17.65 6.35A7.958 7.958 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg></button>
@@ -5143,7 +5325,7 @@ button.ghost:hover { box-shadow: none; }
   <div id="tab-help" class="tab">
     <div class="hb">
       <input type="text" id="help-search" placeholder="Search help... (Cmd+F)" oninput="filterHelp()" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);font-size:.82rem;margin-bottom:10px;box-sizing:border-box;">
-      <h3>TraderMoney v7.0.0 – Complete Help Guide</h3>
+      <h3>TraderMoney v7.0.1 – Complete Help Guide</h3>
       <p style="font-size:.82rem;color:var(--muted);margin-top:-4px;">Your desktop algorithmic trading terminal. All features documented below.</p>
 
       <details>
@@ -5168,7 +5350,7 @@ button.ghost:hover { box-shadow: none; }
       </details>
 
       <details open>
-        <summary style="cursor:pointer;color:var(--accent);font-weight:600;">What's New in v7.0.0</summary>
+        <summary style="cursor:pointer;color:var(--accent);font-weight:600;">What's New in v7.0.1</summary>
         <div style="padding:8px 0;font-size:.82rem;line-height:1.7;">
           <ul>
             <li><b>Fixed Alpaca SL/TP:</b> Bracket orders now work with proper price fetching via get_latest_trade + yfinance fallback. SL and TP orders are queued automatically at entry.</li>
@@ -6825,7 +7007,7 @@ if __name__ == "__main__":
     time.sleep(1.2)
 
     window = webview.create_window(
-        "TraderMoney 7.0.0",
+        "TraderMoney 7.0.1",
         "http://127.0.0.1:5050",
         width=1440,
         height=880,
