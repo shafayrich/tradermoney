@@ -55,7 +55,7 @@ import webview
 from flask import Flask, Response, jsonify, request, send_file
 from flask_cors import CORS
 
-APP_VERSION = "6.1.18"
+APP_VERSION = "7.0.0"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # AI CONFIGURATION
@@ -576,21 +576,47 @@ class AlpacaBroker(BaseBroker):
             self._emit_error(f"get_account: {e}")
             return None
 
+    def _get_current_price(self, symbol: str) -> Optional[float]:
+        """Get current price with multiple fallbacks."""
+        try:
+            trade = self.api.get_latest_trade(symbol)
+            if trade and hasattr(trade, 'raw') and 'trade' in trade.raw:
+                return float(trade.raw['trade'].get('p', 0))
+        except Exception:
+            pass
+        try:
+            bar = self.api.get_latest_bar(symbol)
+            if bar and hasattr(bar, 'raw') and 'bar' in bar.raw:
+                return float(bar.raw['bar'].get('c', 0))
+        except Exception:
+            pass
+        try:
+            import yfinance as yf
+            df = yf.download(symbol, period="1d", interval="1m", progress=False)
+            if df is not None and not df.empty:
+                return float(df["Close"].iloc[-1])
+        except Exception:
+            pass
+        return None
+
     def submit_order(self, symbol, qty, side, order_type="market",
                      sl_pct=None, tp_pct=None, sl_price=None, tp_price=None) -> bool:
         if not self.api:
             self._emit_error("Alpaca not connected – cannot submit order.")
             return False
         try:
-            if sl_price is None and sl_pct is None:
+            if sl_price is None and tp_price is None and sl_pct is None:
                 self.api.submit_order(symbol=symbol, qty=qty, side=side, type="market", time_in_force="day")
+                self._emit_log(f"Order submitted: {side.upper()} {qty} {symbol}")
             else:
                 if sl_price is not None and tp_price is not None:
                     stop = round(sl_price, 2)
                     limit = round(tp_price, 2)
                 else:
-                    last = self.api.get_latest_bar(symbol)
-                    price = float(last.Close)
+                    price = self._get_current_price(symbol)
+                    if price is None:
+                        self._emit_error(f"Cannot determine price for {symbol} — bracket order aborted.")
+                        return False
                     if side == "buy":
                         stop = round(price * (1 - sl_pct / 100), 2)
                         limit = round(price * (1 + tp_pct / 100), 2)
@@ -600,8 +626,8 @@ class AlpacaBroker(BaseBroker):
                 self.api.submit_order(
                     symbol=symbol, qty=qty, side=side, type="market", time_in_force="gtc",
                     order_class="bracket",
-                    stop_loss={"stop_price": stop}, take_profit={"limit_price": limit})
-            self._emit_log(f"Order submitted: {side.upper()} {qty} {symbol}")
+                    stop_loss={"stop_price": str(stop)}, take_profit={"limit_price": str(limit)})
+                self._emit_log(f"Bracket order submitted: {side.upper()} {qty} {symbol} SL={stop} TP={limit}")
             return True
         except Exception as e:
             self._emit_error(f"Order failed ({symbol} {side}): {e}")
@@ -2300,6 +2326,7 @@ class TradingEngine(threading.Thread):
     def stop(self):
         if self.running:
             self._telegram("<b>Bot Stopped</b>")
+        self.broker.stop_stream()
         self.running = False
         self._stop_watchdog.set()
 
@@ -2509,6 +2536,8 @@ def api_start():
 def api_stop():
     if state.engine:
         state.engine.stop()
+    if state.broker_instance:
+        state.broker_instance.stop_stream()
     state.running = False
     return jsonify({"status": "ok", "message": "Bot stopped"})
 
@@ -3752,7 +3781,7 @@ FRONTEND_HTML = r"""
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>TraderMoney 6.1.7</title>
+<title>TraderMoney 7.0.0</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root {
@@ -4829,7 +4858,7 @@ button.ghost:hover { box-shadow: none; }
     <span class="sidebar-logo">TM</span>
     <div class="sidebar-title">
       <span class="sidebar-name">TraderMoney</span>
-      <span class="sidebar-version">v6.1.7</span>
+      <span class="sidebar-version">v7.0.0</span>
     </div>
     <div class="sidebar-actions">
       <button onclick="location.reload()" title="Refresh"><svg class="icon" style="width:13px;height:13px;" viewBox="0 0 24 24"><path d="M17.65 6.35A7.958 7.958 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg></button>
@@ -5114,7 +5143,7 @@ button.ghost:hover { box-shadow: none; }
   <div id="tab-help" class="tab">
     <div class="hb">
       <input type="text" id="help-search" placeholder="Search help... (Cmd+F)" oninput="filterHelp()" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);font-size:.82rem;margin-bottom:10px;box-sizing:border-box;">
-      <h3>TraderMoney v6.1.7 – Complete Help Guide</h3>
+      <h3>TraderMoney v7.0.0 – Complete Help Guide</h3>
       <p style="font-size:.82rem;color:var(--muted);margin-top:-4px;">Your desktop algorithmic trading terminal. All features documented below.</p>
 
       <details>
@@ -5139,25 +5168,18 @@ button.ghost:hover { box-shadow: none; }
       </details>
 
       <details open>
-        <summary style="cursor:pointer;color:var(--accent);font-weight:600;">What's New in v6.1.7</summary>
+        <summary style="cursor:pointer;color:var(--accent);font-weight:600;">What's New in v7.0.0</summary>
         <div style="padding:8px 0;font-size:.82rem;line-height:1.7;">
           <ul>
-            <li><b>Native TP/SL for All Brokers</b> – Stop-loss and take-profit orders are now placed natively alongside market orders for IBKR, Tradier, Binance, Bybit, and OKX. Automatic SL/TP on every trade, no watchdog dependency.</li>
-            <li><b>Free Yahoo Finance News</b> – News section now uses yfinance to fetch free, API-key-free news for all tracked tickers. No NewsAPI key required.</li>
-            <li><b>24/7 Market News Feed</b> – Continuous market news from Yahoo Finance, CNBC, and MarketWatch RSS feeds, always visible in the Live tab.</li>
-            <li><b>News Refreshes Every 5 Minutes</b> – News polling interval optimized to 5 minutes for balanced freshness and performance.</li>
+            <li><b>Fixed Alpaca SL/TP:</b> Bracket orders now work with proper price fetching via get_latest_trade + yfinance fallback. SL and TP orders are queued automatically at entry.</li>
+            <li><b>Fixed Stop Bot:</b> Stop now immediately halts the engine and stops all price streams without touching open positions. No more ghost buys after stop.</li>
+            <li><b>Fixed Live Page:</b> Per-ticker monitoring now uses background-cached data for instant load. Cards stay visible during refresh. One failed ticker doesn't break the whole page.</li>
+            <li><b>Multi-Source News:</b> News from Yahoo Finance, NewsAPI, CNBC, MarketWatch, Reuters with article thumbnails and source badges.</li>
+            <li><b>Per-Ticker + Combined News Feed:</b> News shows per-ticker articles alongside a combined market feed in the Live tab.</li>
+            <li><b>Multiple Timezone Clocks:</b> Real-time clocks for Sydney, Tokyo, London, New York alongside UTC.</li>
+            <li><b>Markdown Chat Fix:</b> AI chatbot bold/italic/code formatting now renders properly.</li>
+            <li><b>Real Market Watch:</b> Backtest loading screen now uses real yfinance data instead of fake jiggle prices.</li>
           </ul>
-          <br>
-          <details style="font-size:.9rem;opacity:0.7;">
-            <summary>Full v6.1.6 Changelog</summary>
-            <ul>
-            <li><b>24/7 News Polling</b> – News now updates around the clock on a dedicated timer, independent of the monitor tab or bot state.</li>
-            <li><b>Multi-Source News Feed</b> – News aggregates from Yahoo Finance, CNBC, and MarketWatch RSS feeds alongside NewsAPI for richer coverage.</li>
-            <li><b>Always News</b> – General market news from RSS feeds ensures the news section always has content.</li>
-            <li><b>Live Section Responsiveness</b> – Monitor refreshes immediately when bot starts/stops.</li>
-            <li><b>News Uses Your Tickers</b> – News section now shows headlines for your configured tickers.</li>
-          </ul>
-          </details>
         </div>
       </details>
 
@@ -6803,7 +6825,7 @@ if __name__ == "__main__":
     time.sleep(1.2)
 
     window = webview.create_window(
-        "TraderMoney 6.1.7",
+        "TraderMoney 7.0.0",
         "http://127.0.0.1:5050",
         width=1440,
         height=880,
