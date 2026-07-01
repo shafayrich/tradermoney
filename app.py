@@ -55,7 +55,7 @@ import webview
 from flask import Flask, Response, jsonify, request, send_file
 from flask_cors import CORS
 
-APP_VERSION = "7.0.2"
+APP_VERSION = "7.0.3"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # AI CONFIGURATION
@@ -4067,7 +4067,7 @@ FRONTEND_HTML = r"""
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>TraderMoney 7.0.2</title>
+<title>TraderMoney 7.0.3</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root {
@@ -4210,6 +4210,52 @@ body.light #settings-modal { background: var(--surface); border: 1px solid var(-
 .modal-close { background: transparent; border: none; color: var(--muted); width: 28px; height: 28px; padding: 0; display: flex; align-items: center; justify-content: center; border-radius: 6px; cursor: pointer; }
 .modal-close:hover { background: var(--glass); color: var(--text); }
 .modal-body { padding: 12px 16px 16px; max-height: 60vh; overflow-y: auto; }
+
+/* ── Terms Modal ── */
+#terms-modal-overlay {
+  position: fixed; inset: 0; z-index: 10000;
+  background: rgba(0,0,0,0.8); backdrop-filter: blur(6px);
+  display: flex; align-items: center; justify-content: center;
+  opacity: 0; visibility: hidden; transition: all 0.3s;
+}
+#terms-modal-overlay.show { opacity: 1; visibility: visible; }
+#terms-modal {
+  background: var(--surface); color: var(--text);
+  border: 1px solid var(--border); border-radius: var(--radius-lg);
+  width: 90%; max-width: 600px; max-height: 85vh;
+  box-shadow: var(--shadow-lg); display: flex; flex-direction: column;
+  transform: scale(0.95); transition: transform 0.3s;
+  overflow: hidden;
+}
+#terms-modal-overlay.show #terms-modal { transform: scale(1); }
+#terms-header {
+  padding: 20px 24px 16px; border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+#terms-header h2 { margin: 0; color: var(--accent); font-size: var(--fs-lg); font-weight: 700; }
+#terms-header p { margin: 4px 0 0; color: var(--muted); font-size: var(--fs-sm); }
+#terms-content {
+  flex: 1; overflow-y: auto; padding: 16px 24px;
+  font-size: var(--fs-sm); line-height: 1.6; color: var(--text2);
+}
+#terms-content h3 { color: var(--text); font-size: var(--fs-md); font-weight: 600; margin-top: 12px; margin-bottom: 8px; }
+#terms-content ul { margin: 8px 0 8px 20px; padding: 0; }
+#terms-content li { margin: 4px 0; }
+#terms-content strong { color: var(--text); font-weight: 600; }
+#terms-footer {
+  padding: 16px 24px; border-top: 1px solid var(--border);
+  flex-shrink: 0; display: flex; gap: 10px; align-items: center;
+}
+#terms-agree { display: flex; align-items: center; gap: 8px; cursor: pointer; flex: 1; }
+#terms-agree input { cursor: pointer; }
+#terms-agree label { cursor: pointer; font-size: var(--fs-sm); color: var(--text2); flex: 1; }
+#terms-accept-btn {
+  padding: 8px 16px; background: var(--accent); color: #000;
+  border: none; border-radius: var(--radius-sm); font-weight: 600;
+  font-size: var(--fs-sm); cursor: pointer; transition: all 0.2s;
+}
+#terms-accept-btn:hover:not(:disabled) { opacity: 0.9; box-shadow: 0 0 12px rgba(0,201,167,0.4); }
+#terms-accept-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* ── Sidebar collapsible sections ── */
 #sb { padding-top: 0; }
@@ -5101,6 +5147,61 @@ button.ghost:hover { box-shadow: none; }
 <div id="toasts"></div>
 <div id="upd">Update available! <a id="udl" href="#" target="_blank">Download</a></div>
 
+<!-- ════ TERMS & DISCLAIMER MODAL ════════════════════════════════ -->
+<div id="terms-modal-overlay">
+  <div id="terms-modal">
+    <div id="terms-header">
+      <h2>Terms of Service & Disclaimer</h2>
+      <p>Please read and accept before using TraderMoney</p>
+    </div>
+    <div id="terms-content">
+      <h3>⚠️ Financial Disclaimer</h3>
+      <ul>
+        <li><strong>Trading and investing carry substantial risk of financial loss.</strong> You may lose some or all of your investment.</li>
+        <li>This Software does NOT guarantee profits, positive returns, or loss avoidance.</li>
+        <li><strong>Past performance is NOT indicative of future results.</strong> Backtests are NOT predictive of live trading.</li>
+        <li>Market conditions, volatility, slippage, latency, and unforeseen events WILL cause actual results to differ from expectations.</li>
+        <li><strong>You are solely responsible for all trading decisions and outcomes.</strong></li>
+      </ul>
+      
+      <h3>Liability & Legal</h3>
+      <ul>
+        <li>TraderMoney is provided "AS IS" without warranty of any kind.</li>
+        <li>TraderMoney is NOT a broker, investment adviser, custodian, or financial services provider.</li>
+        <li>Your broker executes orders based on commands you send through the Software using your own API keys.</li>
+        <li><strong>NOTHING in the Software constitutes financial, investment, tax, or legal advice.</strong> Consult qualified professionals before making investment decisions.</li>
+        <li>The licensor assumes NO liability for trading losses, investment decisions, or financial harm resulting from your use.</li>
+      </ul>
+      
+      <h3>Your Responsibilities</h3>
+      <ul>
+        <li>Comply with all applicable laws and broker terms in your jurisdiction.</li>
+        <li>Secure and protect all API keys and credentials.</li>
+        <li>Conduct your own due diligence and risk assessment.</li>
+        <li>If managing others' funds or offering signals, consult a securities attorney.</li>
+        <li>Obtain appropriate professional liability insurance if operating commercially.</li>
+      </ul>
+      
+      <h3>Terms of Use</h3>
+      <ul>
+        <li>You agree to use this Software only for lawful purposes.</li>
+        <li>You may not use it for illegal activities, market manipulation, insider trading, or fraud.</li>
+        <li>You may not circumvent or attempt to bypass any security features.</li>
+        <li>Violating these terms may result in termination of your license.</li>
+      </ul>
+      
+      <p style="margin-top: 14px; color: var(--muted); font-size: var(--fs-xs);"><strong>Full terms:</strong> See LICENSE and EULA.md files included with this software.</p>
+    </div>
+    <div id="terms-footer">
+      <label id="terms-agree">
+        <input type="checkbox" id="terms-checkbox">
+        <span>I understand and accept the terms and disclaimer</span>
+      </label>
+      <button id="terms-accept-btn" disabled onclick="acceptTerms()">Continue</button>
+    </div>
+  </div>
+</div>
+
 <!-- ════ SETTINGS MODAL ════════════════════════════════════════ -->
 <div id="settings-modal-overlay" onclick="toggleSettings()"></div>
 <div id="settings-modal">
@@ -5144,7 +5245,7 @@ button.ghost:hover { box-shadow: none; }
     <span class="sidebar-logo">TM</span>
     <div class="sidebar-title">
       <span class="sidebar-name">TraderMoney</span>
-      <span class="sidebar-version">v7.0.2</span>
+      <span class="sidebar-version">v7.0.3</span>
     </div>
     <div class="sidebar-actions">
       <button onclick="location.reload()" title="Refresh"><svg class="icon" style="width:13px;height:13px;" viewBox="0 0 24 24"><path d="M17.65 6.35A7.958 7.958 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg></button>
@@ -5429,7 +5530,7 @@ button.ghost:hover { box-shadow: none; }
   <div id="tab-help" class="tab">
     <div class="hb">
       <input type="text" id="help-search" placeholder="Search help... (Cmd+F)" oninput="filterHelp()" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);font-size:.82rem;margin-bottom:10px;box-sizing:border-box;">
-      <h3>TraderMoney v7.0.2 – Complete Help Guide</h3>
+      <h3>TraderMoney v7.0.3 – Complete Help Guide</h3>
       <p style="font-size:.82rem;color:var(--muted);margin-top:-4px;">Your desktop algorithmic trading terminal. All features documented below.</p>
 
       <details>
@@ -5841,6 +5942,37 @@ button.ghost:hover { box-shadow: none; }
  const $=id=>document.getElementById(id);
  let cfg={},licValid=false,curSym='',allTickers=[],tvWidget=null,lastTvSymbol='';
  let botRunning=false,lastBTData=null,_newsActive=false;
+
+/* ── Terms Modal Management ── */
+function showTermsModal(){
+  const overlay=$('terms-modal-overlay');
+  if(overlay)overlay.classList.add('show');
+}
+function hideTermsModal(){
+  const overlay=$('terms-modal-overlay');
+  if(overlay)overlay.classList.remove('show');
+}
+function acceptTerms(){
+  localStorage.setItem('tradermoney_terms_accepted','true');
+  hideTermsModal();
+}
+function checkTermsAccepted(){
+  if(!localStorage.getItem('tradermoney_terms_accepted')){
+    showTermsModal();
+  }
+}
+// Setup terms checkbox listener
+document.addEventListener('DOMContentLoaded',function(){
+  const checkbox=$('terms-checkbox');
+  const btn=$('terms-accept-btn');
+  if(checkbox&&btn){
+    checkbox.addEventListener('change',function(){
+      btn.disabled=!this.checked;
+    });
+  }
+  // Show terms on load if not accepted
+  setTimeout(checkTermsAccepted,100);
+});
 
 function cs(raw){return raw.split(':')[0].trim().toUpperCase();}
 function fmt(n,d=2){return Number(n).toLocaleString(undefined,{maximumFractionDigits:d});}
@@ -7117,7 +7249,7 @@ if __name__ == "__main__":
     time.sleep(1.2)
 
     window = webview.create_window(
-        "TraderMoney 7.0.2",
+        "TraderMoney 7.0.3",
         "http://127.0.0.1:5050",
         width=1440,
         height=880,
