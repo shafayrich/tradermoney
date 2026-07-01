@@ -55,7 +55,7 @@ import webview
 from flask import Flask, Response, jsonify, request, send_file
 from flask_cors import CORS
 
-APP_VERSION = "7.0.3"
+APP_VERSION = "7.0.4"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # AI CONFIGURATION
@@ -2972,6 +2972,29 @@ def api_license_status():
     })
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# SAFE YFINANCE DOWNLOAD WRAPPER
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _safe_yf_download(symbol: str, period: str = "1d", interval: str = "1m", yf_module=None, **kwargs) -> "pd.DataFrame | None":
+    """Wrapper around yf.download that catches 'possibly delisted' warnings and returns None."""
+    import warnings
+    if yf_module is None:
+        import yfinance as yf_module
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        try:
+            df = yf_module.download(symbol, period=period, interval=interval, progress=False, **kwargs)
+        except Exception:
+            return None
+        for warning in w:
+            msg = str(warning.message).lower()
+            if "possibly delisted" in msg or "no price data" in msg:
+                return None
+        if df is None or df.empty:
+            return None
+        return df
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # BACKTEST ROUTES  [FIX 1: corrected P&L accounting]
 # ═══════════════════════════════════════════════════════════════════════════════
 @app.route("/api/backtest", methods=["POST"])
@@ -3008,21 +3031,40 @@ def api_backtest():
 
         # Parallel download all symbols
         downloaded: dict = {}
+        interval = config.get("timeframe", "1m")
         with ThreadPoolExecutor(max_workers=min(len(symbols), 8)) as executor:
+            def _download_sym(sym):
+                # yfinance 1m data is limited to ~7 days; for longer periods, fall back to chunked download or 1d
+                if interval == "1m" and days > 7:
+                    # Download in chunks of 7 days and concatenate
+                    chunks = []
+                    remaining = days
+                    chunk_days = 7
+                    while remaining > 0:
+                        cur = min(chunk_days, remaining)
+                        df_chunk = _safe_yf_download(sym, period=f"{cur}d", interval="1m", auto_adjust=True)
+                        if df_chunk is not None and not df_chunk.empty:
+                            chunks.append(df_chunk)
+                        remaining -= cur
+                    if chunks:
+                        df = pd.concat(chunks)
+                        # Remove duplicate indices
+                        df = df[~df.index.duplicated(keep='first')]
+                        df.sort_index(inplace=True)
+                        return df
+                    return None
+                df = _safe_yf_download(sym, period=f"{days}d", interval=interval, auto_adjust=True)
+                if df is None or df.empty:
+                    df = _safe_yf_download(sym, period=f"{days}d", interval="1d", auto_adjust=True)
+                return df
+
             fut_map = {
-                executor.submit(
-                    yf.download, sym, period=f"{days}d",
-                    interval=config.get("timeframe", "1m"),
-                    progress=False, auto_adjust=True
-                ): sym for sym in symbols
+                executor.submit(_download_sym, sym): sym for sym in symbols
             }
             for fut in as_completed(fut_map):
                 sym = fut_map[fut]
                 try:
-                    df = fut.result()
-                    if df is None or df.empty:
-                        df = yf.download(sym, period=f"{days}d", interval="1d", progress=False, auto_adjust=True)
-                    downloaded[sym] = df
+                    downloaded[sym] = fut.result()
                 except Exception:
                     downloaded[sym] = None
 
