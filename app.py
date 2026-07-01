@@ -55,7 +55,7 @@ import webview
 from flask import Flask, Response, jsonify, request, send_file
 from flask_cors import CORS
 
-APP_VERSION = "7.0.1"
+APP_VERSION = "7.0.2"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # AI CONFIGURATION
@@ -401,6 +401,9 @@ _DEFAULT_CONFIG: dict = {
     "last_broker_message": "",
     "timezone": "UTC",
     "news_sentiment": False,
+    "broker_fee_pct": 0.08,
+    "slippage_pct": 0.05,
+    "spread_pct": 0.02,
     "device_uuid": str(uuid.uuid4()),
     "alpaca": {"api_key": "", "secret_key": "", "paper": True},
     "ibkr": {"host": "", "port": "", "client_id": ""},
@@ -498,6 +501,12 @@ class BaseBroker:
     def _emit_error(self, msg: str):
         self.last_error = msg
         self.ui_queue.put(("error", msg))
+
+    def cancel_all_orders(self) -> bool:
+        return False
+
+    def get_open_orders(self) -> List[dict]:
+        return []
         db.insert_log(f"[{self.name}] ERROR: {msg}")
 
     def _emit_log(self, msg: str):
@@ -524,6 +533,7 @@ class AlpacaBroker(BaseBroker):
         super().__init__(config, ui_queue)
         self.api = None
         self._stop_stream = False
+        self._conditional_watchers: Set[threading.Thread] = set()
 
     def is_connected(self) -> bool:
         return self.api is not None
@@ -599,6 +609,59 @@ class AlpacaBroker(BaseBroker):
             pass
         return None
 
+    def _submit_conditional_order(self, symbol, qty, side, order_type, price):
+        kwargs = dict(symbol=symbol, qty=qty, side=side, type=order_type, time_in_force="day")
+        if order_type == "limit":
+            kwargs["limit_price"] = str(round(price, 2))
+        elif order_type == "stop":
+            kwargs["stop_price"] = str(round(price, 2))
+        return self.api.submit_order(**kwargs)
+
+    def _watch_conditional_orders(self, symbol, tp_order_id, sl_order_id):
+        def runner():
+            try:
+                while self.api and (tp_order_id or sl_order_id):
+                    time.sleep(2)
+                    if tp_order_id:
+                        try:
+                            tp = self.api.get_order(tp_order_id)
+                            if getattr(tp, "status", "") in {"filled", "canceled", "expired", "replaced"}:
+                                if getattr(tp, "status", "") == "filled":
+                                    if sl_order_id:
+                                        self.api.cancel_order(sl_order_id)
+                                        self._emit_log(f"Cancelled remaining SL order for {symbol} after TP fill")
+                                tp_order_id = None
+                        except Exception:
+                            pass
+                    if sl_order_id:
+                        try:
+                            sl = self.api.get_order(sl_order_id)
+                            if getattr(sl, "status", "") in {"filled", "canceled", "expired", "replaced"}:
+                                if getattr(sl, "status", "") == "filled":
+                                    if tp_order_id:
+                                        self.api.cancel_order(tp_order_id)
+                                        self._emit_log(f"Cancelled remaining TP order for {symbol} after SL fill")
+                                sl_order_id = None
+                        except Exception:
+                            pass
+            except Exception as e:
+                self._emit_error(f"Conditional order watcher failed: {e}")
+
+        thread = threading.Thread(target=runner, daemon=True)
+        self._conditional_watchers.add(thread)
+        thread.start()
+
+    def cancel_all_orders(self) -> bool:
+        if not self.api:
+            return False
+        try:
+            self.api.cancel_all_orders()
+            self._emit_log("Cancelled pending Alpaca orders")
+            return True
+        except Exception as e:
+            self._emit_error(f"Cancel all orders failed: {e}")
+            return False
+
     def submit_order(self, symbol, qty, side, order_type="market",
                      sl_pct=None, tp_pct=None, sl_price=None, tp_price=None) -> bool:
         if not self.api:
@@ -608,32 +671,40 @@ class AlpacaBroker(BaseBroker):
             if sl_price is None and tp_price is None and sl_pct is None and tp_pct is None:
                 self.api.submit_order(symbol=symbol, qty=qty, side=side, type="market", time_in_force="day")
                 self._emit_log(f"Order submitted: {side.upper()} {qty} {symbol}")
+                return True
+
+            if sl_price is not None and tp_price is not None:
+                stop = round(sl_price, 2)
+                limit = round(tp_price, 2)
             else:
-                if sl_price is not None and tp_price is not None:
-                    stop = round(sl_price, 2)
-                    limit = round(tp_price, 2)
+                price = self._get_current_price(symbol)
+                if price is None:
+                    self._emit_error(f"Cannot determine price for {symbol} — bracket order aborted.")
+                    return False
+                sl = sl_pct if sl_pct is not None else 2.0
+                tp = tp_pct if tp_pct is not None else 4.0
+                if side == "buy":
+                    stop = round(price * (1 - sl / 100), 2)
+                    limit = round(price * (1 + tp / 100), 2)
                 else:
-                    price = self._get_current_price(symbol)
-                    if price is None:
-                        self._emit_error(f"Cannot determine price for {symbol} — bracket order aborted.")
-                        return False
-                    sl = sl_pct if sl_pct is not None else 2.0
-                    tp = tp_pct if tp_pct is not None else 4.0
-                    if side == "buy":
-                        stop = round(price * (1 - sl / 100), 2)
-                        limit = round(price * (1 + tp / 100), 2)
-                    else:
-                        stop = round(price * (1 + sl / 100), 2)
-                        limit = round(price * (1 - tp / 100), 2)
-                self.api.submit_order(
-                    symbol=symbol, qty=qty, side=side, type="market", time_in_force="day",
-                    order_class="bracket",
-                    stop_loss={"stop_price": str(stop)}, take_profit={"limit_price": str(limit)})
-                self._emit_log(f"Bracket order submitted: {side.upper()} {qty} {symbol} SL={stop} TP={limit}")
+                    stop = round(price * (1 + sl / 100), 2)
+                    limit = round(price * (1 - tp / 100), 2)
+
+            entry_order = self.api.submit_order(symbol=symbol, qty=qty, side=side, type="market", time_in_force="day")
+            if not getattr(entry_order, "id", None):
+                raise RuntimeError("Entry order was not accepted")
+
+            tp_side = "sell" if side == "buy" else "buy"
+            sl_side = tp_side
+            tp_order = self._submit_conditional_order(symbol, qty, tp_side, "limit", limit)
+            sl_order = self._submit_conditional_order(symbol, qty, sl_side, "stop", stop)
+            tp_order_id = getattr(tp_order, "id", None)
+            sl_order_id = getattr(sl_order, "id", None)
+            self._watch_conditional_orders(symbol, tp_order_id, sl_order_id)
+            self._emit_log(f"Conditional orders submitted: {side.upper()} {qty} {symbol} SL={stop} TP={limit}")
             return True
         except Exception as e:
             self._emit_error(f"Order failed ({symbol} {side}): {e}")
-            # If bracket order fails, try simple market order
             if sl_price is not None or tp_price is not None or sl_pct is not None or tp_pct is not None:
                 try:
                     self.api.submit_order(symbol=symbol, qty=qty, side=side, type="market", time_in_force="day")
@@ -1832,6 +1903,9 @@ class TradingEngine(threading.Thread):
         self.mtf_cache: Dict[str, pd.DataFrame] = {}
         self.bracket_positions: set = set()  # symbols with active native broker bracket orders
         self.order_queue: queue.Queue = queue.Queue()  # order execution queue
+        self.is_active = False
+        self._stop_event = threading.Event()
+        self._order_worker = None
 
         if not self.is_licensed:
             self.config["mode"] = "signal"
@@ -1862,7 +1936,7 @@ class TradingEngine(threading.Thread):
 
     def _order_processor(self):
         """Background thread that processes queued orders with retry logic."""
-        while self.running:
+        while self.running and not self._stop_event.is_set():
             try:
                 item: OrderItem = self.order_queue.get(timeout=1)
             except Exception:
@@ -1870,7 +1944,7 @@ class TradingEngine(threading.Thread):
             if item is None:
                 continue
             success = False
-            while item.attempts < item.retries and self.running:
+            while item.attempts < item.retries and self.running and not self._stop_event.is_set():
                 item.attempts += 1
                 try:
                     ok = self.broker.submit_order(
@@ -1887,7 +1961,7 @@ class TradingEngine(threading.Thread):
                 except Exception as e:
                     self._log(f"[OrderQueue] Error (attempt {item.attempts}/{item.retries}) "
                               f"for {item.side.upper()} {item.qty} {item.symbol}: {e}")
-                if item.attempts < item.retries and self.running:
+                if item.attempts < item.retries and self.running and not self._stop_event.is_set():
                     time.sleep(2)
             if not success:
                 self.ui_queue.put(("error",
@@ -1939,6 +2013,8 @@ class TradingEngine(threading.Thread):
         return df
 
     def run(self):
+        self.is_active = True
+        self._stop_event.clear()
         tickers_str = self.config.get("tickers", "AAPL")
         default_qty = self.config.get("quantity", 1)
         raw_list = [s.strip() for s in tickers_str.split(",") if s.strip()]
@@ -1998,10 +2074,11 @@ class TradingEngine(threading.Thread):
         if use_bracket:
             threading.Thread(target=self._sl_tp_watchdog_loop, daemon=True).start()
 
-        threading.Thread(target=self._order_processor, daemon=True).start()
+        self._order_worker = threading.Thread(target=self._order_processor, daemon=True)
+        self._order_worker.start()
 
         last_fetch = 0.0
-        while self.running:
+        while self.running and not self._stop_event.is_set():
             try:
                 online = is_internet_available()
                 self.ui_queue.put(("internet", online))
@@ -2171,7 +2248,14 @@ class TradingEngine(threading.Thread):
                     ("error", f"Engine error:\n{traceback.format_exc()}"))
                 time.sleep(5)
 
+        self.is_active = False
+        self._stop_event.set()
         self.broker.stop_stream()
+        try:
+            self.broker.cancel_all_orders()
+        except Exception:
+            pass
+        self.order_queue = queue.Queue()
         self.ui_queue.put(("status", "Bot stopped"))
 
     def _submit_with_retry(self, symbol, qty, side, order_type="market",
@@ -2192,6 +2276,9 @@ class TradingEngine(threading.Thread):
     def _execute(self, sym: str, sig: str, price: float, latest: pd.Series,
                  use_bracket: bool, use_atr: bool,
                  sl_pct: float, tp_pct: float, conf: float):
+        if not self.is_active or not self.running or self._stop_event.is_set():
+            self._log(f"[Execute] Gatekeeper blocked {sig} {sym} (bot inactive)")
+            return
         if not self.broker.is_connected():
             self._log(f"[Execute] Broker not connected – skipping {sig} {sym}")
             return
@@ -2439,9 +2526,16 @@ class TradingEngine(threading.Thread):
     def stop(self):
         if self.running:
             self._telegram("<b>Bot Stopped</b>")
-        self.broker.stop_stream()
+        self.is_active = False
         self.running = False
+        self._stop_event.set()
         self._stop_watchdog.set()
+        self.broker.stop_stream()
+        try:
+            self.broker.cancel_all_orders()
+        except Exception:
+            pass
+        self.order_queue = queue.Queue()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -2995,12 +3089,17 @@ def api_backtest():
                 entry_shares: float = 0.0
                 trades: List[dict] = []
 
+                fee_pct = float(config.get("broker_fee_pct", 0.08)) / 100.0
+                slippage_pct = float(config.get("slippage_pct", 0.05)) / 100.0
+                spread_pct = float(config.get("spread_pct", 0.02)) / 100.0
+
                 for s in sigs:
                     price = float(s["price"])
                     if s["signal"] == "BUY" and position <= 0:
                         if position < 0:
-                            pnl = (entry_price - price) * abs(position)
-                            cash -= abs(position) * price
+                            exit_fill = price * (1 + spread_pct + slippage_pct)
+                            pnl = (entry_price - exit_fill) * abs(position)
+                            cash -= abs(position) * exit_fill
                             equity = cash
                             trades.append({
                                 "entry_time": entry_time, "exit_time": s["time"],
@@ -3012,9 +3111,10 @@ def api_backtest():
                                 "days_held": _calc_days_held(entry_time, s["time"]),
                             })
                         entry_shares = qty
-                        cash -= qty * price
+                        fill_price = price * (1 + spread_pct + slippage_pct)
+                        cash -= qty * fill_price
                         position = qty
-                        entry_price = price
+                        entry_price = fill_price
                         entry_time = s["time"]
                         entry_reason = s.get("reason", "EMA crossover bullish")
                         entry_indicators = s.get("indicators", {})
@@ -3028,8 +3128,9 @@ def api_backtest():
                         })
                     elif s["signal"] == "SELL" and position >= 0:
                         if position > 0:
-                            pnl = (price - entry_price) * position
-                            cash += position * price
+                            fill_price = price * (1 - spread_pct - slippage_pct)
+                            pnl = (fill_price - entry_price) * position
+                            cash += position * fill_price
                             equity = cash
                             trades.append({
                                 "entry_time": entry_time, "exit_time": s["time"],
@@ -3041,9 +3142,10 @@ def api_backtest():
                                 "days_held": _calc_days_held(entry_time, s["time"]),
                             })
                         entry_shares = qty
-                        cash += qty * price
+                        fill_price = price * (1 - spread_pct - slippage_pct)
+                        cash += qty * fill_price
                         position = -(qty)
-                        entry_price = price
+                        entry_price = fill_price
                         entry_time = s["time"]
                         entry_reason = s.get("reason", "EMA crossover bearish")
                         entry_indicators = s.get("indicators", {})
@@ -3059,12 +3161,14 @@ def api_backtest():
                 if position != 0 and sigs:
                     last_price = float(sigs[-1]["price"])
                     if position > 0:
-                        pnl = (last_price - entry_price) * position
-                        cash += position * last_price
+                        fill_price = last_price * (1 - spread_pct - slippage_pct)
+                        pnl = (fill_price - entry_price) * position
+                        cash += position * fill_price
                         side_label = "LONG"
                     else:
-                        pnl = (entry_price - last_price) * abs(position)
-                        cash -= abs(position) * last_price
+                        fill_price = last_price * (1 + spread_pct + slippage_pct)
+                        pnl = (entry_price - fill_price) * abs(position)
+                        cash -= abs(position) * fill_price
                         side_label = "SHORT"
                     equity = cash
                     trades.append({
@@ -5276,7 +5380,7 @@ button.ghost:hover { box-shadow: none; }
         <button class="ghost" onclick="runBT()"><svg class="icon"><use href="#i-backtest"/></svg> Run Backtest</button>
         <button class="ghost" id="mc-btn" onclick="runMC()" disabled><svg class="icon"><use href="#i-flask"/></svg> MC</button>
         <button class="ghost" id="csv-btn" onclick="exportCSV()" disabled>CSV</button>
-        <button class="ghost" id="pdf-btn" onclick="exportPDF()" disabled>PDF</button>
+        <button class="ghost" id="pdf-btn" onclick="exportPDF()" disabled>Download Trade Report (PDF)</button>
         <button class="ghost" id="tune-btn" onclick="autoTune()" disabled><svg class="icon"><use href="#i-robot"/></svg> Tune</button>
         <button class="ghost" id="png-btn" onclick="exportPNG()" disabled>PNG</button>
         <span style="flex:1;"></span>
@@ -6214,7 +6318,11 @@ function renderOrders(ords){
   if(!has)he.style.display='block';
 }
 let _lastSignalCount=0;
+let _statusPollTimer=0;
 async function pollStatus(){
+  const now=Date.now();
+  if(now-_statusPollTimer<400){return;}
+  _statusPollTimer=now;
   try{
     const d=await(await fetch('/api/status')).json();
     botRunning=d.running;
@@ -6233,9 +6341,11 @@ async function pollStatus(){
       });
     }
     _lastSignalCount=d.signals?d.signals.length:0;
-  }catch(e){}
+  }catch(e){
+    if($('logbar')){$('logbar').innerHTML='<div style="color:var(--muted)">Live dashboard temporarily unavailable. Reconnecting…</div>';}
+  }
 }
-setInterval(pollStatus,1500);
+setInterval(pollStatus,400);
 
 /* ── Sidebar toggle ── */
 function toggleSidebar(){
