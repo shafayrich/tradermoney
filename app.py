@@ -55,7 +55,7 @@ import webview
 from flask import Flask, Response, jsonify, request, send_file
 from flask_cors import CORS
 
-APP_VERSION = "7.0.5"
+APP_VERSION = "8.0.0"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # AI CONFIGURATION
@@ -3170,7 +3170,10 @@ def api_backtest():
                             })
                         entry_shares = qty
                         fill_price = price * (1 + spread_pct + slippage_pct)
-                        cash -= qty * fill_price
+                        cost = qty * fill_price
+                        if cost > cash and position == 0:
+                            continue
+                        cash -= cost
                         position = qty
                         entry_price = fill_price
                         entry_time = s["time"]
@@ -5303,7 +5306,7 @@ button.ghost:hover { box-shadow: none; }
     <span class="sidebar-logo">TM</span>
     <div class="sidebar-title">
       <span class="sidebar-name">TraderMoney</span>
-      <span class="sidebar-version">v7.0.5</span>
+      <span class="sidebar-version">v8.0.0</span>
     </div>
     <div class="sidebar-actions">
       <button onclick="location.reload()" title="Refresh"><svg class="icon" style="width:13px;height:13px;" viewBox="0 0 24 24"><path d="M17.65 6.35A7.958 7.958 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg></button>
@@ -5480,7 +5483,7 @@ button.ghost:hover { box-shadow: none; }
     <summary style="font-size:.7rem;padding:2px 0;color:var(--muted);cursor:pointer;">Backtest Settings</summary>
     <div class="sb-section-body" style="gap:2px;">
       <label style="font-size:.6rem;">Starting Capital ($)</label>
-      <input type="number" id="btCapital" value="100000" min="100" step="1000" style="height:26px;font-size:.7rem;padding:0 6px;">
+      <input type="number" id="btCapital" value="100000" min="1" style="height:26px;font-size:.7rem;padding:0 6px;">
       <label style="font-size:.6rem;">Broker Fee %</label>
       <input type="number" id="btFee" value="0.08" step="0.01" min="0" style="height:26px;font-size:.7rem;padding:0 6px;">
       <label style="font-size:.6rem;">Slippage %</label>
@@ -5601,7 +5604,7 @@ button.ghost:hover { box-shadow: none; }
   <div id="tab-help" class="tab">
     <div class="hb">
       <input type="text" id="help-search" placeholder="Search help... (Cmd+F)" oninput="filterHelp()" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);font-size:.82rem;margin-bottom:10px;box-sizing:border-box;">
-      <h3>TraderMoney v7.0.5 – Complete Help Guide</h3>
+      <h3>TraderMoney v8.0.0 – Complete Help Guide</h3>
       <p style="font-size:.82rem;color:var(--muted);margin-top:-4px;">Your desktop algorithmic trading terminal. All features documented below.</p>
 
       <details>
@@ -6180,7 +6183,6 @@ function toggleSettings(){const o=$('settings-modal-overlay'),m=$('settings-moda
 function toggleTheme(){
   const light=gc('theme-toggle');
   document.body.classList.toggle('light',light);
-  document.body.classList.toggle('simple',!light);
   $('theme-label').textContent=light?'Light':'Dark';
   const saved=JSON.parse(localStorage.getItem('tm_settings')||'{}');
   saved.light=light;localStorage.setItem('tm_settings',JSON.stringify(saved));

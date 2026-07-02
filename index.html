@@ -654,7 +654,7 @@
             </p>
             <div class="version-pill fade-in delay-2">
                 <span class="dot"></span>
-                <span>Latest <strong id="version-number">v6.1.7</strong></span>
+                <span>Latest <strong id="version-number">v8.0.0</strong></span>
             </div>
             <div class="dl-section fade-in delay-3">
                 <div class="dl-group">
@@ -837,6 +837,19 @@
             <h2 class="section-title">What's New</h2>
             <p class="section-sub">The latest updates to TraderMoney.</p>
 
+            <div class="changelog-card">
+                <span class="tag" style="background:var(--accent);color:#000;font-weight:700;">Latest</span>
+                <h3>v8.0.0 — 100+ Ticker Backtest, Custom Capital & Fixed Indicator Visibility</h3>
+                <div class="date">July 2, 2026</div>
+                <ul>
+                    <li><strong>100+ Ticker Backtest:</strong> Adaptive concurrency handles 127+ tickers without Yahoo rate limits</li>
+                    <li><strong>Custom Starting Capital:</strong> Set your own buy power per backtest run</li>
+                    <li><strong>Broker Fee, Slippage & Spread:</strong> Realistic cost simulation with configurable percentages</li>
+                    <li><strong>Fixed Indicators:</strong> All indicators now visible in both light and dark mode</li>
+                    <li><strong>Jittered Download Engine:</strong> Random delays prevent Yahoo throttling on large ticker lists</li>
+                    <li><strong>Per-Ticker Quantities:</strong> Each symbol gets its own position size via SYM:QTY format</li>
+                </ul>
+            </div>
             <div class="changelog-card">
                 <span class="tag tag-new">New</span>
                 <h3>v6.1.7 — Native TP/SL for All Brokers & Free Yahoo Finance News</h3>
@@ -1074,7 +1087,7 @@
         fetch('https://raw.githubusercontent.com/shafayrich/tradermoney/main/version.json?t=' + Date.now())
             .then(r => r.json())
             .then(data => { document.getElementById('version-number').textContent = 'v' + data.latest_version; })
-            .catch(() => { document.getElementById('version-number').textContent = 'v6.1.7'; });
+            .catch(() => { document.getElementById('version-number').textContent = 'v8.0.0'; });
         // Platform-aware download buttons
         (function(){
             var isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
