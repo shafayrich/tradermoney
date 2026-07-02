@@ -2975,24 +2975,30 @@ def api_license_status():
 # SAFE YFINANCE DOWNLOAD WRAPPER
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _safe_yf_download(symbol: str, period: str = "1d", interval: str = "1m", yf_module=None, **kwargs) -> "pd.DataFrame | None":
-    """Wrapper around yf.download that catches 'possibly delisted' warnings and returns None."""
+def _safe_yf_download(symbol: str, period: str = "1d", interval: str = "1m", yf_module=None, retries: int = 3, **kwargs) -> "pd.DataFrame | None":
+    """Wrapper around yf.download that catches 'possibly delisted' warnings, retries on failure, and returns None."""
     import warnings
+    import time as _time
     if yf_module is None:
         import yfinance as yf_module
-    with warnings.catch_warnings(record=True) as w:
-        warnings.simplefilter("always")
-        try:
-            df = yf_module.download(symbol, period=period, interval=interval, progress=False, **kwargs)
-        except Exception:
-            return None
-        for warning in w:
-            msg = str(warning.message).lower()
-            if "possibly delisted" in msg or "no price data" in msg:
-                return None
-        if df is None or df.empty:
-            return None
-        return df
+    for attempt in range(retries):
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            try:
+                df = yf_module.download(symbol, period=period, interval=interval, progress=False, **kwargs)
+            except Exception:
+                if attempt < retries - 1:
+                    _time.sleep(1.5 * (attempt + 1))
+                continue
+            for warning in w:
+                msg = str(warning.message).lower()
+                if "possibly delisted" in msg or "no price data" in msg:
+                    return None
+            if df is not None and not df.empty:
+                return df
+        if attempt < retries - 1:
+            _time.sleep(1.5 * (attempt + 1))
+    return None
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # BACKTEST ROUTES  [FIX 1: corrected P&L accounting]
