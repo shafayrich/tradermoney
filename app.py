@@ -55,7 +55,7 @@ import webview
 from flask import Flask, Response, jsonify, request, send_file
 from flask_cors import CORS
 
-APP_VERSION = "7.0.4"
+APP_VERSION = "7.0.5"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # AI CONFIGURATION
@@ -3028,7 +3028,7 @@ def api_backtest():
                 per_ticker_qty[cs] = default_qty
         results: dict = {}
         all_trades: List[dict] = []
-        initial_cash = 100_000 if portfolio else 10_000
+        initial_cash = float(config.get("initial_cash", 100_000 if portfolio else 10_000))
         portfolio_equity = float(initial_cash)
         bt_direction = config.get("direction", "both")
         ef, es = config.get("emas", [9, 50])
@@ -3038,11 +3038,19 @@ def api_backtest():
         # Parallel download all symbols
         downloaded: dict = {}
         interval = config.get("timeframe", "1m")
-        with ThreadPoolExecutor(max_workers=min(len(symbols), 8)) as executor:
+        n_symbols = len(symbols)
+        if n_symbols > 100:
+            bt_workers = 2
+        elif n_symbols > 50:
+            bt_workers = 3
+        elif n_symbols > 25:
+            bt_workers = 4
+        else:
+            bt_workers = 8
+        with ThreadPoolExecutor(max_workers=bt_workers) as executor:
             def _download_sym(sym):
                 # yfinance 1m data is limited to ~7 days; for longer periods, fall back to chunked download or 1d
                 if interval == "1m" and days > 7:
-                    # Download in chunks of 7 days and concatenate
                     chunks = []
                     remaining = days
                     chunk_days = 7
@@ -3052,9 +3060,10 @@ def api_backtest():
                         if df_chunk is not None and not df_chunk.empty:
                             chunks.append(df_chunk)
                         remaining -= cur
+                        if remaining > 0:
+                            time.sleep(random.uniform(0.3, 1.0))
                     if chunks:
                         df = pd.concat(chunks)
-                        # Remove duplicate indices
                         df = df[~df.index.duplicated(keep='first')]
                         df.sort_index(inplace=True)
                         return df
@@ -3064,9 +3073,10 @@ def api_backtest():
                     df = _safe_yf_download(sym, period=f"{days}d", interval="1d", auto_adjust=True)
                 return df
 
-            fut_map = {
-                executor.submit(_download_sym, sym): sym for sym in symbols
-            }
+            fut_map = {}
+            for sym in symbols:
+                time.sleep(random.uniform(0.05, 0.15))
+                fut_map[executor.submit(_download_sym, sym)] = sym
             for fut in as_completed(fut_map):
                 sym = fut_map[fut]
                 try:
@@ -5293,7 +5303,7 @@ button.ghost:hover { box-shadow: none; }
     <span class="sidebar-logo">TM</span>
     <div class="sidebar-title">
       <span class="sidebar-name">TraderMoney</span>
-      <span class="sidebar-version">v7.0.3</span>
+      <span class="sidebar-version">v7.0.5</span>
     </div>
     <div class="sidebar-actions">
       <button onclick="location.reload()" title="Refresh"><svg class="icon" style="width:13px;height:13px;" viewBox="0 0 24 24"><path d="M17.65 6.35A7.958 7.958 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg></button>
@@ -5466,6 +5476,19 @@ button.ghost:hover { box-shadow: none; }
     <span>Days:</span>
     <input type="number" id="btDays" value="5" min="1" max="365" class="bt-days-input">
   </div>
+  <details class="sb-section" style="margin-top:4px;">
+    <summary style="font-size:.7rem;padding:2px 0;color:var(--muted);cursor:pointer;">Backtest Settings</summary>
+    <div class="sb-section-body" style="gap:2px;">
+      <label style="font-size:.6rem;">Starting Capital ($)</label>
+      <input type="number" id="btCapital" value="100000" min="100" step="1000" style="height:26px;font-size:.7rem;padding:0 6px;">
+      <label style="font-size:.6rem;">Broker Fee %</label>
+      <input type="number" id="btFee" value="0.08" step="0.01" min="0" style="height:26px;font-size:.7rem;padding:0 6px;">
+      <label style="font-size:.6rem;">Slippage %</label>
+      <input type="number" id="btSlippage" value="0.05" step="0.01" min="0" style="height:26px;font-size:.7rem;padding:0 6px;">
+      <label style="font-size:.6rem;">Spread %</label>
+      <input type="number" id="btSpread" value="0.02" step="0.01" min="0" style="height:26px;font-size:.7rem;padding:0 6px;">
+    </div>
+  </details>
 </div>
 
 <!-- ════ SIDEBAR TOGGLE ═══════════════════════════════════════════ -->
@@ -5578,7 +5601,7 @@ button.ghost:hover { box-shadow: none; }
   <div id="tab-help" class="tab">
     <div class="hb">
       <input type="text" id="help-search" placeholder="Search help... (Cmd+F)" oninput="filterHelp()" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);font-size:.82rem;margin-bottom:10px;box-sizing:border-box;">
-      <h3>TraderMoney v7.0.3 – Complete Help Guide</h3>
+      <h3>TraderMoney v7.0.5 – Complete Help Guide</h3>
       <p style="font-size:.82rem;color:var(--muted);margin-top:-4px;">Your desktop algorithmic trading terminal. All features documented below.</p>
 
       <details>
@@ -6236,7 +6259,11 @@ function buildCfg(){
     license_key:gv('lickey',''),timezone:Intl.DateTimeFormat().resolvedOptions().timeZone,
     alpaca:cfg.alpaca||{},ibkr:cfg.ibkr||{},tradier:cfg.tradier||{},
     binance:cfg.binance||{},bybit:cfg.bybit||{},okx:cfg.okx||{},
-    indicator_params:ip};
+    indicator_params:ip,
+    initial_cash:parseFloat(gv('btCapital','100000'))||100000,
+    broker_fee_pct:parseFloat(gv('btFee','0.08'))||0.08,
+    slippage_pct:parseFloat(gv('btSlippage','0.05'))||0.05,
+    spread_pct:parseFloat(gv('btSpread','0.02'))||0.02};
 }
 function collectIndicatorParams(){
   return{
