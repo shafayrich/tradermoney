@@ -4199,7 +4199,7 @@ FRONTEND_HTML = r"""
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>TraderMoney 7.0.3</title>
+<title>TraderMoney 9.0.0</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root {
@@ -7475,7 +7475,7 @@ if __name__ == "__main__":
     time.sleep(1.2)
 
     window = webview.create_window(
-        "TraderMoney 7.0.3",
+        "TraderMoney 9.0.0",
         "http://127.0.0.1:5050",
         width=1440,
         height=880,
