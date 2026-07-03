@@ -55,7 +55,7 @@ import webview
 from flask import Flask, Response, jsonify, request, send_file
 from flask_cors import CORS
 
-APP_VERSION = "8.0.0"
+APP_VERSION = "9.0.0"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # AI CONFIGURATION
@@ -2757,6 +2757,28 @@ def api_kill():
     state.running = False
     return jsonify({"status": "ok", "message": "Kill switch activated"})
 
+@app.route("/api/trade", methods=["POST"])
+def api_trade():
+    data = request.json or {}
+    symbol = data.get("symbol", "").strip().upper()
+    qty = float(data.get("qty", 0))
+    side = data.get("side", "buy").strip().lower()
+    order_type = data.get("order_type", "market").strip().lower()
+    price = data.get("price")
+    if not symbol or qty <= 0 or side not in ("buy", "sell"):
+        return jsonify({"ok": False, "error": "Invalid: symbol, positive qty, side=buy/sell required"})
+    if not state.broker_instance or not state.broker_instance.is_connected():
+        return jsonify({"ok": False, "error": "Broker not connected. Start the bot first."})
+    try:
+        kwargs = {"sl_pct": None, "tp_pct": None, "sl_price": None, "tp_price": None}
+        ok = state.broker_instance.submit_order(symbol, qty, side, order_type=order_type, **kwargs)
+        if ok:
+            db.insert_log(f"Manual trade: {side.upper()} {qty} {symbol}")
+            return jsonify({"ok": True, "message": f"{side.upper()} {qty} {symbol} submitted"})
+        return jsonify({"ok": False, "error": "Order rejected by broker"})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)})
+
 @app.route("/api/status", methods=["GET"])
 def api_status():
     while not state.ui_queue.empty():
@@ -2975,12 +2997,19 @@ def api_license_status():
 # SAFE YFINANCE DOWNLOAD WRAPPER
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def _normalize_yf_symbol(symbol: str) -> str:
+    s = symbol.upper()
+    if "/USD" in s:
+        return s.replace("/USD", "-USD")
+    return s
+
 def _safe_yf_download(symbol: str, period: str = "1d", interval: str = "1m", yf_module=None, retries: int = 3, **kwargs) -> "pd.DataFrame | None":
     """Wrapper around yf.download that catches 'possibly delisted' warnings, retries on failure, and returns None."""
     import warnings
     import time as _time
     if yf_module is None:
         import yfinance as yf_module
+    symbol = _normalize_yf_symbol(symbol)
     for attempt in range(retries):
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
@@ -3029,60 +3058,99 @@ def api_backtest():
         results: dict = {}
         all_trades: List[dict] = []
         initial_cash = float(config.get("initial_cash", 100_000 if portfolio else 10_000))
-        portfolio_equity = float(initial_cash)
         bt_direction = config.get("direction", "both")
         ef, es = config.get("emas", [9, 50])
         ind_params = config.get("indicator_params", {})
         min_period = max(ef, es, 20)
 
-        # Parallel download all symbols
+        # Download all symbols
         downloaded: dict = {}
         interval = config.get("timeframe", "1m")
-        n_symbols = len(symbols)
-        if n_symbols > 100:
-            bt_workers = 2
-        elif n_symbols > 50:
-            bt_workers = 3
-        elif n_symbols > 25:
-            bt_workers = 4
-        else:
-            bt_workers = 8
-        with ThreadPoolExecutor(max_workers=bt_workers) as executor:
-            def _download_sym(sym):
-                # yfinance 1m data is limited to ~7 days; for longer periods, fall back to chunked download or 1d
-                if interval == "1m" and days > 7:
-                    chunks = []
-                    remaining = days
-                    chunk_days = 7
-                    while remaining > 0:
-                        cur = min(chunk_days, remaining)
-                        df_chunk = _safe_yf_download(sym, period=f"{cur}d", interval="1m", auto_adjust=True)
-                        if df_chunk is not None and not df_chunk.empty:
-                            chunks.append(df_chunk)
-                        remaining -= cur
-                        if remaining > 0:
-                            time.sleep(random.uniform(0.3, 1.0))
-                    if chunks:
-                        df = pd.concat(chunks)
-                        df = df[~df.index.duplicated(keep='first')]
-                        df.sort_index(inplace=True)
-                        return df
-                    return None
-                df = _safe_yf_download(sym, period=f"{days}d", interval=interval, auto_adjust=True)
-                if df is None or df.empty:
-                    df = _safe_yf_download(sym, period=f"{days}d", interval="1d", auto_adjust=True)
-                return df
 
-            fut_map = {}
-            for sym in symbols:
-                time.sleep(random.uniform(0.05, 0.15))
-                fut_map[executor.submit(_download_sym, sym)] = sym
-            for fut in as_completed(fut_map):
-                sym = fut_map[fut]
-                try:
-                    downloaded[sym] = fut.result()
-                except Exception:
-                    downloaded[sym] = None
+        if interval == "1m" and days > 7:
+            # Batch-download symbols per 7-day chunk in groups of 25
+            import warnings as _w
+            active = [s for s in symbols if per_ticker_qty.get(s, default_qty) != 0]
+            for s in symbols:
+                if s not in active:
+                    downloaded[s] = None
+            # Normalize crypto symbols (BTC/USD -> BTC-USD) for yfinance
+            orig_map = {}
+            for s in active:
+                ns = s.upper().replace("/USD", "-USD")
+                orig_map[ns] = s
+            yf_symbols = list(orig_map.keys())
+            per_sym_buf: dict = {s: [] for s in active}
+            groups = [yf_symbols[i:i+50] for i in range(0, len(yf_symbols), 50)]
+            remaining = days
+            while remaining > 0:
+                cur = min(7, remaining)
+                def _dl_grp(grp):
+                    ns_list = list(grp)
+                    if not ns_list:
+                        return {}
+                    batch_str = " ".join(ns_list)
+                    with _w.catch_warnings():
+                        _w.simplefilter("ignore")
+                        try:
+                            dfb = yf.download(batch_str, period=f"{cur}d", interval="1m", progress=False, auto_adjust=True, group_by='ticker')
+                        except Exception:
+                            dfb = None
+                    result = {}
+                    if dfb is not None and not dfb.empty and isinstance(dfb.columns, pd.MultiIndex):
+                        for ns in ns_list:
+                            orig_s = orig_map[ns]
+                            try:
+                                sd = dfb[ns].dropna()
+                                if not sd.empty:
+                                    result[orig_s] = sd
+                            except Exception:
+                                pass
+                    return result
+                with ThreadPoolExecutor(max_workers=len(groups)) as gex:
+                    for res in gex.map(_dl_grp, groups):
+                        for orig_s, sd in res.items():
+                            per_sym_buf[orig_s].append(sd)
+                remaining -= cur
+                if remaining > 0:
+                    time.sleep(0.2)
+            for s in active:
+                if per_sym_buf[s]:
+                    df = pd.concat(per_sym_buf[s])
+                    df = df[~df.index.duplicated(keep='first')]
+                    df.sort_index(inplace=True)
+                    downloaded[s] = df
+                else:
+                    downloaded[s] = _safe_yf_download(s, period=f"{days}d", interval="1d", auto_adjust=True)
+        else:
+            # Non-chunked: parallel download each symbol
+            n_symbols = len(symbols)
+            if n_symbols > 100:
+                bt_workers = 15
+            elif n_symbols > 50:
+                bt_workers = 10
+            elif n_symbols > 25:
+                bt_workers = 8
+            else:
+                bt_workers = 6
+            with ThreadPoolExecutor(max_workers=bt_workers) as executor:
+                def _dl(sym):
+                    df = _safe_yf_download(sym, period=f"{days}d", interval=interval, auto_adjust=True)
+                    if df is None or df.empty:
+                        df = _safe_yf_download(sym, period=f"{days}d", interval="1d", auto_adjust=True)
+                    return df
+                fut_map = {}
+                for sym in symbols:
+                    if per_ticker_qty.get(sym, default_qty) == 0:
+                        downloaded[sym] = None
+                        continue
+                    fut_map[executor.submit(_dl, sym)] = sym
+                for fut in as_completed(fut_map):
+                    sym = fut_map[fut]
+                    try:
+                        downloaded[sym] = fut.result()
+                    except Exception:
+                        downloaded[sym] = None
 
         for sym in symbols:
             sym_results: dict = {}
@@ -3307,7 +3375,6 @@ def api_backtest():
                     "trades": trades,
                 }
                 all_trades.extend(trades)
-                portfolio_equity = final_cash
 
             except Exception as e:
                 results[sym] = {"error": str(e)}
@@ -3330,9 +3397,11 @@ def api_backtest():
             gross_profit = sum(p for p in pnl_list if p > 0)
             gross_loss = abs(sum(p for p in pnl_list if p < 0))
             pf = (gross_profit / gross_loss) if gross_loss > 0 else (999.99 if gross_profit > 0 else 0)
-            peak = float(initial_cash)
+            active_count = max(sum(1 for s in symbols if per_ticker_qty.get(s, default_qty) != 0), 1)
+            total_deployed = round(initial_cash * active_count, 2)
+            running_eq = float(total_deployed)
+            peak = float(total_deployed)
             max_dd_pct = 0.0
-            running_eq = float(initial_cash)
             for t in exits_all:
                 running_eq += t["pnl"]
                 if running_eq > peak:
@@ -3340,16 +3409,18 @@ def api_backtest():
                 dd_pct = ((peak - running_eq) / peak * 100) if peak > 0 else 0
                 if dd_pct > max_dd_pct:
                     max_dd_pct = dd_pct
-            total_roi = ((portfolio_equity - initial_cash) / initial_cash * 100) if initial_cash > 0 else 0
+            total_pnl_val = sum(pnl_list)
+            total_roi = (total_pnl_val / total_deployed * 100) if total_deployed > 0 else 0
             if len(pnl_list) >= 2:
-                returns = [p / initial_cash for p in pnl_list]
+                returns = [p / total_deployed for p in pnl_list]
                 sharpe = (float(np.mean(returns)) / float(np.std(returns, ddof=1)) * math.sqrt(252)) if float(np.std(returns, ddof=1)) > 0 else 0
             else:
                 sharpe = 0
             resp["portfolio"] = {
                 "initial_cash": initial_cash,
-                "final_cash": round(portfolio_equity, 2),
-                "total_pnl": round(sum(pnl_list), 2),
+                "total_deployed": total_deployed,
+                "final_cash": round(total_deployed + total_pnl_val, 2),
+                "total_pnl": round(total_pnl_val, 2),
                 "total_trades": len(exits_all),
                 "win_rate": round(win_rate, 1),
                 "profit_factor": round(pf, 2),
@@ -5203,6 +5274,7 @@ button.ghost:hover { box-shadow: none; }
   <symbol id="i-trash" viewBox="0 0 24 24"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></symbol>
   <symbol id="i-close" viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></symbol>
   <symbol id="i-gear" viewBox="0 0 24 24"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 00.12-.61l-1.92-3.32a.488.488 0 00-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 00-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.07.62-.07.94s.02.64.07.94l-2.03 1.58a.49.49 0 00-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6A3.6 3.6 0 1115.6 12 3.611 3.611 0 0112 15.6z"/></symbol>
+  <symbol id="i-trade" viewBox="0 0 24 24"><path d="M21 7l-9-5-9 5v10l9 5 9-5V7zm-9 2.83c.83 0 1.5.67 1.5 1.5s-.67 1.5-1.5 1.5-1.5-.67-1.5-1.5.67-1.5 1.5-1.5zM6 11.17c.83 0 1.5.67 1.5 1.5S6.83 14.17 6 14.17s-1.5-.67-1.5-1.5.67-1.5 1.5-1.5zm12 0c.83 0 1.5.67 1.5 1.5s-.67 1.5-1.5 1.5-1.5-.67-1.5-1.5.67-1.5 1.5-1.5z"/></symbol>
 </svg>
 
 <div id="toasts"></div>
@@ -5306,7 +5378,7 @@ button.ghost:hover { box-shadow: none; }
     <span class="sidebar-logo">TM</span>
     <div class="sidebar-title">
       <span class="sidebar-name">TraderMoney</span>
-      <span class="sidebar-version">v8.0.0</span>
+      <span class="sidebar-version">v9.0.0</span>
     </div>
     <div class="sidebar-actions">
       <button onclick="location.reload()" title="Refresh"><svg class="icon" style="width:13px;height:13px;" viewBox="0 0 24 24"><path d="M17.65 6.35A7.958 7.958 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg></button>
@@ -5509,6 +5581,7 @@ button.ghost:hover { box-shadow: none; }
     <button class="tbtn" data-tab="analysis"><svg class="icon"><use href="#i-analysis"/></svg>Analysis</button>
     <button class="tbtn" data-tab="help"><svg class="icon"><use href="#i-help"/></svg>Help</button>
     <button class="tbtn" data-tab="monitor" id="monitor-tab-btn"><svg class="icon" style="width:12px;height:12px;"><use href="#i-chart"/></svg> Live</button>
+    <button class="tbtn" data-tab="trade"><svg class="icon"><use href="#i-trade"/></svg>Trade</button>
     <button id="sound-toggle" onclick="toggleSound()" title="Sound alerts" style="margin-left:auto;flex-shrink:0;">
       <svg class="sound-off" viewBox="0 0 24 24" width="15" height="15" fill="currentColor"><path d="M3 9v6h4l5 5V4L7 9H3zm13 3l2.3-2.3 1.4 1.4L17.4 13.4l2.3 2.3-1.4 1.4L16 14.8l-2.3 2.3-1.4-1.4 2.3-2.3-2.3-2.3 1.4-1.4L16 12.2z"/></svg>
       <svg class="sound-on" viewBox="0 0 24 24" width="15" height="15" fill="currentColor" style="display:none;"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/></svg>
@@ -5604,7 +5677,7 @@ button.ghost:hover { box-shadow: none; }
   <div id="tab-help" class="tab">
     <div class="hb">
       <input type="text" id="help-search" placeholder="Search help... (Cmd+F)" oninput="filterHelp()" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);font-size:.82rem;margin-bottom:10px;box-sizing:border-box;">
-      <h3>TraderMoney v8.0.0 – Complete Help Guide</h3>
+      <h3>TraderMoney v9.0.0 – Complete Help Guide</h3>
       <p style="font-size:.82rem;color:var(--muted);margin-top:-4px;">Your desktop algorithmic trading terminal. All features documented below.</p>
 
       <details>
@@ -6003,6 +6076,38 @@ button.ghost:hover { box-shadow: none; }
       <div id="monitor-status" style="display:none;"></div>
       <div id="lifetime-stats" class="lifetime-stats" style="display:none;"></div>
       <div id="monitor-signals" style="display:none;"></div>
+    </div>
+  </div>
+
+  <!-- Trade tab -->
+  <div id="tab-trade" class="tab">
+    <div style="padding:18px 20px;overflow:auto;flex:1;display:flex;flex-direction:column;gap:12px;max-width:420px;">
+      <div style="font-size:.8rem;font-weight:700;color:var(--accent);">Manual Trade</div>
+      <div style="display:flex;flex-direction:column;gap:6px;background:var(--glass);padding:14px;border-radius:10px;border:1px solid var(--border);">
+        <label style="font-size:.65rem;color:var(--muted);">Symbol</label>
+        <input id="trade-symbol" type="text" placeholder="AAPL" style="height:32px;font-size:.8rem;padding:0 8px;text-transform:uppercase;">
+        <label style="font-size:.65rem;color:var(--muted);">Quantity</label>
+        <input id="trade-qty" type="number" value="1" min="0.0001" step="any" style="height:32px;font-size:.8rem;padding:0 8px;">
+        <label style="font-size:.65rem;color:var(--muted);">Side</label>
+        <div style="display:flex;gap:6px;">
+          <button id="trade-side-buy" class="tbtn" style="flex:1;padding:8px;font-size:.75rem;border:2px solid var(--border);border-radius:8px;cursor:pointer;background:var(--glass);color:var(--fg);">BUY</button>
+          <button id="trade-side-sell" class="tbtn" style="flex:1;padding:8px;font-size:.75rem;border:2px solid var(--border);border-radius:8px;cursor:pointer;background:var(--glass);color:var(--fg);">SELL</button>
+        </div>
+        <label style="font-size:.65rem;color:var(--muted);">Order Type</label>
+        <select id="trade-type" style="height:32px;font-size:.8rem;padding:0 8px;">
+          <option value="market">Market</option>
+          <option value="limit">Limit</option>
+        </select>
+        <div id="trade-limit-price-wrap" style="display:none;">
+          <label style="font-size:.65rem;color:var(--muted);">Limit Price</label>
+          <input id="trade-limit-price" type="number" step="0.01" min="0" style="height:32px;font-size:.8rem;padding:0 8px;">
+        </div>
+        <button id="trade-submit" style="margin-top:8px;padding:10px;border:none;border-radius:8px;background:var(--accent);color:#fff;font-size:.8rem;font-weight:700;cursor:pointer;opacity:0.7;">Submit Order</button>
+        <div id="trade-result" style="font-size:.7rem;color:var(--muted);padding:4px 0;min-height:18px;"></div>
+      </div>
+      <div style="font-size:.65rem;color:var(--muted);padding:4px 0;">
+        <span id="trade-broker-status">Broker: Not connected</span>
+      </div>
     </div>
   </div>
 
@@ -6728,6 +6833,50 @@ function switchTab(name){
   else stopMonitorPolling();
 }
 document.querySelectorAll('.tbtn').forEach(b=>{b.addEventListener('click',function(){switchTab(this.dataset.tab);});});
+
+/* ── Manual Trade ── */
+(function(){
+  let tradeSide='buy';
+  const sym=$('trade-symbol'),qty=$('trade-qty'),res=$('trade-result');
+  const buyBtn=$('trade-side-buy'),sellBtn=$('trade-side-sell');
+  const typeSel=$('trade-type'),limitWrap=$('trade-limit-price-wrap'),limitPrice=$('trade-limit-price');
+  function setSide(s){
+    tradeSide=s;
+    [buyBtn,sellBtn].forEach(b=>{b.style.borderColor='var(--border)';b.style.opacity='0.6';});
+    const active=s==='buy'?buyBtn:sellBtn;
+    active.style.borderColor='var(--accent)';active.style.opacity='1';
+  }
+  setSide('buy');
+  buyBtn.onclick=()=>setSide('buy');
+  sellBtn.onclick=()=>setSide('sell');
+  typeSel.onchange=()=>{limitWrap.style.display=typeSel.value==='limit'?'block':'none';};
+  $('trade-submit').onclick=async function(){
+    const s=sym.value.trim().toUpperCase();
+    const q=parseFloat(qty.value);
+    if(!s||!q||q<=0){res.textContent='Enter symbol + quantity';res.style.color='var(--warn)';return;}
+    this.disabled=true;this.textContent='Submitting...';res.textContent='';
+    try{
+      const r=await fetch('/api/trade',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+        symbol:s,qty:q,side:tradeSide,order_type:typeSel.value,
+        price:typeSel.value==='limit'?parseFloat(limitPrice.value)||null:null
+      })});
+      const d=await r.json();
+      if(d.ok){res.textContent=d.message;res.style.color='#4caf50';}
+      else{res.textContent=d.error||'Order failed';res.style.color='var(--warn)';}
+    }catch(e){res.textContent='Network error';res.style.color='var(--warn)';}
+    this.disabled=false;this.textContent='Submit Order';
+  };
+  // Show broker status when trade tab opens
+  const origSwitch=switchTab;
+  switchTab=function(name){
+    origSwitch(name);
+    if(name==='trade'){
+      fetch('/api/broker_status').then(r=>r.json()).then(d=>{
+        $('trade-broker-status').textContent='Broker: '+(d.message||'Not connected');
+      }).catch(()=>{});
+    }
+  };
+})();
 
 /* ── Presets ── */
 const PRESETS={
