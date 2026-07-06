@@ -654,7 +654,7 @@
             </p>
             <div class="version-pill fade-in delay-2">
                 <span class="dot"></span>
-                <span>Latest <strong id="version-number">v9.0.0</strong></span>
+                <span>Latest <strong id="version-number">v9.1.0</strong></span>
             </div>
             <div class="dl-section fade-in delay-3">
                 <div class="dl-group">
@@ -839,6 +839,21 @@
 
             <div class="changelog-card">
                 <span class="tag" style="background:var(--accent);color:#000;font-weight:700;">Latest</span>
+                <h3>v9.1.0 — SL/TP Fixes Across All Brokers, Trade Tab Redesign & Entry-Price Watchdog</h3>
+                <div class="date">July 6, 2026</div>
+                <ul>
+                    <li><strong>Fixed SL/TP for All Brokers:</strong> sl_pct/tp_pct parameters now work correctly with IBKR, Tradier, Binance, Bybit, and OKX (were previously ignored)</li>
+                    <li><strong>Entry-Price Watchdog:</strong> Stop-loss and take-profit levels are now computed from entry price (not dynamic current price), preventing SL/TP drift</li>
+                    <li><strong>Trade Tab Redesign:</strong> Account summary, SL/TP inputs, order preview, open positions list, and trade history with auto-refresh</li>
+                    <li><strong>All Brokers Support order_type:</strong> Market and Limit orders now work with every broker</li>
+                    <li><strong>Fixed Alpaca Single SL/TP:</strong> Works with just SL or just TP (no longer requires both)</li>
+                    <li><strong>Fixed IBKR:</strong> Proper async error handling, percentage-based SL/TP support</li>
+                    <li><strong>Fixed Trailing Stop:</strong> Correct price comparison logic in watchdog</li>
+                    <li><strong>Added price parameter:</strong> Limit-order price now flows through the full order pipeline</li>
+                </ul>
+            </div>
+            <div class="changelog-card">
+                <span class="tag tag-improve">Improved</span>
                 <h3>v9.0.0 — Manual Trading, Fixed Portfolio ROI & 8-Min Backtest Engine</h3>
                 <div class="date">July 3, 2026</div>
                 <ul>
@@ -847,7 +862,7 @@
                     <li><strong>Fixed Portfolio ROI:</strong> Now correctly calculated against total deployed capital ($300 × active symbols)</li>
                     <li><strong>Batch-Chunked Downloads:</strong> 127-ticker 1m/60d backtest runs in ~8 minutes (was timing out at 60+)</li>
                     <li><strong>Crypto Support:</strong> BTC/USD, ETH/USD, and all pairs normalized for Yahoo Finance in batch mode</li>
-                    <li><strong>Window Title:</strong> Displays TraderMoney 9.0.0</li>
+                    <li><strong>Window Title:</strong> Displays TraderMoney 9.1.0</li>
                 </ul>
             </div>
             <div class="changelog-card">

@@ -55,7 +55,7 @@ import webview
 from flask import Flask, Response, jsonify, request, send_file
 from flask_cors import CORS
 
-APP_VERSION = "9.0.0"
+APP_VERSION = "9.1.0"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # AI CONFIGURATION
@@ -515,6 +515,14 @@ class BaseBroker:
 
     def connect(self) -> bool: raise NotImplementedError
     def get_account(self): raise NotImplementedError
+    def _resolve_sl_tp_prices(self, side, price, sl_pct=None, tp_pct=None, sl_price=None, tp_price=None):
+        """Convert SL/TP percentages to prices. Returns (sl_price, tp_price) with resolved values."""
+        if sl_price is None and sl_pct is not None and price:
+            sl_price = price * (1 - sl_pct / 100) if side == "buy" else price * (1 + sl_pct / 100)
+        if tp_price is None and tp_pct is not None and price:
+            tp_price = price * (1 + tp_pct / 100) if side == "buy" else price * (1 - tp_pct / 100)
+        return sl_price, tp_price
+
     def submit_order(self, *a, **kw): raise NotImplementedError
     def close_all_positions(self): raise NotImplementedError
     def get_positions(self): raise NotImplementedError
@@ -663,32 +671,31 @@ class AlpacaBroker(BaseBroker):
             return False
 
     def submit_order(self, symbol, qty, side, order_type="market",
-                     sl_pct=None, tp_pct=None, sl_price=None, tp_price=None) -> bool:
+                     sl_pct=None, tp_pct=None, sl_price=None, tp_price=None, price=None) -> bool:
         if not self.api:
             self._emit_error("Alpaca not connected – cannot submit order.")
             return False
         try:
-            if sl_price is None and tp_price is None and sl_pct is None and tp_pct is None:
-                self.api.submit_order(symbol=symbol, qty=qty, side=side, type="market", time_in_force="day")
+            has_sl = sl_price is not None or sl_pct is not None
+            has_tp = tp_price is not None or tp_pct is not None
+
+            if not has_sl and not has_tp:
+                kwargs = dict(symbol=symbol, qty=qty, side=side, time_in_force="day")
+                kwargs["type"] = order_type if order_type == "limit" else "market"
+                if order_type == "limit" and price is not None:
+                    kwargs["limit_price"] = str(round(float(price), 2))
+                self.api.submit_order(**kwargs)
                 self._emit_log(f"Order submitted: {side.upper()} {qty} {symbol}")
                 return True
 
-            if sl_price is not None and tp_price is not None:
-                stop = round(sl_price, 2)
-                limit = round(tp_price, 2)
-            else:
-                price = self._get_current_price(symbol)
-                if price is None:
-                    self._emit_error(f"Cannot determine price for {symbol} — bracket order aborted.")
-                    return False
-                sl = sl_pct if sl_pct is not None else 2.0
-                tp = tp_pct if tp_pct is not None else 4.0
-                if side == "buy":
-                    stop = round(price * (1 - sl / 100), 2)
-                    limit = round(price * (1 + tp / 100), 2)
-                else:
-                    stop = round(price * (1 + sl / 100), 2)
-                    limit = round(price * (1 - tp / 100), 2)
+            price = self._get_current_price(symbol)
+            if price is None:
+                self._emit_error(f"Cannot determine price for {symbol} — bracket order aborted.")
+                return False
+
+            sl_price, tp_price = self._resolve_sl_tp_prices(side, price, sl_pct, tp_pct, sl_price, tp_price)
+            stop = round(sl_price, 2) if sl_price else None
+            limit = round(tp_price, 2) if tp_price else None
 
             entry_order = self.api.submit_order(symbol=symbol, qty=qty, side=side, type="market", time_in_force="day")
             if not getattr(entry_order, "id", None):
@@ -696,16 +703,20 @@ class AlpacaBroker(BaseBroker):
 
             tp_side = "sell" if side == "buy" else "buy"
             sl_side = tp_side
-            tp_order = self._submit_conditional_order(symbol, qty, tp_side, "limit", limit)
-            sl_order = self._submit_conditional_order(symbol, qty, sl_side, "stop", stop)
-            tp_order_id = getattr(tp_order, "id", None)
-            sl_order_id = getattr(sl_order, "id", None)
-            self._watch_conditional_orders(symbol, tp_order_id, sl_order_id)
-            self._emit_log(f"Conditional orders submitted: {side.upper()} {qty} {symbol} SL={stop} TP={limit}")
+            placed = []
+            if limit is not None:
+                tp_order = self._submit_conditional_order(symbol, qty, tp_side, "limit", limit)
+                if getattr(tp_order, "id", None):
+                    placed.append(f"TP={limit}")
+            if stop is not None:
+                sl_order = self._submit_conditional_order(symbol, qty, sl_side, "stop", stop)
+                if getattr(sl_order, "id", None):
+                    placed.append(f"SL={stop}")
+            self._emit_log(f"Order submitted: {side.upper()} {qty} {symbol}" + (f" ({', '.join(placed)})" if placed else ""))
             return True
         except Exception as e:
             self._emit_error(f"Order failed ({symbol} {side}): {e}")
-            if sl_price is not None or tp_price is not None or sl_pct is not None or tp_pct is not None:
+            if has_sl or has_tp:
                 try:
                     self.api.submit_order(symbol=symbol, qty=qty, side=side, type="market", time_in_force="day")
                     self._emit_log(f"Fallback order submitted: {side.upper()} {qty} {symbol} (without SL/TP)")
@@ -882,32 +893,46 @@ class IBKRBroker(BaseBroker):
             return None
 
     def submit_order(self, symbol, qty, side, order_type="market",
-                     sl_pct=None, tp_pct=None, sl_price=None, tp_price=None) -> bool:
+                     sl_pct=None, tp_pct=None, sl_price=None, tp_price=None, price=None) -> bool:
         if not self.is_connected():
             self._emit_error("IBKR not connected – cannot submit order.")
             return False
         try:
             from ib_insync import Stock, MarketOrder, StopOrder, LimitOrder
 
+            has_sl = sl_price is not None or sl_pct is not None
+            has_tp = tp_price is not None or tp_pct is not None
+
+            cur_price = price
+            if cur_price is None and (has_sl or has_tp) and sl_price is None and tp_price is None:
+                try:
+                    import yfinance as yf
+                    cur_price = float(yf.Ticker(symbol).history(period="1d")["Close"].iloc[-1])
+                except Exception:
+                    pass
+
             async def _place():
                 c = Stock(symbol, "SMART", "USD")
                 await self.ib.qualifyContractsAsync(c)
-                # Primary market order
-                order = MarketOrder("BUY" if side == "buy" else "SELL", qty)
-                trade = self.ib.placeOrder(c, order)
-                # Wait a moment for fill, then place SL/TP if provided
+                if order_type == "limit" and price is not None:
+                    order = LimitOrder("BUY" if side == "buy" else "SELL", qty, round(float(price), 2))
+                else:
+                    order = MarketOrder("BUY" if side == "buy" else "SELL", qty)
+                self.ib.placeOrder(c, order)
                 await asyncio.sleep(0.5)
-                if sl_price is not None:
+                sl_px, tp_px = self._resolve_sl_tp_prices(side, cur_price, sl_pct, tp_pct, sl_price, tp_price)
+                if sl_px is not None:
                     sl_side = "SELL" if side == "buy" else "BUY"
-                    stop_order = StopOrder(sl_side, abs(qty), round(sl_price, 2))
-                    self.ib.placeOrder(c, stop_order)
-                if tp_price is not None:
+                    self.ib.placeOrder(c, StopOrder(sl_side, abs(qty), round(sl_px, 2)))
+                if tp_px is not None:
                     tp_side = "SELL" if side == "buy" else "BUY"
-                    limit_order = LimitOrder(tp_side, abs(qty), round(tp_price, 2))
-                    self.ib.placeOrder(c, limit_order)
+                    self.ib.placeOrder(c, LimitOrder(tp_side, abs(qty), round(tp_px, 2)))
 
             self._run_coro(_place())
-            self._emit_log(f"Order submitted: {side.upper()} {qty} {symbol} with SL/TP")
+            label = f"{side.upper()} {qty} {symbol}"
+            if has_sl or has_tp:
+                label += " with SL/TP"
+            self._emit_log(f"Order submitted: {label}")
             return True
         except Exception as e:
             self._emit_error(f"IBKR order error: {e}")
@@ -1032,40 +1057,58 @@ class TradierBroker(BaseBroker):
             return None
 
     def submit_order(self, symbol, qty, side, order_type="market",
-                     sl_pct=None, tp_pct=None, sl_price=None, tp_price=None) -> bool:
+                     sl_pct=None, tp_pct=None, sl_price=None, tp_price=None, price=None) -> bool:
         if not self.session:
             self._emit_error("Tradier not connected – cannot submit order.")
             return False
         try:
-            # Place the main market order
+            has_sl = sl_price is not None or sl_pct is not None
+            has_tp = tp_price is not None or tp_pct is not None
+
+            cur_price = price
+            if cur_price is None and (has_sl or has_tp) and sl_price is None and tp_price is None:
+                try:
+                    import yfinance as yf
+                    cur_price = float(yf.Ticker(symbol).history(period="1d")["Close"].iloc[-1])
+                except Exception:
+                    pass
+
+            ord_type = order_type if order_type in ("market", "limit") else "market"
+            data = {"class": "equity", "symbol": symbol, "side": side,
+                    "quantity": str(qty), "type": ord_type, "duration": "day"}
+            if ord_type == "limit" and price is not None:
+                data["price"] = str(round(float(price), 2))
+
             r = self.session.post(
                 f"{self._base}/accounts/{self.account_id}/orders",
-                data={"class": "equity", "symbol": symbol, "side": side,
-                      "quantity": str(qty), "type": "market", "duration": "day"},
-                timeout=10)
+                data=data, timeout=10)
             err = r.json().get("errors", {}).get("error")
             if r.status_code not in (200, 201) or err:
                 self._emit_error(f"Tradier order rejected: {err or r.text[:200]}")
                 return False
-            # Place SL and TP as separate orders if provided
-            if sl_price is not None or tp_price is not None:
+
+            sl_px, tp_px = self._resolve_sl_tp_prices(side, cur_price, sl_pct, tp_pct, sl_price, tp_price)
+            if sl_px is not None or tp_px is not None:
                 import time as _time
                 _time.sleep(0.3)
-                if sl_price is not None:
+                if sl_px is not None:
                     sl_side = "sell" if side == "buy" else "buy"
                     self.session.post(
                         f"{self._base}/accounts/{self.account_id}/orders",
                         data={"class": "equity", "symbol": symbol, "side": sl_side,
-                              "quantity": str(qty), "type": "stop", "stop_price": str(round(sl_price, 2)), "duration": "gtc"},
+                              "quantity": str(qty), "type": "stop", "stop_price": str(round(sl_px, 2)), "duration": "gtc"},
                         timeout=10)
-                if tp_price is not None:
+                if tp_px is not None:
                     tp_side = "sell" if side == "buy" else "buy"
                     self.session.post(
                         f"{self._base}/accounts/{self.account_id}/orders",
                         data={"class": "equity", "symbol": symbol, "side": tp_side,
-                              "quantity": str(qty), "type": "limit", "price": str(round(tp_price, 2)), "duration": "gtc"},
+                              "quantity": str(qty), "type": "limit", "price": str(round(tp_px, 2)), "duration": "gtc"},
                         timeout=10)
-            self._emit_log(f"Order submitted: {side.upper()} {qty} {symbol} with SL/TP")
+            label = f"{side.upper()} {qty} {symbol}"
+            if has_sl or has_tp:
+                label += " with SL/TP"
+            self._emit_log(f"Order submitted: {label}")
             return True
         except Exception as e:
             self._emit_error(f"Tradier submit_order: {e}")
@@ -1200,39 +1243,56 @@ class BinanceBroker(BaseBroker):
             return None
 
     def submit_order(self, symbol, qty, side, order_type="market",
-                     sl_pct=None, tp_pct=None, sl_price=None, tp_price=None) -> bool:
+                     sl_pct=None, tp_pct=None, sl_price=None, tp_price=None, price=None) -> bool:
         if not self.client:
             self._emit_error("Binance not connected – cannot submit order.")
             return False
         try:
             normalised = self._norm(symbol)
             bn_side = "BUY" if side == "buy" else "SELL"
-            # Place the main market order
-            resp = self.client.new_order(
-                symbol=normalised,
-                side=bn_side,
-                type="MARKET", quantity=round(float(qty), 6))
+
+            has_sl = sl_price is not None or sl_pct is not None
+            has_tp = tp_price is not None or tp_pct is not None
+
+            cur_price = price
+            if cur_price is None and (has_sl or has_tp) and sl_price is None and tp_price is None:
+                try:
+                    import yfinance as yf
+                    cur_price = float(yf.Ticker(symbol).history(period="1d")["Close"].iloc[-1])
+                except Exception:
+                    pass
+
+            ord_type = "LIMIT" if order_type == "limit" else "MARKET"
+            order_args = dict(symbol=normalised, side=bn_side, type=ord_type, quantity=round(float(qty), 6))
+            if ord_type == "LIMIT" and price is not None:
+                order_args["price"] = round(float(price), 6)
+                order_args["timeInForce"] = "GTC"
+            resp = self.client.new_order(**order_args)
             if resp.get("status") not in ("FILLED", "NEW", "PARTIALLY_FILLED"):
                 self._emit_error(f"Binance order status: {resp}")
                 return False
-            # Place SL and TP as separate stop-limit/limit orders if provided
-            if sl_price is not None or tp_price is not None:
+
+            sl_px, tp_px = self._resolve_sl_tp_prices(side, cur_price, sl_pct, tp_pct, sl_price, tp_price)
+            if sl_px is not None or tp_px is not None:
                 import time as _time
                 _time.sleep(0.3)
-                if sl_price is not None:
+                if sl_px is not None:
                     sl_side = "SELL" if side == "buy" else "BUY"
                     self.client.new_order(
                         symbol=normalised, side=sl_side,
                         type="STOP_LOSS_LIMIT", quantity=round(float(qty), 6),
-                        price=round(sl_price * 0.99, 6), stopPrice=round(sl_price, 6),
+                        price=round(sl_px * 0.99, 6), stopPrice=round(sl_px, 6),
                         timeInForce="GTC")
-                if tp_price is not None:
+                if tp_px is not None:
                     tp_side = "SELL" if side == "buy" else "BUY"
                     self.client.new_order(
                         symbol=normalised, side=tp_side,
                         type="LIMIT", quantity=round(float(qty), 6),
-                        price=round(tp_price, 6), timeInForce="GTC")
-            self._emit_log(f"Order submitted: {bn_side} {qty} {symbol} with SL/TP")
+                        price=round(tp_px, 6), timeInForce="GTC")
+            label = f"{bn_side} {qty} {symbol}"
+            if has_sl or has_tp:
+                label += " with SL/TP"
+            self._emit_log(f"Order submitted: {label}")
             return True
         except Exception as e:
             self._emit_error(f"Binance submit_order: {e}")
@@ -1366,23 +1426,43 @@ class BybitBroker(BaseBroker):
             return None
 
     def submit_order(self, symbol, qty, side, order_type="market",
-                     sl_pct=None, tp_pct=None, sl_price=None, tp_price=None) -> bool:
+                     sl_pct=None, tp_pct=None, sl_price=None, tp_price=None, price=None) -> bool:
         if not self.session:
             self._emit_error("Bybit not connected – cannot submit order.")
             return False
         try:
+            has_sl = sl_price is not None or sl_pct is not None
+            has_tp = tp_price is not None or tp_pct is not None
+
+            cur_price = price
+            if cur_price is None and (has_sl or has_tp) and sl_price is None and tp_price is None:
+                try:
+                    import yfinance as yf
+                    cur_price = float(yf.Ticker(symbol).history(period="1d")["Close"].iloc[-1])
+                except Exception:
+                    pass
+
+            sl_px, tp_px = self._resolve_sl_tp_prices(side, cur_price, sl_pct, tp_pct, sl_price, tp_price)
+
             kwargs = dict(
                 category="spot", symbol=self._norm(symbol),
-                side="Buy" if side == "buy" else "Sell", orderType="Market", qty=str(round(float(qty), 6)))
-            if sl_price:
-                kwargs["stopLoss"] = str(round(sl_price, 4))
-            if tp_price:
-                kwargs["takeProfit"] = str(round(tp_price, 4))
+                side="Buy" if side == "buy" else "Sell",
+                orderType="Limit" if order_type == "limit" else "Market",
+                qty=str(round(float(qty), 6)))
+            if order_type == "limit" and price is not None:
+                kwargs["price"] = str(round(float(price), 4))
+            if sl_px is not None:
+                kwargs["stopLoss"] = str(round(sl_px, 4))
+            if tp_px is not None:
+                kwargs["takeProfit"] = str(round(tp_px, 4))
             resp = self.session.place_order(**kwargs)
             if resp.get("retCode", -1) != 0:
                 self._emit_error(f"Bybit order rejected: {resp.get('retMsg')}")
                 return False
-            self._emit_log(f"Order submitted: {side.upper()} {qty} {symbol}")
+            label = f"{side.upper()} {qty} {symbol}"
+            if has_sl or has_tp:
+                label += " with SL/TP"
+            self._emit_log(f"Order submitted: {label}")
             return True
         except Exception as e:
             self._emit_error(f"Bybit submit_order: {e}")
@@ -1517,43 +1597,58 @@ class OKXBroker(BaseBroker):
             return None
 
     def submit_order(self, symbol, qty, side, order_type="market",
-                     sl_pct=None, tp_pct=None, sl_price=None, tp_price=None) -> bool:
+                     sl_pct=None, tp_pct=None, sl_price=None, tp_price=None, price=None) -> bool:
         if not self._trade_api:
             self._emit_error("OKX not connected – cannot submit order.")
             return False
         try:
             norm = self._norm(symbol)
-            # Place the main market order
-            resp = self._trade_api.place_order(
-                instId=norm, tdMode="cash",
-                side=side, ordType="market", sz=str(round(float(qty), 6)))
+
+            has_sl = sl_price is not None or sl_pct is not None
+            has_tp = tp_price is not None or tp_pct is not None
+
+            cur_price = price
+            if cur_price is None and (has_sl or has_tp) and sl_price is None and tp_price is None:
+                try:
+                    import yfinance as yf
+                    cur_price = float(yf.Ticker(symbol).history(period="1d")["Close"].iloc[-1])
+                except Exception:
+                    pass
+
+            sl_px, tp_px = self._resolve_sl_tp_prices(side, cur_price, sl_pct, tp_pct, sl_price, tp_price)
+
+            ord_type = "limit" if order_type == "limit" else "market"
+            order_args = dict(instId=norm, tdMode="cash", side=side, ordType=ord_type, sz=str(round(float(qty), 6)))
+            if ord_type == "limit" and price is not None:
+                order_args["px"] = str(round(float(price), 4))
+            resp = self._trade_api.place_order(**order_args)
             items = resp.get("data", [{}])
             s_code = str(items[0].get("sCode", "-1")) if items else "-1"
             if s_code != "0":
                 s_msg = items[0].get("sMsg", str(resp)) if items else str(resp)
                 self._emit_error(f"OKX order rejected (sCode={s_code}): {s_msg}")
                 return False
-            # Place SL and TP as algo orders if provided
-            if sl_price is not None or tp_price is not None:
+            if sl_px is not None or tp_px is not None:
                 import time as _time
                 _time.sleep(0.3)
-                if sl_price is not None:
-                    sl_side = "sell" if side == "buy" else "buy"
+                if sl_px is not None:
                     self._trade_api.set_position_algo(
                         instId=norm, tdMode="cash",
                         algoClOrdId="sl_" + str(int(_time.time())),
                         tpTriggerPx="", tpOrdPx="",
-                        slTriggerPx=str(round(sl_price, 4)), slOrdPx=str(round(sl_price, 4)),
+                        slTriggerPx=str(round(sl_px, 4)), slOrdPx=str(round(sl_px, 4)),
                         sz=str(round(float(qty), 6)))
-                if tp_price is not None:
-                    tp_side = "sell" if side == "buy" else "buy"
+                if tp_px is not None:
                     self._trade_api.set_position_algo(
                         instId=norm, tdMode="cash",
                         algoClOrdId="tp_" + str(int(_time.time())),
-                        tpTriggerPx=str(round(tp_price, 4)), tpOrdPx=str(round(tp_price, 4)),
+                        tpTriggerPx=str(round(tp_px, 4)), tpOrdPx=str(round(tp_px, 4)),
                         slTriggerPx="", slOrdPx="",
                         sz=str(round(float(qty), 6)))
-            self._emit_log(f"Order submitted: {side.upper()} {qty} {symbol} with SL/TP")
+            label = f"{side.upper()} {qty} {symbol}"
+            if has_sl or has_tp:
+                label += " with SL/TP"
+            self._emit_log(f"Order submitted: {label}")
             return True
         except Exception as e:
             self._emit_error(f"OKX submit_order: {e}")
@@ -1869,7 +1964,7 @@ class OrderItem:
     def __init__(self, symbol: str, qty: float, side: str, order_type: str = "market",
                  sl_pct: float = None, tp_pct: float = None,
                  sl_price: float = None, tp_price: float = None,
-                 retries: int = 3):
+                 price: float = None, retries: int = 3):
         self.symbol = symbol
         self.qty = qty
         self.side = side
@@ -1878,6 +1973,7 @@ class OrderItem:
         self.tp_pct = tp_pct
         self.sl_price = sl_price
         self.tp_price = tp_price
+        self.price = price
         self.retries = retries
         self.attempts = 0
 
@@ -1890,6 +1986,7 @@ class TradingEngine(threading.Thread):
         self.running = False
         self.symbols: List[str] = []
         self.positions: Dict[str, Any] = {}
+        self.position_prices: Dict[str, float] = {}
         self.prev_ema: Dict[str, Tuple] = {}
         self.per_ticker_qty: Dict[str, Any] = {}
         self.is_licensed = config.get("license_valid", False)
@@ -1900,6 +1997,7 @@ class TradingEngine(threading.Thread):
         self.paused = False
         self.news_cache: Dict[str, Tuple[float, List[str], float]] = {}  # symbol -> (score, headlines, timestamp)
         self.trailing_stops: Dict[str, dict] = {}
+        self.position_sltp: Dict[str, dict] = {}
         self.mtf_cache: Dict[str, pd.DataFrame] = {}
         self.bracket_positions: set = set()  # symbols with active native broker bracket orders
         self.order_queue: queue.Queue = queue.Queue()  # order execution queue
@@ -1921,10 +2019,10 @@ class TradingEngine(threading.Thread):
 
     def _queue_order(self, symbol, qty, side, order_type="market",
                      sl_pct=None, tp_pct=None, sl_price=None, tp_price=None,
-                     callback=None):
+                     price=None, callback=None):
         """Queue an order for execution. Returns False if queue is full, True otherwise."""
         item = OrderItem(symbol, qty, side, order_type,
-                         sl_pct, tp_pct, sl_price, tp_price)
+                         sl_pct, tp_pct, sl_price, tp_price, price=price)
         item.callback = callback
         try:
             self.order_queue.put(item, timeout=1)
@@ -1949,7 +2047,8 @@ class TradingEngine(threading.Thread):
                 try:
                     ok = self.broker.submit_order(
                         item.symbol, item.qty, item.side, item.order_type,
-                        item.sl_pct, item.tp_pct, item.sl_price, item.tp_price)
+                        item.sl_pct, item.tp_pct, item.sl_price, item.tp_price,
+                        price=item.price)
                     if ok:
                         success = True
                         self._log(f"[OrderQueue] Executed {item.side.upper()} {item.qty} {item.symbol} "
@@ -2053,6 +2152,7 @@ class TradingEngine(threading.Thread):
 
         for s in self.symbols:
             self.positions[s] = 0
+            self.position_prices.pop(s, None)
             self.prev_ema[s] = (None, None)
 
         mode = "signal" if not self.is_licensed else self.config.get("mode", "signal")
@@ -2122,6 +2222,7 @@ class TradingEngine(threading.Thread):
                         if s not in self.symbols:
                             self.symbols.append(s)
                             self.positions[s] = 0
+                            self.position_prices.pop(s, None)
                             self.prev_ema[s] = (None, None)
                             self._log(f"[Ticker] Added {s} to live tracking")
                             self._telegram(f"<b>Ticker Added (live)</b> {s}")
@@ -2129,6 +2230,7 @@ class TradingEngine(threading.Thread):
                         if s not in fresh_list:
                             self.symbols.remove(s)
                             self.positions.pop(s, None)
+                            self.position_prices.pop(s, None)
                             self.prev_ema.pop(s, None)
                             self.trailing_stops.pop(s, None)
                             self._log(f"[Ticker] Removed {s} from live tracking")
@@ -2260,7 +2362,7 @@ class TradingEngine(threading.Thread):
 
     def _submit_with_retry(self, symbol, qty, side, order_type="market",
                            sl_pct=None, tp_pct=None, sl_price=None, tp_price=None,
-                           timeout=30) -> bool:
+                           price=None, timeout=30) -> bool:
         """Queue order and wait for execution with retry logic."""
         result = [None]
         event = threading.Event()
@@ -2269,7 +2371,7 @@ class TradingEngine(threading.Thread):
             event.set()
         self._queue_order(symbol, qty, side, order_type,
                           sl_pct, tp_pct, sl_price, tp_price,
-                          callback=callback)
+                          price=price, callback=callback)
         event.wait(timeout=timeout)
         return result[0] if result[0] is not None else False
 
@@ -2310,6 +2412,7 @@ class TradingEngine(threading.Thread):
                         ok = self._submit_with_retry(sym, abs(pos), "buy")
                         if ok:
                             self.positions[sym] = 0
+                            self.position_prices.pop(sym, None)
                             self.bracket_positions.discard(sym)
                         else:
                             self._log(f"[Execute] Failed to close short {sym}")
@@ -2352,6 +2455,7 @@ class TradingEngine(threading.Thread):
 
                     if ok:
                         self.positions[sym] = qty
+                        self.position_prices[sym] = price
                         if use_bracket:
                             self.bracket_positions.add(sym)
                         self.ui_queue.put(("order", (sym, "BUY", qty, price)))
@@ -2368,6 +2472,7 @@ class TradingEngine(threading.Thread):
                         ok = self._submit_with_retry(sym, pos, "sell")
                         if ok:
                             self.positions[sym] = 0
+                            self.position_prices.pop(sym, None)
                             self.bracket_positions.discard(sym)
                         else:
                             self._log(f"[Execute] Failed to close long {sym}")
@@ -2410,6 +2515,7 @@ class TradingEngine(threading.Thread):
 
                     if ok:
                         self.positions[sym] = -qty
+                        self.position_prices[sym] = price
                         if use_bracket:
                             self.bracket_positions.add(sym)
                         self.ui_queue.put(("order", (sym, "SELL", qty, price)))
@@ -2422,6 +2528,12 @@ class TradingEngine(threading.Thread):
         except Exception as e:
             self.ui_queue.put(("error", f"Execute error {sym}: {e}"))
 
+    def _close_position(self, sym):
+        self.positions.pop(sym, None)
+        self.position_prices.pop(sym, None)
+        self.bracket_positions.discard(sym)
+        self.trailing_stops.pop(sym, None)
+
     def _sl_tp_watchdog_loop(self):
         sl_pct = self.config.get("sl_percent", 2.0)
         tp_pct = self.config.get("tp_percent", 4.0)
@@ -2431,7 +2543,6 @@ class TradingEngine(threading.Thread):
                 for sym, qty in list(self.positions.items()):
                     if qty == 0:
                         continue
-                    # Skip symbols with active native broker bracket orders
                     if sym in self.bracket_positions:
                         continue
                     try:
@@ -2439,48 +2550,49 @@ class TradingEngine(threading.Thread):
                         price = yf.Ticker(sym).history(period="1d")["Close"].iloc[-1]
                     except Exception:
                         continue
+                    # Compute SL/TP from ENTRY price (fixed), not current price (dynamic)
+                    entry_px = self.position_prices.get(sym)
+                    if entry_px is None:
+                        entry_px = price  # fallback to current price if entry unknown
+                    is_long = qty > 0
+                    stop = entry_px * (1 - sl_pct / 100) if is_long else entry_px * (1 + sl_pct / 100)
+                    take = entry_px * (1 + tp_pct / 100) if is_long else entry_px * (1 - tp_pct / 100)
                     # Trailing stop monitoring
                     if use_trailing and sym in self.trailing_stops:
                         ts = self.trailing_stops[sym]
                         if ts.get("active") and ts.get("side") == "long":
+                            trail_stop = price * (1 - ts["pct"] / 100)
                             if price > ts.get("high", price):
                                 ts["high"] = price
                                 trail_stop = price * (1 - ts["pct"] / 100)
                                 self._log(f"[Trailing] Updated {sym} stop to ${trail_stop:.2f} (new high ${price:.2f})")
-                            elif price <= price * (1 - ts["pct"] / 100):
+                            if price <= trail_stop:
                                 self.trailing_stops[sym]["active"] = False
                                 self.broker.submit_order(sym, abs(qty), "sell")
-                                self.positions[sym] = 0
-                                self.bracket_positions.discard(sym)
+                                self._close_position(sym)
                                 self._telegram(f"<b>Trailing Stop</b> triggered {sym} @ ${price:.2f}")
                                 continue
                         elif ts.get("active") and ts.get("side") == "short":
+                            trail_stop = price * (1 + ts["pct"] / 100)
                             if price < ts.get("low", price):
                                 ts["low"] = price
                                 trail_stop = price * (1 + ts["pct"] / 100)
                                 self._log(f"[Trailing] Updated {sym} stop to ${trail_stop:.2f} (new low ${price:.2f})")
-                            elif price >= price * (1 + ts["pct"] / 100):
+                            if price >= trail_stop:
                                 self.trailing_stops[sym]["active"] = False
                                 self.broker.submit_order(sym, abs(qty), "buy")
-                                self.positions[sym] = 0
-                                self.bracket_positions.discard(sym)
+                                self._close_position(sym)
                                 self._telegram(f"<b>Trailing Stop</b> triggered {sym} @ ${price:.2f}")
                                 continue
-                    stop = price * (1 - sl_pct / 100) if qty > 0 else price * (1 + sl_pct / 100)
-                    take = price * (1 + tp_pct / 100) if qty > 0 else price * (1 - tp_pct / 100)
-                    if (qty > 0 and price <= stop) or (qty < 0 and price >= stop):
+                    if (is_long and price <= stop) or (not is_long and price >= stop):
                         self.broker.submit_order(
-                            sym, abs(qty), "sell" if qty > 0 else "buy")
-                        self.positions[sym] = 0
-                        self.bracket_positions.discard(sym)
-                        self.trailing_stops.pop(sym, None)
+                            sym, abs(qty), "sell" if is_long else "buy")
+                        self._close_position(sym)
                         self._telegram(f"<b>Stop Loss</b> triggered {sym} @ ${price:.2f}")
-                    elif (qty > 0 and price >= take) or (qty < 0 and price <= take):
+                    elif (is_long and price >= take) or (not is_long and price <= take):
                         self.broker.submit_order(
-                            sym, abs(qty), "sell" if qty > 0 else "buy")
-                        self.positions[sym] = 0
-                        self.bracket_positions.discard(sym)
-                        self.trailing_stops.pop(sym, None)
+                            sym, abs(qty), "sell" if is_long else "buy")
+                        self._close_position(sym)
                         self._telegram(f"<b>Take Profit</b> triggered {sym} @ ${price:.2f}")
             except Exception:
                 pass
@@ -2770,14 +2882,47 @@ def api_trade():
     if not state.broker_instance or not state.broker_instance.is_connected():
         return jsonify({"ok": False, "error": "Broker not connected. Start the bot first."})
     try:
-        kwargs = {"sl_pct": None, "tp_pct": None, "sl_price": None, "tp_price": None}
-        ok = state.broker_instance.submit_order(symbol, qty, side, order_type=order_type, **kwargs)
+        if price is not None: price = float(price)
+        sl_pct = data.get("sl_pct")
+        tp_pct = data.get("tp_pct")
+        sl_price = data.get("sl_price")
+        tp_price = data.get("tp_price")
+        if sl_pct is not None: sl_pct = float(sl_pct)
+        if tp_pct is not None: tp_pct = float(tp_pct)
+        if sl_price is not None: sl_price = float(sl_price)
+        if tp_price is not None: tp_price = float(tp_price)
+        ok = state.broker_instance.submit_order(symbol, qty, side, order_type=order_type, price=price, sl_pct=sl_pct, tp_pct=tp_pct, sl_price=sl_price, tp_price=tp_price)
         if ok:
             db.insert_log(f"Manual trade: {side.upper()} {qty} {symbol}")
             return jsonify({"ok": True, "message": f"{side.upper()} {qty} {symbol} submitted"})
         return jsonify({"ok": False, "error": "Order rejected by broker"})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)})
+
+@app.route("/api/trade/account", methods=["GET"])
+def api_trade_account():
+    try:
+        acct = {"connected": False, "equity": 0, "buying_power": 0, "positions": []}
+        if state.broker_instance and state.broker_instance.is_connected():
+            acct["connected"] = True
+            try:
+                info = state.broker_instance.get_account()
+                if isinstance(info, dict):
+                    acct["equity"] = round(float(info.get("equity", info.get("total_cash", 0))), 2)
+                    acct["buying_power"] = round(float(info.get("buying_power", info.get("cash", 0))), 2)
+            except Exception:
+                pass
+            try:
+                pos = state.broker_instance.get_positions()
+                if isinstance(pos, list):
+                    acct["positions"] = pos
+                elif isinstance(pos, dict):
+                    acct["positions"] = [{"symbol": k, **v} if isinstance(v, dict) else {"symbol": k} for k, v in pos.items()]
+            except Exception:
+                pass
+        return jsonify(acct)
+    except Exception as e:
+        return jsonify({"connected": False, "error": str(e)})
 
 @app.route("/api/status", methods=["GET"])
 def api_status():
@@ -4199,7 +4344,7 @@ FRONTEND_HTML = r"""
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>TraderMoney 9.0.0</title>
+<title>TraderMoney 9.1.0</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root {
@@ -5378,7 +5523,7 @@ button.ghost:hover { box-shadow: none; }
     <span class="sidebar-logo">TM</span>
     <div class="sidebar-title">
       <span class="sidebar-name">TraderMoney</span>
-      <span class="sidebar-version">v9.0.0</span>
+      <span class="sidebar-version">v9.1.0</span>
     </div>
     <div class="sidebar-actions">
       <button onclick="location.reload()" title="Refresh"><svg class="icon" style="width:13px;height:13px;" viewBox="0 0 24 24"><path d="M17.65 6.35A7.958 7.958 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg></button>
@@ -5677,7 +5822,7 @@ button.ghost:hover { box-shadow: none; }
   <div id="tab-help" class="tab">
     <div class="hb">
       <input type="text" id="help-search" placeholder="Search help... (Cmd+F)" oninput="filterHelp()" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);font-size:.82rem;margin-bottom:10px;box-sizing:border-box;">
-      <h3>TraderMoney v9.0.0 – Complete Help Guide</h3>
+      <h3>TraderMoney v9.1.0 – Complete Help Guide</h3>
       <p style="font-size:.82rem;color:var(--muted);margin-top:-4px;">Your desktop algorithmic trading terminal. All features documented below.</p>
 
       <details>
@@ -6081,33 +6226,125 @@ button.ghost:hover { box-shadow: none; }
 
   <!-- Trade tab -->
   <div id="tab-trade" class="tab">
-    <div style="padding:18px 20px;overflow:auto;flex:1;display:flex;flex-direction:column;gap:12px;max-width:420px;">
-      <div style="font-size:.8rem;font-weight:700;color:var(--accent);">Manual Trade</div>
-      <div style="display:flex;flex-direction:column;gap:6px;background:var(--glass);padding:14px;border-radius:10px;border:1px solid var(--border);">
-        <label style="font-size:.65rem;color:var(--muted);">Symbol</label>
-        <input id="trade-symbol" type="text" placeholder="AAPL" style="height:32px;font-size:.8rem;padding:0 8px;text-transform:uppercase;">
-        <label style="font-size:.65rem;color:var(--muted);">Quantity</label>
-        <input id="trade-qty" type="number" value="1" min="0.0001" step="any" style="height:32px;font-size:.8rem;padding:0 8px;">
-        <label style="font-size:.65rem;color:var(--muted);">Side</label>
-        <div style="display:flex;gap:6px;">
-          <button id="trade-side-buy" class="tbtn" style="flex:1;padding:8px;font-size:.75rem;border:2px solid var(--border);border-radius:8px;cursor:pointer;background:var(--glass);color:var(--fg);">BUY</button>
-          <button id="trade-side-sell" class="tbtn" style="flex:1;padding:8px;font-size:.75rem;border:2px solid var(--border);border-radius:8px;cursor:pointer;background:var(--glass);color:var(--fg);">SELL</button>
+    <div style="padding:18px 20px;overflow:auto;flex:1;display:flex;flex-direction:column;gap:12px;max-width:500px;">
+
+      <!-- Account Summary -->
+      <div id="trade-account-summary" style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;margin-bottom:4px;">
+        <div class="card" style="padding:10px 12px;text-align:center;">
+          <div style="font-size:.55rem;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;">Equity</div>
+          <div id="trd-equity" style="font-size:.85rem;font-weight:700;color:var(--text);margin-top:2px;">--</div>
         </div>
-        <label style="font-size:.65rem;color:var(--muted);">Order Type</label>
-        <select id="trade-type" style="height:32px;font-size:.8rem;padding:0 8px;">
-          <option value="market">Market</option>
-          <option value="limit">Limit</option>
-        </select>
-        <div id="trade-limit-price-wrap" style="display:none;">
-          <label style="font-size:.65rem;color:var(--muted);">Limit Price</label>
-          <input id="trade-limit-price" type="number" step="0.01" min="0" style="height:32px;font-size:.8rem;padding:0 8px;">
+        <div class="card" style="padding:10px 12px;text-align:center;">
+          <div style="font-size:.55rem;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;">Buy Power</div>
+          <div id="trd-bp" style="font-size:.85rem;font-weight:700;color:var(--accent);margin-top:2px;">--</div>
         </div>
-        <button id="trade-submit" style="margin-top:8px;padding:10px;border:none;border-radius:8px;background:var(--accent);color:#fff;font-size:.8rem;font-weight:700;cursor:pointer;opacity:0.7;">Submit Order</button>
-        <div id="trade-result" style="font-size:.7rem;color:var(--muted);padding:4px 0;min-height:18px;"></div>
+        <div class="card" style="padding:10px 12px;text-align:center;">
+          <div style="font-size:.55rem;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;">Positions</div>
+          <div id="trd-pos-count" style="font-size:.85rem;font-weight:700;color:var(--text);margin-top:2px;">0</div>
+        </div>
+        <div class="card" style="padding:10px 12px;text-align:center;">
+          <div style="font-size:.55rem;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;">Broker</div>
+          <div id="trd-broker" style="font-size:.7rem;font-weight:600;color:var(--muted);margin-top:2px;word-break:break-word;">--</div>
+        </div>
       </div>
-      <div style="font-size:.65rem;color:var(--muted);padding:4px 0;">
-        <span id="trade-broker-status">Broker: Not connected</span>
+
+      <!-- Order Entry Panel -->
+      <div class="card" style="padding:14px;border:1px solid var(--border);">
+        <div style="font-size:.8rem;font-weight:700;color:var(--accent);margin-bottom:10px;display:flex;align-items:center;gap:6px;">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+          New Order
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+          <div>
+            <label style="font-size:.6rem;color:var(--muted);display:block;margin-bottom:2px;">Symbol</label>
+            <input id="trade-symbol" type="text" placeholder="AAPL" style="height:30px;font-size:.75rem;padding:0 8px;text-transform:uppercase;width:100%;box-sizing:border-box;">
+          </div>
+          <div>
+            <label style="font-size:.6rem;color:var(--muted);display:block;margin-bottom:2px;">Quantity</label>
+            <input id="trade-qty" type="number" value="1" min="0.0001" step="any" style="height:30px;font-size:.75rem;padding:0 8px;width:100%;box-sizing:border-box;">
+          </div>
+        </div>
+        <div style="margin-top:8px;">
+          <label style="font-size:.6rem;color:var(--muted);display:block;margin-bottom:2px;">Side</label>
+          <div style="display:flex;gap:6px;">
+            <button id="trade-side-buy" class="tbtn" style="flex:1;padding:6px;font-size:.7rem;border:2px solid var(--border);border-radius:6px;cursor:pointer;background:var(--glass);color:var(--fg);font-weight:600;">BUY</button>
+            <button id="trade-side-sell" class="tbtn" style="flex:1;padding:6px;font-size:.7rem;border:2px solid var(--border);border-radius:6px;cursor:pointer;background:var(--glass);color:var(--fg);font-weight:600;">SELL</button>
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px;">
+          <div>
+            <label style="font-size:.6rem;color:var(--muted);display:block;margin-bottom:2px;">Order Type</label>
+            <select id="trade-type" style="height:30px;font-size:.7rem;padding:0 6px;width:100%;box-sizing:border-box;">
+              <option value="market">Market</option>
+              <option value="limit">Limit</option>
+            </select>
+          </div>
+          <div id="trade-limit-price-wrap" style="display:none;">
+            <label style="font-size:.6rem;color:var(--muted);display:block;margin-bottom:2px;">Limit Price</label>
+            <input id="trade-limit-price" type="number" step="0.01" min="0" style="height:30px;font-size:.7rem;padding:0 6px;width:100%;box-sizing:border-box;">
+          </div>
+        </div>
+
+        <!-- SL/TP Section -->
+        <div style="margin-top:10px;padding:10px;background:var(--glass);border-radius:6px;border:1px solid var(--border2);">
+          <div style="font-size:.65rem;font-weight:600;color:var(--muted);margin-bottom:6px;display:flex;align-items:center;gap:4px;">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+            Stop Loss & Take Profit
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+            <div>
+              <label style="font-size:.55rem;color:var(--muted);display:block;margin-bottom:2px;">SL (%)</label>
+              <input id="trade-sl-pct" type="number" step="0.1" min="0" placeholder="2" style="height:28px;font-size:.7rem;padding:0 6px;width:100%;box-sizing:border-box;">
+            </div>
+            <div>
+              <label style="font-size:.55rem;color:var(--muted);display:block;margin-bottom:2px;">TP (%)</label>
+              <input id="trade-tp-pct" type="number" step="0.1" min="0" placeholder="4" style="height:28px;font-size:.7rem;padding:0 6px;width:100%;box-sizing:border-box;">
+            </div>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:6px;">
+            <div>
+              <label style="font-size:.55rem;color:var(--muted);display:block;margin-bottom:2px;">SL Price ($)</label>
+              <input id="trade-sl-price" type="number" step="0.01" min="0" placeholder="--" style="height:28px;font-size:.7rem;padding:0 6px;width:100%;box-sizing:border-box;">
+            </div>
+            <div>
+              <label style="font-size:.55rem;color:var(--muted);display:block;margin-bottom:2px;">TP Price ($)</label>
+              <input id="trade-tp-price" type="number" step="0.01" min="0" placeholder="--" style="height:28px;font-size:.7rem;padding:0 6px;width:100%;box-sizing:border-box;">
+            </div>
+          </div>
+        </div>
+
+        <!-- Order Preview -->
+        <div id="trade-preview" style="margin-top:8px;padding:8px 10px;background:var(--accent-dim);border-radius:6px;font-size:.65rem;color:var(--muted);text-align:center;display:none;">
+          <span id="trade-preview-text">Preview</span>
+        </div>
+
+        <button id="trade-submit" style="margin-top:10px;padding:10px;border:none;border-radius:8px;background:var(--accent);color:#000;font-size:.75rem;font-weight:700;cursor:pointer;width:100%;">Submit Order</button>
+        <div id="trade-result" style="font-size:.65rem;color:var(--muted);padding:4px 0;min-height:16px;text-align:center;"></div>
       </div>
+
+      <!-- Open Positions -->
+      <div class="card" style="padding:12px 14px;border:1px solid var(--border);">
+        <div style="font-size:.75rem;font-weight:700;color:var(--text);margin-bottom:8px;display:flex;align-items:center;gap:6px;">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+          Open Positions
+          <span id="trd-pos-badge" style="margin-left:auto;font-size:.6rem;background:var(--accent-dim);color:var(--accent);padding:1px 6px;border-radius:10px;">0</span>
+        </div>
+        <div id="trade-positions-list" style="font-size:.65rem;color:var(--muted);min-height:30px;">
+          <p style="text-align:center;padding:8px 0;">No open positions.</p>
+        </div>
+      </div>
+
+      <!-- Trade History -->
+      <div class="card" style="padding:12px 14px;border:1px solid var(--border);">
+        <div style="font-size:.75rem;font-weight:700;color:var(--text);margin-bottom:8px;display:flex;align-items:center;gap:6px;">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+          Recent Trades
+        </div>
+        <div id="trade-history-list" style="font-size:.65rem;color:var(--muted);min-height:30px;max-height:200px;overflow-y:auto;">
+          <p style="text-align:center;padding:8px 0;">No trade history yet.</p>
+        </div>
+      </div>
+
     </div>
   </div>
 
@@ -6837,44 +7074,148 @@ document.querySelectorAll('.tbtn').forEach(b=>{b.addEventListener('click',functi
 /* ── Manual Trade ── */
 (function(){
   let tradeSide='buy';
+  let _tradePollTimer=null;
   const sym=$('trade-symbol'),qty=$('trade-qty'),res=$('trade-result');
   const buyBtn=$('trade-side-buy'),sellBtn=$('trade-side-sell');
   const typeSel=$('trade-type'),limitWrap=$('trade-limit-price-wrap'),limitPrice=$('trade-limit-price');
+  const slPct=$('trade-sl-pct'),tpPct=$('trade-tp-pct'),slPrice=$('trade-sl-price'),tpPrice=$('trade-tp-price');
+  const eqEl=$('trd-equity'),bpEl=$('trd-bp'),posCntEl=$('trd-pos-count'),brkEl=$('trd-broker');
+  const posList=$('trade-positions-list'),histList=$('trade-history-list'),posBadge=$('trd-pos-badge');
+  const preview=$('trade-preview'),previewText=$('trade-preview-text');
+
   function setSide(s){
     tradeSide=s;
-    [buyBtn,sellBtn].forEach(b=>{b.style.borderColor='var(--border)';b.style.opacity='0.6';});
+    [buyBtn,sellBtn].forEach(b=>{b.style.borderColor='var(--border)';b.style.opacity='0.6';b.style.background='var(--glass)';});
     const active=s==='buy'?buyBtn:sellBtn;
     active.style.borderColor='var(--accent)';active.style.opacity='1';
+    active.style.background=s==='buy'?'rgba(0,201,167,0.12)':'rgba(239,68,68,0.12)';
+    updatePreview();
   }
   setSide('buy');
   buyBtn.onclick=()=>setSide('buy');
   sellBtn.onclick=()=>setSide('sell');
-  typeSel.onchange=()=>{limitWrap.style.display=typeSel.value==='limit'?'block':'none';};
+  typeSel.onchange=()=>{
+    limitWrap.style.display=typeSel.value==='limit'?'block':'none';
+    updatePreview();
+  };
+  [sym,qty,slPct,tpPct,slPrice,tpPrice,limitPrice].forEach(el=>{
+    el.addEventListener('input',updatePreview);
+  });
+
+  function updatePreview(){
+    const s=sym.value.trim().toUpperCase();
+    const q=parseFloat(qty.value);
+    if(!s||!q||q<=0){preview.style.display='none';return;}
+    const parts=[tradeSide.toUpperCase()+' '+q+' '+s];
+    if(typeSel.value==='limit'&&parseFloat(limitPrice.value)){
+      parts.push('@ $'+parseFloat(limitPrice.value).toFixed(2));
+    }
+    const sl=parseFloat(slPct.value)||parseFloat(slPrice.value);
+    const tp=parseFloat(tpPct.value)||parseFloat(tpPrice.value);
+    if(sl)parts.push('SL: '+(slPct.value?slPct.value+'%':'$'+sl.toFixed(2)));
+    if(tp)parts.push('TP: '+(tpPct.value?tpPct.value+'%':'$'+tp.toFixed(2)));
+    previewText.textContent=parts.join(' | ');
+    preview.style.display='block';
+  }
+
+  function fmtAcct(v){return v!==undefined&&v!==null&&!isNaN(v)?'$'+Number(v).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2}):'--';}
+
+  async function refreshTradeAccount(){
+    try{
+      const r=await fetch('/api/trade/account');
+      const d=await r.json();
+      if(d.error){brkEl.textContent='Error';return;}
+      eqEl.textContent=fmtAcct(d.equity);
+      bpEl.textContent=fmtAcct(d.buying_power);
+      if(d.connected){brkEl.textContent='Connected';brkEl.style.color='var(--accent)';}
+      else{brkEl.textContent='Not Connected';brkEl.style.color='var(--muted)';}
+      const pos=d.positions||[];
+      posCntEl.textContent=pos.length;
+      posBadge.textContent=pos.length;
+      if(pos.length){
+        posList.innerHTML=pos.map(p=>{
+          const sym=p.symbol||'?';
+          const qty=Math.abs(p.qty||p.quantity||0);
+          const dir=(p.qty||0)>0?'LONG':'SHORT';
+          const ep=p.avg_entry_price||p.entry_price||p.cost_basis||0;
+          const mp=p.current_price||p.market_price||0;
+          const pl=p.unrealized_pl||p.unrealized_pnl||0;
+          const plPct=ep>0?((mp-ep)/ep*100):0;
+          const plCls=pl>=0?'up':'dn';
+          return `<div style="display:flex;align-items:center;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border);">
+            <div><strong>${sym}</strong> <span style="color:${dir==='LONG'?'var(--accent)':'var(--danger)'};font-size:.6rem;font-weight:600;">${dir}</span></div>
+            <div style="text-align:right;">
+              <div style="font-weight:600;color:var(--text);">${qty} @ $${Number(ep).toFixed(2)}</div>
+              <div style="font-size:.6rem;color:var(--${plCls==='up'?'accent':'danger'});">${pl>=0?'+':''}${Number(pl).toFixed(2)} (${plPct>=0?'+':''}${plPct.toFixed(2)}%)</div>
+            </div>
+          </div>`;
+        }).join('');
+      }else{
+        posList.innerHTML='<p style="text-align:center;padding:8px 0;">No open positions.</p>';
+      }
+    }catch(e){/*ignore*/}
+  }
+
+  async function refreshTradeHistory(){
+    try{
+      const r=await fetch('/api/status');
+      const d=await r.json();
+      const orders=d.orders||[];
+      if(orders.length){
+        histList.innerHTML=orders.slice(-20).reverse().map(o=>{
+          const ts=o[0]||'';
+          const sym=o[1]||'';
+          const action=o[2]||'';
+          const qty=o[3]||0;
+          const price=o[4]||'';
+          return `<div style="display:flex;align-items:center;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--border);font-size:.6rem;">
+            <div><span style="font-weight:600;color:var(--text);">${sym}</span> <span style="color:${action==='BUY'?'var(--accent)':'var(--danger)'};">${action}</span> ${qty}</div>
+            <div style="color:var(--muted);">${price?'$'+Number(price).toFixed(2):''} <span style="font-size:.55rem;">${ts.slice(5,16)}</span></div>
+          </div>`;
+        }).join('');
+      }else{
+        histList.innerHTML='<p style="text-align:center;padding:8px 0;">No trade history yet.</p>';
+      }
+    }catch(e){/*ignore*/}
+  }
+
+  function startTradePolling(){
+    stopTradePolling();
+    refreshTradeAccount();refreshTradeHistory();
+    _tradePollTimer=setInterval(()=>{refreshTradeAccount();refreshTradeHistory();},5000);
+  }
+  function stopTradePolling(){
+    if(_tradePollTimer){clearInterval(_tradePollTimer);_tradePollTimer=null;}
+  }
+
   $('trade-submit').onclick=async function(){
     const s=sym.value.trim().toUpperCase();
     const q=parseFloat(qty.value);
     if(!s||!q||q<=0){res.textContent='Enter symbol + quantity';res.style.color='var(--warn)';return;}
     this.disabled=true;this.textContent='Submitting...';res.textContent='';
     try{
-      const r=await fetch('/api/trade',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+      const body={
         symbol:s,qty:q,side:tradeSide,order_type:typeSel.value,
-        price:typeSel.value==='limit'?parseFloat(limitPrice.value)||null:null
-      })});
+        price:typeSel.value==='limit'?parseFloat(limitPrice.value)||null:null,
+        sl_pct:parseFloat(slPct.value)||null,
+        tp_pct:parseFloat(tpPct.value)||null,
+        sl_price:parseFloat(slPrice.value)||null,
+        tp_price:parseFloat(tpPrice.value)||null
+      };
+      const r=await fetch('/api/trade',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
       const d=await r.json();
-      if(d.ok){res.textContent=d.message;res.style.color='#4caf50';}
+      if(d.ok){res.textContent=d.message;res.style.color='var(--accent)';refreshTradeHistory();}
       else{res.textContent=d.error||'Order failed';res.style.color='var(--warn)';}
     }catch(e){res.textContent='Network error';res.style.color='var(--warn)';}
     this.disabled=false;this.textContent='Submit Order';
   };
-  // Show broker status when trade tab opens
+
+  // Override switchTab for trade tab
   const origSwitch=switchTab;
   switchTab=function(name){
     origSwitch(name);
-    if(name==='trade'){
-      fetch('/api/broker_status').then(r=>r.json()).then(d=>{
-        $('trade-broker-status').textContent='Broker: '+(d.message||'Not connected');
-      }).catch(()=>{});
-    }
+    if(name==='trade'){startTradePolling();}
+    else{stopTradePolling();}
   };
 })();
 
@@ -7475,7 +7816,7 @@ if __name__ == "__main__":
     time.sleep(1.2)
 
     window = webview.create_window(
-        "TraderMoney 9.0.0",
+        "TraderMoney 9.1.0",
         "http://127.0.0.1:5050",
         width=1440,
         height=880,
