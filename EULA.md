@@ -1,6 +1,6 @@
 # End-User License Agreement (EULA) for TraderMoney
 
-**Last updated: 2026-07-01**  
+**Last updated: 2026-07-06**  
 **Version: 3.0 — MIT Commercial License**
 
 ---

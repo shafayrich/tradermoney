@@ -55,7 +55,7 @@ import webview
 from flask import Flask, Response, jsonify, request, send_file
 from flask_cors import CORS
 
-APP_VERSION = "9.1.2"
+APP_VERSION = "9.1.3"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # AI CONFIGURATION
@@ -377,7 +377,6 @@ _DEFAULT_CONFIG: dict = {
     "tp_percent": 4.0,
     "timeframe": "1m",
     "telegram": {},
-    "tv_username": "",
     "use_rsi": True,
     "use_macd": True,
     "use_vwap": True,
@@ -4345,7 +4344,7 @@ FRONTEND_HTML = r"""
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>TraderMoney 9.1.2</title>
+<title>TraderMoney 9.1.3</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root {
@@ -4491,7 +4490,7 @@ body.light #settings-modal { background: var(--surface); border: 1px solid var(-
 
 /* ── Terms Modal ── */
 #terms-modal-overlay {
-  position: fixed; inset: 0; z-index: 10000;
+  position: fixed; inset: 0; z-index: 9999;
   background: rgba(0,0,0,0.8); backdrop-filter: blur(6px);
   display: flex; align-items: center; justify-content: center;
   opacity: 0; visibility: hidden; transition: all 0.3s;
@@ -5476,6 +5475,10 @@ button.ghost:hover { box-shadow: none; }
         <input type="checkbox" id="terms-checkbox">
         <span>I understand and accept the terms and disclaimer</span>
       </label>
+      <label style="display:flex;align-items:center;gap:5px;font-size:var(--fs-xs);color:var(--muted);cursor:pointer;margin:4px 0 2px;">
+        <input type="checkbox" id="terms-dont-show">
+        Don't show this again
+      </label>
       <button id="terms-accept-btn" disabled onclick="acceptTerms()">Continue</button>
     </div>
   </div>
@@ -5524,7 +5527,7 @@ button.ghost:hover { box-shadow: none; }
     <span class="sidebar-logo">TM</span>
     <div class="sidebar-title">
       <span class="sidebar-name">TraderMoney</span>
-      <span class="sidebar-version">v9.1.2</span>
+      <span class="sidebar-version">v9.1.3</span>
     </div>
     <div class="sidebar-actions">
       <button onclick="location.reload()" title="Refresh"><svg class="icon" style="width:13px;height:13px;" viewBox="0 0 24 24"><path d="M17.65 6.35A7.958 7.958 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg></button>
@@ -5549,11 +5552,7 @@ button.ghost:hover { box-shadow: none; }
         <label>Telegram Chat ID <span style="color:var(--muted);font-weight:400;">(Pro)</span></label><input type="text" id="tgc">
       </div>
       <div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border);">
-        <label>TradingView Username <span style="color:var(--muted);font-weight:400;">(sync layouts)</span></label>
-        <div style="display:flex;gap:4px;">
-          <input type="text" id="tv-user" placeholder="e.g. trader123" style="flex:1;font-size:.7rem;">
-          <button id="tv-login-btn" onclick="showTvLoginModal()" style="padding:4px 8px;border:1px solid var(--border3);border-radius:4px;background:var(--glass);color:var(--accent);font-size:.6rem;font-weight:600;cursor:pointer;white-space:nowrap;">Sign In</button>
-        </div>
+        <button onclick="showTvLoginModal()" style="width:100%;padding:8px;border:1px solid var(--border3);border-radius:6px;background:var(--glass);color:var(--accent);font-size:.7rem;font-weight:600;cursor:pointer;">Sign in with TradingView</button>
       </div>
     </div>
   </details>
@@ -5837,7 +5836,7 @@ button.ghost:hover { box-shadow: none; }
   <div id="tab-help" class="tab">
     <div class="hb">
       <input type="text" id="help-search" placeholder="Search help... (Cmd+F)" oninput="filterHelp()" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);font-size:.82rem;margin-bottom:10px;box-sizing:border-box;">
-      <h3>TraderMoney v9.1.2 – Complete Help Guide</h3>
+      <h3>TraderMoney v9.1.3 – Complete Help Guide</h3>
       <p style="font-size:.82rem;color:var(--muted);margin-top:-4px;">Your desktop algorithmic trading terminal. All features documented below.</p>
 
       <details>
@@ -6381,7 +6380,7 @@ button.ghost:hover { box-shadow: none; }
 </div>
 
 <!-- TradingView Login Modal -->
-<div id="tv-login-modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.7);z-index:10000;backdrop-filter:blur(4px);align-items:center;justify-content:center;">
+<div id="tv-login-modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.7);z-index:10001;backdrop-filter:blur(4px);align-items:center;justify-content:center;">
   <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:28px 32px;max-width:380px;width:90%;text-align:center;box-shadow:0 20px 60px rgba(0,0,0,0.5);">
     <div style="margin-bottom:16px;">
       <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
@@ -6395,7 +6394,11 @@ button.ghost:hover { box-shadow: none; }
     <div style="font-size:.7rem;color:var(--muted);margin-bottom:20px;line-height:1.5;">Sign in to sync your chart layouts,<br>indicators, and drawings across devices.</div>
     <button id="tv-login-signin" onclick="tvLoginSignIn()" style="width:100%;padding:10px;border:none;border-radius:8px;background:#2962FF;color:#fff;font-size:.8rem;font-weight:600;cursor:pointer;margin-bottom:8px;">Sign in with TradingView</button>
     <button id="tv-login-guest" onclick="tvLoginGuest()" style="width:100%;padding:10px;border:1px solid var(--border3);border-radius:8px;background:var(--glass);color:var(--text);font-size:.8rem;font-weight:500;cursor:pointer;">Continue as Guest</button>
-    <div style="margin-top:12px;font-size:.55rem;color:var(--muted);">Signing in opens tradingview.com in a new tab</div>
+    <label style="display:flex;align-items:center;justify-content:center;gap:6px;margin-top:14px;font-size:.65rem;color:var(--muted);cursor:pointer;">
+      <input type="checkbox" id="tv-remember-me" checked>
+      Remember me
+    </label>
+    <div style="margin-top:8px;font-size:.55rem;color:var(--muted);">Signing in opens tradingview.com in a new tab</div>
     <div id="tv-login-status" style="margin-top:8px;font-size:.65rem;color:var(--muted);display:none;"></div>
   </div>
 </div>
@@ -6418,10 +6421,13 @@ function hideTermsModal(){
   if(overlay)overlay.classList.remove('show');
 }
 function acceptTerms(){
+  const dontShow=$('terms-dont-show')&&$('terms-dont-show').checked;
   localStorage.setItem('tradermoney_terms_accepted','true');
+  if(dontShow)localStorage.setItem('tradermoney_terms_dismissed','true');
   hideTermsModal();
 }
 function checkTermsAccepted(){
+  if(localStorage.getItem('tradermoney_terms_dismissed'))return;
   if(!localStorage.getItem('tradermoney_terms_accepted')){
     showTermsModal();
   }
@@ -6645,8 +6651,7 @@ function buildCfg(){
     quantity:parseInt(gv('qty','1'))||1,mode:gv('mode','signal'),direction:gv('dir','both'),
     use_default_qty:gc('udefqty'),use_bracket:gc('ubracket'),
     sl_percent:parseFloat(gv('slp','2')),tp_percent:parseFloat(gv('tpp','4')),
-    use_atr_stops:gc('uatr'),use_trailing:gc('utrail'),trailing_percent:parseFloat(gv('tralp','1.5')),use_scale_out:gc('uscale'),scale_pct1:parseFloat(gv('scale-tp1','2.0')),scale_pct2:parseFloat(gv('scale-tp2','4.0')),scale_tp1:parseInt(gv('scale-p1','60')),scale_tp2:parseInt(gv('scale-p2','40')),use_mtf_confirmation:gc('umtf'),mtf_timeframe:gv('mtf-tf','5m'),use_news_override:gc('unewsov'),telegram:{token:gv('tgt'),chat_id:gv('tgc')},
-    tv_username:gv('tv-user','').trim(),
+    use_atr_stops:gc('uatr'),use_trailing:gc('utrail'),trailing_percent:parseFloat(gv('tralp','1.5')),use_scale_out:gc('uscale'),scale_pct1:parseFloat(gv('scale-tp1','2.0')),scale_pct2:parseFloat(gv('scale-tp2','4.0')),scale_tp1:parseInt(gv('scale-p1','60')),scale_tp2:parseInt(gv('scale-p2','40')),use_mtf_confirmation:gc('umtf'),mtf_timeframe:gv('mtf-tf','5m'),use_news_override:gc('unewsov'),    telegram:{token:gv('tgt'),chat_id:gv('tgc')},
     use_rsi:gc('ursi'),use_macd:gc('umacd'),use_vwap:gc('uvwap'),use_bollinger:gc('uboll'),
     use_adx:gc('uadx'),use_vol_confirm:gc('uvol'),use_supertrend:gc('ust'),
     use_stochastic:gc('ustoch'),news_sentiment:gc('unews'),
@@ -6699,7 +6704,6 @@ function initUI(c){
   sc('udefqty',c.use_default_qty!==false);toggleDefQty();
   sv('qty',c.quantity||1);
   if(c.telegram){sv('tgt',c.telegram.token||'');sv('tgc',c.telegram.chat_id||'');}
-  sv('tv-user',c.tv_username||'');
   sv('slp',c.sl_percent||2);sv('tpp',c.tp_percent||4);
   sc('ursi',c.use_rsi!==false);sc('umacd',c.use_macd!==false);
   sc('uvwap',c.use_vwap!==false);sc('uboll',c.use_bollinger!==false);
@@ -6719,12 +6723,10 @@ function loadTradingViewChart(symbol){
   const grid=isLight?'#e5e7eb':'#1a1a1a';
   const upCol=isLight?'#00c9a7':'#00c9a7';
   const dnCol=isLight?'#ef4444':'#ef4444';
-  const tvUser=(cfg.tv_username||'').trim();
   tvWidget=new TradingView.widget({
     container_id:'chart-c',symbol:symbol,interval:'1',timezone:'Etc/UTC',
     theme:isLight?'light':'dark',style:'1',locale:'en',toolbar_bg:bg,
     enable_publishing:false,allow_symbol_change:true,autosize:true,studies:[],
-    username:tvUser||undefined,
     overrides:{
       "paneProperties.background":bg,"paneProperties.backgroundType":"solid",
       "paneProperties.vertGridProperties.color":grid,"paneProperties.horzGridProperties.color":grid,
@@ -6758,40 +6760,46 @@ function loadTradingViewChart(symbol){
 })();
 
 /* ── TradingView Login ── */
-let _tvGuestPref = false;
 function showTvLoginModal(){
-  const modal = $('tv-login-modal');
-  if(modal) modal.style.display = 'flex';
+  const modal=$('tv-login-modal');
+  if(!modal)return;
+  // Auto-close terms if open (conflicting overlays)
+  const to=$('terms-modal-overlay');
+  if(to&&to.classList.contains('show'))to.classList.remove('show');
+  modal.style.display='flex';
 }
 function hideTvLoginModal(){
-  const modal = $('tv-login-modal');
-  if(modal) modal.style.display = 'none';
+  const modal=$('tv-login-modal');
+  if(modal)modal.style.display='none';
 }
 function tvLoginSignIn(){
-  const status = $('tv-login-status');
+  const status=$('tv-login-status');
   if(status){status.style.display='block';status.textContent='Opening TradingView sign-in...';status.style.color='var(--accent)';}
   window.open('https://www.tradingview.com/accounts/signin/','_blank','width=600,height=700');
+  // If "Remember me" is checked, save pref so modal doesn't re-show
+  const rm=$('tv-remember-me');
+  if(rm&&rm.checked)localStorage.setItem('tv_login_remembered','true');
   setTimeout(()=>{
-    if(status){status.textContent='Signed in? Enter your TV username in Settings → Connection.';status.style.color='var(--muted)';}
+    if(status){status.textContent='Sign in page opened. Come back after signing in.';status.style.color='var(--muted)';}
   },2000);
 }
 function tvLoginGuest(){
-  _tvGuestPref = true;
+  const rm=$('tv-remember-me');
+  const remember=rm&&rm.checked;
+  if(remember)localStorage.setItem('tv_login_remembered','true');
   hideTvLoginModal();
-  toast('Continuing as guest. You can sign in anytime from Settings.','info');
+  toast('Continuing as guest. You can sign in anytime from Connection settings.','info');
 }
-// Auto-show once on first launch if no username set and no guest pref
+// Auto-show on first launch if not remembered
 setTimeout(()=>{
-  const tvUser = (cfg.tv_username||'').trim();
-  if(!tvUser && !_tvGuestPref && !localStorage.getItem('tv_guest_dismissed')){
+  if(!localStorage.getItem('tv_login_remembered')){
     showTvLoginModal();
   }
 },3000);
 // Click outside modal to close
-document.addEventListener('click', function(e){
-  const modal = $('tv-login-modal');
-  if(modal && modal.style.display === 'flex' && e.target === modal){
-    localStorage.setItem('tv_guest_dismissed','1');
+document.addEventListener('click',function(e){
+  const modal=$('tv-login-modal');
+  if(modal&&modal.style.display==='flex'&&e.target===modal){
     hideTvLoginModal();
   }
 });
@@ -6847,7 +6855,7 @@ async function saveConfig(){
   toast('Config saved','success');
 }
 
-const DEF={broker:'Alpaca',tickers:'AAPL',mode:'signal',direction:'both',use_default_qty:true,quantity:1,emas:[9,50],use_bracket:false,sl_percent:2,tp_percent:4,timeframe:'1m',telegram:{},tv_username:'',use_rsi:true,use_macd:true,use_vwap:true,use_bollinger:true,use_adx:true,use_vol_confirm:true,use_supertrend:true,use_stochastic:true,use_atr_stops:true,alpaca:{api_key:'',secret_key:'',paper:true},ibkr:{host:'',port:'',client_id:''},tradier:{access_token:'',account_id:'',sandbox:false},binance:{api_key:'',api_secret:'',testnet:true},bybit:{api_key:'',api_secret:'',testnet:true},okx:{api_key:'',api_secret:'',api_passphrase:'',demo:true}};
+const DEF={broker:'Alpaca',tickers:'AAPL',mode:'signal',direction:'both',use_default_qty:true,quantity:1,emas:[9,50],use_bracket:false,sl_percent:2,tp_percent:4,timeframe:'1m',telegram:{},use_rsi:true,use_macd:true,use_vwap:true,use_bollinger:true,use_adx:true,use_vol_confirm:true,use_supertrend:true,use_stochastic:true,use_atr_stops:true,alpaca:{api_key:'',secret_key:'',paper:true},ibkr:{host:'',port:'',client_id:''},tradier:{access_token:'',account_id:'',sandbox:false},binance:{api_key:'',api_secret:'',testnet:true},bybit:{api_key:'',api_secret:'',testnet:true},okx:{api_key:'',api_secret:'',api_passphrase:'',demo:true}};
 function resetDef(){cfg=JSON.parse(JSON.stringify(DEF));licValid=false;applyFreeTierUI();sv('lickey','');initUI(cfg);saveConfig();toast('Reset to factory defaults','success');}
 
 /* ── Thesis Builder ── */
@@ -7928,7 +7936,7 @@ if __name__ == "__main__":
     time.sleep(1.2)
 
     window = webview.create_window(
-        "TraderMoney 9.1.2",
+        "TraderMoney 9.1.3",
         "http://127.0.0.1:5050",
         width=1440,
         height=880,

@@ -1,6 +1,6 @@
 # Privacy Policy for TraderMoney
 
-**Last Updated:** June 15, 2026
+**Last Updated:** July 6, 2026
 
 **Effective Date:** Upon Installation
 
