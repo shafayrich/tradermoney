@@ -8159,5 +8159,6 @@ if __name__ == "__main__":
             height=880,
             min_size=(980, 700),
         )
+        webview.start()
     finally:
         _unregister_session()
