@@ -55,7 +55,7 @@ import webview
 from flask import Flask, Response, jsonify, request, send_file
 from flask_cors import CORS
 
-APP_VERSION = "9.1.3"
+APP_VERSION = "9.1.4"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # AI CONFIGURATION
@@ -71,12 +71,54 @@ NEWS_API_KEY = os.environ.get("NEWS_API_KEY", "")
 
 _CHAT_SYSTEM_PROMPT = (
     "You are TraderBot, the AI assistant built into TraderMoney – a desktop algorithmic trading terminal. "
-    "TraderMoney supports 6 brokers (Alpaca, IBKR, Tradier, Binance, Bybit, OKX) with paper and live trading. "
-    "It uses a 9-indicator confirmation engine. Pro users can auto-trade with risk management. "
-    "Free tier is signal-only, Alpaca paper, 1 ticker, core indicators. "
-    "Ticker format: comma-separated symbols, optional quantity after colon (e.g. AAPL:10, TSLA:5, BTC/USD:0.01). "
-    "Supported formats: stock symbols, crypto pairs (BTC/USD, ETH/USD). "
-    "Keep answers concise (under 220 words), practical, specific to TraderMoney. Plain text only."
+    "You know EVERY feature of the app and can guide users step by step.\n\n"
+    "=== APP OVERVIEW ===\n"
+    "TraderMoney is a desktop app with 8 tabs: Charts, Signals, History, Backtest, Analysis, Help, Live (Monitor), Trade. "
+    "Sidebar has sections: Connection, Strategy, Indicators, Watchlist, Thesis Builder, Presets, Backtest Settings.\n\n"
+    "=== BROKERS ===\n"
+    "Supports 6 brokers: Alpaca (free tier), IBKR (Pro), Tradier (Pro), Binance (Pro), Bybit (Pro), OKX (Pro). "
+    "Each has paper/testnet options. Connect via API keys in Connection section.\n\n"
+    "=== INDICATORS (9 total, 4 core free, 5 Pro) ===\n"
+    "Core (Free tier): RSI (period 14, oversold 30, overbought 70), MACD (fast 12, slow 26, signal 9), "
+    "VWAP (volume-weighted average price), Bollinger Bands (period 20, std dev 2).\n"
+    "Pro indicators: ADX (period 14, threshold 20 for trend strength), "
+    "Volume Confirmation (period 20, threshold 1.5x average), "
+    "SuperTrend (period 10, multiplier 3), Stochastic (K period 14, D period 3), "
+    "ATR Stops (period 14, stop mult 2.0, TP mult 3.0), News Sentiment.\n\n"
+    "=== STRATEGY SETTINGS ===\n"
+    "Tickers: comma-separated, optional qty after colon (e.g. AAPL:10, TSLA:5, BTC/USD:0.01). "
+    "Timeframes: 1m, 5m, 15m, 30m, 1h, 4h, 1d. "
+    "EMA periods: Fast (default 9), Slow (default 50). "
+    "Mode: Signal-Only (free), Auto Trade (Pro). "
+    "Direction: Both, Long-Only, Short-Only. "
+    "Bracket orders: SL (default 2%), TP (default 4%). "
+    "Advanced: Trailing Stop (1.5%), Scale Out (2% at 60%, 4% at 40%), "
+    "MTF Confirmation, News Override.\n\n"
+    "=== THESIS BUILDER (Pro) ===\n"
+    "Create custom trading theses with fine-tuned indicator params. "
+    "AI Auto-Tune optimizes params based on backtest results. "
+    "Step by step: 1) Click Analysis tab 2) Adjust params in Thesis Builder 3) Save thesis 4) Run backtest 5) Apply to live.\n\n"
+    "=== PRESETS ===\n"
+    "Scalping: 1m, EMA 9/50, aggressive. Swing: 15m, EMA 20/50, balanced. "
+    "Breakout: 5m, EMA 12/26, with volume confirmation.\n\n"
+    "=== BACKTESTING ===\n"
+    "Run backtests with 30+ days of data. Monte Carlo simulates scenarios. Export to CSV/PDF/PNG. "
+    "Metrics: Total Return, Win Rate, Sharpe Ratio, Max Drawdown.\n\n"
+    "=== MANUAL TRADE TAB ===\n"
+    "Place manual orders with SL/TP. See live candlestick chart, account equity, buying power, open positions, trade history. "
+    "Supports market and limit orders.\n\n"
+    "=== FREE vs PRO ===\n"
+    "Free: Alpaca paper, Signal-Only, 1 ticker, core indicators (RSI/MACD/VWAP/Bollinger), 5 AI chats/day. "
+    "Pro ($15): All 6 brokers, Auto Trade, all 9 indicators, brackets, ATR stops, Telegram, unlimited AI, "
+    "AI Auto-Tune, Thesis Builder, multiple tickers, direction control.\n\n"
+    "=== LICENSE ===\n"
+    "One license key = one active session. Enter in Settings or sidebar. License re-validates every 15 min. "
+    "Buy at tradermoney.gumroad.com/l/ykaoov.\n\n"
+    "=== GENERAL KNOWLEDGE ===\n"
+    "When asked 'how do I apply [X] thesis/theory/strategy in TraderMoney', "
+    "give a step-by-step walkthrough with specific values: which tab to go to, which indicator params to set, "
+    "which mode/direction to use. Reference real indicator names, tabs, and sidebar sections. "
+    "Keep answers concise (under 250 words), practical, and specific to TraderMoney. Plain text only."
 )
 
 _chat_counter: Dict[str, Any] = {"date": None, "count": 0}
@@ -465,8 +507,73 @@ class AppState:
         self.signal_history: List[dict] = []
         self.monitor_cache: dict = {}
         self.telegram_log: List[dict] = []
+        self.session_id: str = str(uuid.uuid4())
 
 state = AppState()
+
+# Active license sessions: {license_key: {"session_id": str, "started_at": str, "last_seen": str}}
+# Shared via a JSON file so multiple processes on same machine see each other
+_ACTIVE_SESSIONS_FILE = os.path.join(os.path.expanduser("~"), ".tradermoney_sessions.json")
+_sessions_lock = threading.Lock()
+
+def _read_sessions() -> dict:
+    if not os.path.exists(_ACTIVE_SESSIONS_FILE):
+        return {}
+    try:
+        with open(_ACTIVE_SESSIONS_FILE) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def _write_sessions(sessions: dict):
+    try:
+        with open(_ACTIVE_SESSIONS_FILE, "w") as f:
+            json.dump(sessions, f)
+    except Exception:
+        pass
+
+def _register_session(license_key: str) -> tuple[bool, str]:
+    """Returns (ok, message). Checks if this license is already active in another session."""
+    with _sessions_lock:
+        sessions = _read_sessions()
+        now = _ts()
+        # Clean stale sessions (>2 min without update)
+        stale = [k for k, v in sessions.items()
+                 if (datetime.now() - datetime.strptime(v.get("last_seen", now), "%Y-%m-%d %H:%M:%S")).total_seconds() > 120]
+        for k in stale:
+            del sessions[k]
+        existing = sessions.get(license_key)
+        if existing and existing.get("session_id") != state.session_id:
+            return False, "This license key is already in use by another session. Only one session per license is allowed."
+        sessions[license_key] = {
+            "session_id": state.session_id,
+            "started_at": now,
+            "last_seen": now,
+        }
+        _write_sessions(sessions)
+        return True, "Session registered"
+
+def _heartbeat_session():
+    """Periodically update last_seen for this session's license."""
+    while True:
+        time.sleep(60)
+        key = state.config.get("license_key", "").strip()
+        if key:
+            with _sessions_lock:
+                sessions = _read_sessions()
+                if sessions.get(key, {}).get("session_id") == state.session_id:
+                    sessions[key]["last_seen"] = _ts()
+                    _write_sessions(sessions)
+
+def _unregister_session():
+    """Remove this session on shutdown."""
+    key = state.config.get("license_key", "").strip()
+    if key:
+        with _sessions_lock:
+            sessions = _read_sessions()
+            if sessions.get(key, {}).get("session_id") == state.session_id:
+                del sessions[key]
+                _write_sessions(sessions)
 
 def _ts() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -2731,7 +2838,25 @@ def _get_offline_response(messages: List[dict]) -> str:
             last_user_msg = msg.get("content", "").lower()
             break
 
-    if any(word in last_user_msg for word in ["indicator", "rsi", "macd", "ema", "signal"]):
+    if any(word in last_user_msg for word in ["thesis", "liquidity", "reversal", "breakout", "momentum"]):
+        return (
+            "I'm in offline mode but here's a step-by-step guide you can apply right now:\n\n"
+            "**For a Liquidity Reversal Thesis:**\n"
+            "1. Go to the Strategy section in the sidebar\n"
+            "2. Set EMA Fast=9, EMA Slow=50 for short-term reversals (or 20/50 for swing)\n"
+            "3. Enable RSI (oversold 30/overbought 70) and MACD (12/26/9)\n"
+            "4. Enable Bollinger Bands (period 20, std 2) to spot volatility squeezes\n"
+            "5. In the Thesis Builder (Pro), set SL%=2, TP%=4, enable ATR Stops\n"
+            "6. Set Direction='Both' and run a backtest on 30-90 days of data\n"
+            "7. Look for setups where price touches the lower BB, RSI<30, and MACD crosses up\n\n"
+            "**For a Breakout Thesis:**\n"
+            "1. Use 5m-15m timeframe with EMA 12/26\n"
+            "2. Enable Volume Confirmation (threshold 1.5x) and ADX (threshold 20)\n"
+            "3. Enable SuperTrend (period 10, mult 3) for trend direction\n"
+            "4. Set Direction='Long-Only' for upside breakouts\n\n"
+            "The AI service will be back soon. Check the Help tab and Presets for ready-made strategies."
+        )
+    elif any(word in last_user_msg for word in ["indicator", "rsi", "macd", "ema", "signal"]):
         return (
             "I'm currently in offline mode (AI API unavailable). Here's what I can tell you:\n\n"
             "• EMA Crossover is your base signal – when the fast EMA crosses above the slow EMA, it's a buy signal\n"
@@ -2759,6 +2884,18 @@ def _get_offline_response(messages: List[dict]) -> str:
             "• Export to CSV/PDF to track your results over time\n"
             "• Try AI Auto-Tune when the service is back online for personalized optimization\n\n"
             "The AI service should be available again soon."
+        )
+    elif any(word in last_user_msg for word in ["trade", "manual", "order", "buy", "sell"]):
+        return (
+            "I'm in offline mode. Here's how to place a manual trade:\n\n"
+            "1. Click the Trade tab\n"
+            "2. Enter Symbol (e.g. AAPL) and Quantity\n"
+            "3. Click BUY or SELL (the active side is highlighted)\n"
+            "4. Choose Market (fills now) or Limit (set your price)\n"
+            "5. Set SL% and TP% for stop-loss/take-profit protection\n"
+            "6. Review the Order Preview then click Submit Order\n"
+            "7. Track your position in Open Positions below\n\n"
+            "The Trade tab also shows Account Equity, Buy Power, and Trade History."
         )
     else:
         return (
@@ -3074,10 +3211,14 @@ def api_validate_license():
         return jsonify({"valid": False, "message": "No license key provided"})
     valid, msg = verify_gumroad_license(key)
     if valid:
+        # Check single-session enforcement
+        ok, sess_msg = _register_session(key)
+        if not ok:
+            return jsonify({"valid": False, "message": sess_msg})
         state.config["license_key"] = key
         state.config["license_valid"] = True
         EncryptedConfigManager.save(state.config)
-        return jsonify({"valid": True, "message": "License verified"})
+        return jsonify({"valid": True, "message": "License verified – session registered"})
     state.config["license_valid"] = False
     return jsonify({"valid": False, "message": msg})
 
@@ -4344,7 +4485,7 @@ FRONTEND_HTML = r"""
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>TraderMoney 9.1.3</title>
+<title>TraderMoney 9.1.4</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root {
@@ -5527,7 +5668,7 @@ button.ghost:hover { box-shadow: none; }
     <span class="sidebar-logo">TM</span>
     <div class="sidebar-title">
       <span class="sidebar-name">TraderMoney</span>
-      <span class="sidebar-version">v9.1.3</span>
+      <span class="sidebar-version">v9.1.4</span>
     </div>
     <div class="sidebar-actions">
       <button onclick="location.reload()" title="Refresh"><svg class="icon" style="width:13px;height:13px;" viewBox="0 0 24 24"><path d="M17.65 6.35A7.958 7.958 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg></button>
@@ -5836,7 +5977,7 @@ button.ghost:hover { box-shadow: none; }
   <div id="tab-help" class="tab">
     <div class="hb">
       <input type="text" id="help-search" placeholder="Search help... (Cmd+F)" oninput="filterHelp()" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);font-size:.82rem;margin-bottom:10px;box-sizing:border-box;">
-      <h3>TraderMoney v9.1.3 – Complete Help Guide</h3>
+      <h3>TraderMoney v9.1.4 – Complete Help Guide</h3>
       <p style="font-size:.82rem;color:var(--muted);margin-top:-4px;">Your desktop algorithmic trading terminal. All features documented below.</p>
 
       <details>
@@ -6262,11 +6403,11 @@ button.ghost:hover { box-shadow: none; }
         </div>
       </div>
 
-      <!-- Main two-column layout -->
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;flex:1;">
+      <!-- Main three-column layout -->
+      <div style="display:grid;grid-template-columns:300px 1fr 300px;gap:12px;flex:1;min-height:0;">
 
         <!-- Left Column: Order Entry -->
-        <div style="display:flex;flex-direction:column;gap:12px;">
+        <div style="display:flex;flex-direction:column;gap:12px;overflow:auto;">
 
           <!-- Order Entry Panel -->
           <div class="card" style="padding:14px;border:1px solid var(--border);">
@@ -6344,8 +6485,20 @@ button.ghost:hover { box-shadow: none; }
 
         </div>
 
+        <!-- Center Column: Live Candlestick Chart -->
+        <div style="display:flex;flex-direction:column;gap:12px;min-height:0;">
+          <div class="card" style="padding:10px;border:1px solid var(--border);flex:1;display:flex;flex-direction:column;min-height:0;">
+            <div style="font-size:.75rem;font-weight:700;color:var(--text);margin-bottom:6px;display:flex;align-items:center;gap:6px;">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4v16h16"/><path d="M8 16V8l4 4 4-4v8"/></svg>
+              Live Chart
+              <span style="font-size:.55rem;font-weight:400;color:var(--muted);margin-left:auto;" id="trade-chart-sym">AAPL</span>
+            </div>
+            <div id="trade-chart-container" style="flex:1;min-height:0;"></div>
+          </div>
+        </div>
+
         <!-- Right Column: Positions + History -->
-        <div style="display:flex;flex-direction:column;gap:12px;">
+        <div style="display:flex;flex-direction:column;gap:12px;overflow:auto;">
 
           <!-- Open Positions -->
           <div class="card" style="padding:12px 14px;border:1px solid var(--border);flex:1;">
@@ -6403,8 +6556,9 @@ button.ghost:hover { box-shadow: none; }
   </div>
 </div>
 
-<!-- TradingView embedded chart -->
+<!-- TradingView embedded chart + Lightweight Charts for Trade tab -->
 <script src="https://s3.tradingview.com/tv.js"></script>
+<script src="https://unpkg.com/lightweight-charts@4.2.1/dist/lightweight-charts.standalone.production.js"></script>
 <script>
 'use strict';
  const $=id=>document.getElementById(id);
@@ -6727,6 +6881,10 @@ function loadTradingViewChart(symbol){
     container_id:'chart-c',symbol:symbol,interval:'1',timezone:'Etc/UTC',
     theme:isLight?'light':'dark',style:'1',locale:'en',toolbar_bg:bg,
     enable_publishing:false,allow_symbol_change:true,autosize:true,studies:[],
+    disabled_features:[
+      'use_localstorage_for_settings','header_saveload','save_chart_properties_to_local_storage',
+      'show_logo_on_all_charts','caption_buttons_text_if_possible'
+    ],
     overrides:{
       "paneProperties.background":bg,"paneProperties.backgroundType":"solid",
       "paneProperties.vertGridProperties.color":grid,"paneProperties.horzGridProperties.color":grid,
@@ -7334,10 +7492,64 @@ document.querySelectorAll('.tbtn').forEach(b=>{b.addEventListener('click',functi
   const origSwitch=switchTab;
   switchTab=function(name){
     origSwitch(name);
-    if(name==='trade'){startTradePolling();}
+    if(name==='trade'){startTradePolling();initTradeChart();}
     else{stopTradePolling();}
   };
 })();
+
+/* ── Trade Tab Live Chart (Lightweight Charts) ── */
+let tradeChart=null,tradeChartSeries=null,tradeChartInterval=null;
+async function initTradeChart(){
+  const container=$('trade-chart-container');
+  if(!container||container.clientWidth===0)return;
+  if(tradeChart){try{tradeChart.remove();}catch(e){}tradeChart=null;tradeChartSeries=null;}
+  try{
+    tradeChart=LightweightCharts.createChart(container,{
+      width:container.clientWidth,height:container.clientHeight||300,
+      layout:{background:{color:'transparent'},textColor:'#94a3b8'},
+      grid:{vertLines:{color:'rgba(255,255,255,0.04)'},horzLines:{color:'rgba(255,255,255,0.04)'}},
+      timeScale:{borderColor:'rgba(255,255,255,0.08)',timeVisible:true,secondsVisible:false},
+      rightPriceScale:{borderColor:'rgba(255,255,255,0.08)'},
+      crosshair:{mode:LightweightCharts.CrosshairMode.Normal},
+    });
+    tradeChartSeries=tradeChart.addCandlestickSeries({
+      upColor:'#00c9a7',downColor:'#ef4444',borderDownColor:'#ef4444',borderUpColor:'#00c9a7',
+      wickDownColor:'#ef4444',wickUpColor:'#00c9a7',
+    });
+    loadTradeChartData();
+    if(!tradeChartInterval) tradeChartInterval=setInterval(loadTradeChartData,30000);
+    // Resize observer
+    const ro=new ResizeObserver(()=>{
+      if(tradeChart&&container.clientWidth>0)
+        tradeChart.applyOptions({width:container.clientWidth,height:container.clientHeight});
+    });
+    ro.observe(container);
+  }catch(e){console.error('Trade chart init error:',e);}
+}
+async function loadTradeChartData(){
+  const sym=$('trade-symbol');
+  const s=sym?sym.value.trim().toUpperCase()||'AAPL':'AAPL';
+  const symEl=$('trade-chart-sym');
+  if(symEl)symEl.textContent=s;
+  try{
+    const r=await fetch(`/api/candles?symbol=${s}&interval=5m`);
+    const data=await r.json();
+    if(Array.isArray(data)&&data.length&&tradeChartSeries){
+      tradeChartSeries.setData(data.map(d=>({time:d.time,open:d.open,high:d.high,low:d.low,close:d.close})));
+      tradeChart.timeScale().fitContent();
+    }
+  }catch(e){/*ignore*/}
+}
+// Also load chart data when symbol input changes
+document.addEventListener('DOMContentLoaded',function(){
+  const symInput=$('trade-symbol');
+  if(symInput){
+    symInput.addEventListener('change',function(){
+      const s=this.value.trim().toUpperCase();
+      if(s)loadTradeChartData();
+    });
+  }
+});
 
 /* ── Presets ── */
 const PRESETS={
@@ -7931,15 +8143,21 @@ if __name__ == "__main__":
     _license_check_thread = threading.Thread(target=_periodic_checks, daemon=True)
     _license_check_thread.start()
 
+    # Start session heartbeat thread
+    _hb_thread = threading.Thread(target=_heartbeat_session, daemon=True)
+    _hb_thread.start()
+
     flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()
     time.sleep(1.2)
 
-    window = webview.create_window(
-        "TraderMoney 9.1.3",
-        "http://127.0.0.1:5050",
-        width=1440,
-        height=880,
-        min_size=(980, 700),
-    )
-    webview.start()
+    try:
+        webview.create_window(
+            "TraderMoney 9.1.4",
+            "http://127.0.0.1:5050",
+            width=1440,
+            height=880,
+            min_size=(980, 700),
+        )
+    finally:
+        _unregister_session()
