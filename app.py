@@ -55,7 +55,7 @@ import webview
 from flask import Flask, Response, jsonify, request, send_file
 from flask_cors import CORS
 
-APP_VERSION = "9.1.1"
+APP_VERSION = "9.1.2"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # AI CONFIGURATION
@@ -4345,7 +4345,7 @@ FRONTEND_HTML = r"""
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>TraderMoney 9.1.1</title>
+<title>TraderMoney 9.1.2</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root {
@@ -5524,7 +5524,7 @@ button.ghost:hover { box-shadow: none; }
     <span class="sidebar-logo">TM</span>
     <div class="sidebar-title">
       <span class="sidebar-name">TraderMoney</span>
-      <span class="sidebar-version">v9.1.1</span>
+      <span class="sidebar-version">v9.1.2</span>
     </div>
     <div class="sidebar-actions">
       <button onclick="location.reload()" title="Refresh"><svg class="icon" style="width:13px;height:13px;" viewBox="0 0 24 24"><path d="M17.65 6.35A7.958 7.958 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg></button>
@@ -5550,7 +5550,10 @@ button.ghost:hover { box-shadow: none; }
       </div>
       <div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border);">
         <label>TradingView Username <span style="color:var(--muted);font-weight:400;">(sync layouts)</span></label>
-        <input type="text" id="tv-user" placeholder="e.g. trader123" style="font-size:.7rem;">
+        <div style="display:flex;gap:4px;">
+          <input type="text" id="tv-user" placeholder="e.g. trader123" style="flex:1;font-size:.7rem;">
+          <button id="tv-login-btn" onclick="showTvLoginModal()" style="padding:4px 8px;border:1px solid var(--border3);border-radius:4px;background:var(--glass);color:var(--accent);font-size:.6rem;font-weight:600;cursor:pointer;white-space:nowrap;">Sign In</button>
+        </div>
       </div>
     </div>
   </details>
@@ -5834,7 +5837,7 @@ button.ghost:hover { box-shadow: none; }
   <div id="tab-help" class="tab">
     <div class="hb">
       <input type="text" id="help-search" placeholder="Search help... (Cmd+F)" oninput="filterHelp()" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);font-size:.82rem;margin-bottom:10px;box-sizing:border-box;">
-      <h3>TraderMoney v9.1.1 – Complete Help Guide</h3>
+      <h3>TraderMoney v9.1.2 – Complete Help Guide</h3>
       <p style="font-size:.82rem;color:var(--muted);margin-top:-4px;">Your desktop algorithmic trading terminal. All features documented below.</p>
 
       <details>
@@ -6238,7 +6241,7 @@ button.ghost:hover { box-shadow: none; }
 
   <!-- Trade tab -->
   <div id="tab-trade" class="tab">
-    <div style="padding:18px 20px;overflow:auto;flex:1;display:flex;flex-direction:column;gap:12px;max-width:500px;">
+    <div style="padding:18px 20px;overflow:auto;flex:1;display:flex;flex-direction:column;gap:12px;">
 
       <!-- Account Summary -->
       <div id="trade-account-summary" style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;margin-bottom:4px;">
@@ -6260,100 +6263,114 @@ button.ghost:hover { box-shadow: none; }
         </div>
       </div>
 
-      <!-- Order Entry Panel -->
-      <div class="card" style="padding:14px;border:1px solid var(--border);">
-        <div style="font-size:.8rem;font-weight:700;color:var(--accent);margin-bottom:10px;display:flex;align-items:center;gap:6px;">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
-          New Order
-        </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
-          <div>
-            <label style="font-size:.6rem;color:var(--muted);display:block;margin-bottom:2px;">Symbol</label>
-            <input id="trade-symbol" type="text" placeholder="AAPL" style="height:30px;font-size:.75rem;padding:0 8px;text-transform:uppercase;width:100%;box-sizing:border-box;">
-          </div>
-          <div>
-            <label style="font-size:.6rem;color:var(--muted);display:block;margin-bottom:2px;">Quantity</label>
-            <input id="trade-qty" type="number" value="1" min="0.0001" step="any" style="height:30px;font-size:.75rem;padding:0 8px;width:100%;box-sizing:border-box;">
-          </div>
-        </div>
-        <div style="margin-top:8px;">
-          <label style="font-size:.6rem;color:var(--muted);display:block;margin-bottom:2px;">Side</label>
-          <div style="display:flex;gap:6px;">
-            <button id="trade-side-buy" class="tbtn" style="flex:1;padding:6px;font-size:.7rem;border:2px solid var(--border);border-radius:6px;cursor:pointer;background:var(--glass);color:var(--fg);font-weight:600;">BUY</button>
-            <button id="trade-side-sell" class="tbtn" style="flex:1;padding:6px;font-size:.7rem;border:2px solid var(--border);border-radius:6px;cursor:pointer;background:var(--glass);color:var(--fg);font-weight:600;">SELL</button>
-          </div>
-        </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px;">
-          <div>
-            <label style="font-size:.6rem;color:var(--muted);display:block;margin-bottom:2px;">Order Type</label>
-            <select id="trade-type" style="height:30px;font-size:.7rem;padding:0 6px;width:100%;box-sizing:border-box;">
-              <option value="market">Market</option>
-              <option value="limit">Limit</option>
-            </select>
-          </div>
-          <div id="trade-limit-price-wrap" style="display:none;">
-            <label style="font-size:.6rem;color:var(--muted);display:block;margin-bottom:2px;">Limit Price</label>
-            <input id="trade-limit-price" type="number" step="0.01" min="0" style="height:30px;font-size:.7rem;padding:0 6px;width:100%;box-sizing:border-box;">
-          </div>
-        </div>
+      <!-- Main two-column layout -->
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;flex:1;">
 
-        <!-- SL/TP Section -->
-        <div style="margin-top:10px;padding:10px;background:var(--glass);border-radius:6px;border:1px solid var(--border2);">
-          <div style="font-size:.65rem;font-weight:600;color:var(--muted);margin-bottom:6px;display:flex;align-items:center;gap:4px;">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
-            Stop Loss & Take Profit
-          </div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
-            <div>
-              <label style="font-size:.55rem;color:var(--muted);display:block;margin-bottom:2px;">SL (%)</label>
-              <input id="trade-sl-pct" type="number" step="0.1" min="0" placeholder="2" style="height:28px;font-size:.7rem;padding:0 6px;width:100%;box-sizing:border-box;">
+        <!-- Left Column: Order Entry -->
+        <div style="display:flex;flex-direction:column;gap:12px;">
+
+          <!-- Order Entry Panel -->
+          <div class="card" style="padding:14px;border:1px solid var(--border);">
+            <div style="font-size:.8rem;font-weight:700;color:var(--accent);margin-bottom:10px;display:flex;align-items:center;gap:6px;">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+              New Order
             </div>
-            <div>
-              <label style="font-size:.55rem;color:var(--muted);display:block;margin-bottom:2px;">TP (%)</label>
-              <input id="trade-tp-pct" type="number" step="0.1" min="0" placeholder="4" style="height:28px;font-size:.7rem;padding:0 6px;width:100%;box-sizing:border-box;">
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+              <div>
+                <label style="font-size:.6rem;color:var(--muted);display:block;margin-bottom:2px;">Symbol</label>
+                <input id="trade-symbol" type="text" placeholder="AAPL" style="height:30px;font-size:.75rem;padding:0 8px;text-transform:uppercase;width:100%;box-sizing:border-box;">
+              </div>
+              <div>
+                <label style="font-size:.6rem;color:var(--muted);display:block;margin-bottom:2px;">Quantity</label>
+                <input id="trade-qty" type="number" value="1" min="0.0001" step="any" style="height:30px;font-size:.75rem;padding:0 8px;width:100%;box-sizing:border-box;">
+              </div>
+            </div>
+            <div style="margin-top:8px;">
+              <label style="font-size:.6rem;color:var(--muted);display:block;margin-bottom:2px;">Side</label>
+              <div style="display:flex;gap:6px;">
+                <button id="trade-side-buy" class="tbtn" style="flex:1;padding:6px;font-size:.7rem;border:2px solid var(--border);border-radius:6px;cursor:pointer;background:var(--glass);color:var(--fg);font-weight:600;">BUY</button>
+                <button id="trade-side-sell" class="tbtn" style="flex:1;padding:6px;font-size:.7rem;border:2px solid var(--border);border-radius:6px;cursor:pointer;background:var(--glass);color:var(--fg);font-weight:600;">SELL</button>
+              </div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px;">
+              <div>
+                <label style="font-size:.6rem;color:var(--muted);display:block;margin-bottom:2px;">Order Type</label>
+                <select id="trade-type" style="height:30px;font-size:.7rem;padding:0 6px;width:100%;box-sizing:border-box;">
+                  <option value="market">Market</option>
+                  <option value="limit">Limit</option>
+                </select>
+              </div>
+              <div id="trade-limit-price-wrap" style="display:none;">
+                <label style="font-size:.6rem;color:var(--muted);display:block;margin-bottom:2px;">Limit Price</label>
+                <input id="trade-limit-price" type="number" step="0.01" min="0" style="height:30px;font-size:.7rem;padding:0 6px;width:100%;box-sizing:border-box;">
+              </div>
+            </div>
+
+            <!-- SL/TP Section -->
+            <div style="margin-top:10px;padding:10px;background:var(--glass);border-radius:6px;border:1px solid var(--border2);">
+              <div style="font-size:.65rem;font-weight:600;color:var(--muted);margin-bottom:6px;display:flex;align-items:center;gap:4px;">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+                Stop Loss & Take Profit
+              </div>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+                <div>
+                  <label style="font-size:.55rem;color:var(--muted);display:block;margin-bottom:2px;">SL (%)</label>
+                  <input id="trade-sl-pct" type="number" step="0.1" min="0" placeholder="2" style="height:28px;font-size:.7rem;padding:0 6px;width:100%;box-sizing:border-box;">
+                </div>
+                <div>
+                  <label style="font-size:.55rem;color:var(--muted);display:block;margin-bottom:2px;">TP (%)</label>
+                  <input id="trade-tp-pct" type="number" step="0.1" min="0" placeholder="4" style="height:28px;font-size:.7rem;padding:0 6px;width:100%;box-sizing:border-box;">
+                </div>
+              </div>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:6px;">
+                <div>
+                  <label style="font-size:.55rem;color:var(--muted);display:block;margin-bottom:2px;">SL Price ($)</label>
+                  <input id="trade-sl-price" type="number" step="0.01" min="0" placeholder="--" style="height:28px;font-size:.7rem;padding:0 6px;width:100%;box-sizing:border-box;">
+                </div>
+                <div>
+                  <label style="font-size:.55rem;color:var(--muted);display:block;margin-bottom:2px;">TP Price ($)</label>
+                  <input id="trade-tp-price" type="number" step="0.01" min="0" placeholder="--" style="height:28px;font-size:.7rem;padding:0 6px;width:100%;box-sizing:border-box;">
+                </div>
+              </div>
+            </div>
+
+            <!-- Order Preview -->
+            <div id="trade-preview" style="margin-top:8px;padding:8px 10px;background:var(--accent-dim);border-radius:6px;font-size:.65rem;color:var(--muted);text-align:center;display:none;">
+              <span id="trade-preview-text">Preview</span>
+            </div>
+
+            <button id="trade-submit" style="margin-top:10px;padding:10px;border:none;border-radius:8px;background:var(--accent);color:#000;font-size:.75rem;font-weight:700;cursor:pointer;width:100%;">Submit Order</button>
+            <div id="trade-result" style="font-size:.65rem;color:var(--muted);padding:4px 0;min-height:16px;text-align:center;"></div>
+          </div>
+
+        </div>
+
+        <!-- Right Column: Positions + History -->
+        <div style="display:flex;flex-direction:column;gap:12px;">
+
+          <!-- Open Positions -->
+          <div class="card" style="padding:12px 14px;border:1px solid var(--border);flex:1;">
+            <div style="font-size:.75rem;font-weight:700;color:var(--text);margin-bottom:8px;display:flex;align-items:center;gap:6px;">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+              Open Positions
+              <span id="trd-pos-badge" style="margin-left:auto;font-size:.6rem;background:var(--accent-dim);color:var(--accent);padding:1px 6px;border-radius:10px;">0</span>
+            </div>
+            <div id="trade-positions-list" style="font-size:.65rem;color:var(--muted);min-height:30px;">
+              <p style="text-align:center;padding:8px 0;">No open positions.</p>
             </div>
           </div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:6px;">
-            <div>
-              <label style="font-size:.55rem;color:var(--muted);display:block;margin-bottom:2px;">SL Price ($)</label>
-              <input id="trade-sl-price" type="number" step="0.01" min="0" placeholder="--" style="height:28px;font-size:.7rem;padding:0 6px;width:100%;box-sizing:border-box;">
+
+          <!-- Trade History -->
+          <div class="card" style="padding:12px 14px;border:1px solid var(--border);flex:1;">
+            <div style="font-size:.75rem;font-weight:700;color:var(--text);margin-bottom:8px;display:flex;align-items:center;gap:6px;">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+              Recent Trades
             </div>
-            <div>
-              <label style="font-size:.55rem;color:var(--muted);display:block;margin-bottom:2px;">TP Price ($)</label>
-              <input id="trade-tp-price" type="number" step="0.01" min="0" placeholder="--" style="height:28px;font-size:.7rem;padding:0 6px;width:100%;box-sizing:border-box;">
+            <div id="trade-history-list" style="font-size:.65rem;color:var(--muted);min-height:30px;max-height:250px;overflow-y:auto;">
+              <p style="text-align:center;padding:8px 0;">No trade history yet.</p>
             </div>
           </div>
-        </div>
 
-        <!-- Order Preview -->
-        <div id="trade-preview" style="margin-top:8px;padding:8px 10px;background:var(--accent-dim);border-radius:6px;font-size:.65rem;color:var(--muted);text-align:center;display:none;">
-          <span id="trade-preview-text">Preview</span>
-        </div>
-
-        <button id="trade-submit" style="margin-top:10px;padding:10px;border:none;border-radius:8px;background:var(--accent);color:#000;font-size:.75rem;font-weight:700;cursor:pointer;width:100%;">Submit Order</button>
-        <div id="trade-result" style="font-size:.65rem;color:var(--muted);padding:4px 0;min-height:16px;text-align:center;"></div>
-      </div>
-
-      <!-- Open Positions -->
-      <div class="card" style="padding:12px 14px;border:1px solid var(--border);">
-        <div style="font-size:.75rem;font-weight:700;color:var(--text);margin-bottom:8px;display:flex;align-items:center;gap:6px;">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
-          Open Positions
-          <span id="trd-pos-badge" style="margin-left:auto;font-size:.6rem;background:var(--accent-dim);color:var(--accent);padding:1px 6px;border-radius:10px;">0</span>
-        </div>
-        <div id="trade-positions-list" style="font-size:.65rem;color:var(--muted);min-height:30px;">
-          <p style="text-align:center;padding:8px 0;">No open positions.</p>
-        </div>
-      </div>
-
-      <!-- Trade History -->
-      <div class="card" style="padding:12px 14px;border:1px solid var(--border);">
-        <div style="font-size:.75rem;font-weight:700;color:var(--text);margin-bottom:8px;display:flex;align-items:center;gap:6px;">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-          Recent Trades
-        </div>
-        <div id="trade-history-list" style="font-size:.65rem;color:var(--muted);min-height:30px;max-height:200px;overflow-y:auto;">
-          <p style="text-align:center;padding:8px 0;">No trade history yet.</p>
         </div>
       </div>
 
@@ -6361,6 +6378,26 @@ button.ghost:hover { box-shadow: none; }
   </div>
 
   <div id="logbar"></div>
+</div>
+
+<!-- TradingView Login Modal -->
+<div id="tv-login-modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.7);z-index:10000;backdrop-filter:blur(4px);align-items:center;justify-content:center;">
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:28px 32px;max-width:380px;width:90%;text-align:center;box-shadow:0 20px 60px rgba(0,0,0,0.5);">
+    <div style="margin-bottom:16px;">
+      <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
+        <rect width="48" height="48" rx="8" fill="#131722"/>
+        <path d="M12 16h24v2H12zM12 22h20v2H12zM12 28h16v2H12zM12 34h24v2H12z" fill="#2962FF"/>
+        <path d="M36 16l4 4-4 4" stroke="#2962FF" stroke-width="2" fill="none"/>
+        <path d="M36 28l4 4-4 4" stroke="#2962FF" stroke-width="2" fill="none"/>
+      </svg>
+    </div>
+    <div style="font-size:1rem;font-weight:700;color:var(--text);margin-bottom:4px;">TradingView</div>
+    <div style="font-size:.7rem;color:var(--muted);margin-bottom:20px;line-height:1.5;">Sign in to sync your chart layouts,<br>indicators, and drawings across devices.</div>
+    <button id="tv-login-signin" onclick="tvLoginSignIn()" style="width:100%;padding:10px;border:none;border-radius:8px;background:#2962FF;color:#fff;font-size:.8rem;font-weight:600;cursor:pointer;margin-bottom:8px;">Sign in with TradingView</button>
+    <button id="tv-login-guest" onclick="tvLoginGuest()" style="width:100%;padding:10px;border:1px solid var(--border3);border-radius:8px;background:var(--glass);color:var(--text);font-size:.8rem;font-weight:500;cursor:pointer;">Continue as Guest</button>
+    <div style="margin-top:12px;font-size:.55rem;color:var(--muted);">Signing in opens tradingview.com in a new tab</div>
+    <div id="tv-login-status" style="margin-top:8px;font-size:.65rem;color:var(--muted);display:none;"></div>
+  </div>
 </div>
 
 <!-- TradingView embedded chart -->
@@ -6719,6 +6756,45 @@ function loadTradingViewChart(symbol){
   $('chart-buy-btn').onclick=()=>chartTrade('buy');
   $('chart-sell-btn').onclick=()=>chartTrade('sell');
 })();
+
+/* ── TradingView Login ── */
+let _tvGuestPref = false;
+function showTvLoginModal(){
+  const modal = $('tv-login-modal');
+  if(modal) modal.style.display = 'flex';
+}
+function hideTvLoginModal(){
+  const modal = $('tv-login-modal');
+  if(modal) modal.style.display = 'none';
+}
+function tvLoginSignIn(){
+  const status = $('tv-login-status');
+  if(status){status.style.display='block';status.textContent='Opening TradingView sign-in...';status.style.color='var(--accent)';}
+  window.open('https://www.tradingview.com/accounts/signin/','_blank','width=600,height=700');
+  setTimeout(()=>{
+    if(status){status.textContent='Signed in? Enter your TV username in Settings → Connection.';status.style.color='var(--muted)';}
+  },2000);
+}
+function tvLoginGuest(){
+  _tvGuestPref = true;
+  hideTvLoginModal();
+  toast('Continuing as guest. You can sign in anytime from Settings.','info');
+}
+// Auto-show once on first launch if no username set and no guest pref
+setTimeout(()=>{
+  const tvUser = (cfg.tv_username||'').trim();
+  if(!tvUser && !_tvGuestPref && !localStorage.getItem('tv_guest_dismissed')){
+    showTvLoginModal();
+  }
+},3000);
+// Click outside modal to close
+document.addEventListener('click', function(e){
+  const modal = $('tv-login-modal');
+  if(modal && modal.style.display === 'flex' && e.target === modal){
+    localStorage.setItem('tv_guest_dismissed','1');
+    hideTvLoginModal();
+  }
+});
 
 function reloadChart(){
   refreshTickers();
@@ -7852,7 +7928,7 @@ if __name__ == "__main__":
     time.sleep(1.2)
 
     window = webview.create_window(
-        "TraderMoney 9.1.1",
+        "TraderMoney 9.1.2",
         "http://127.0.0.1:5050",
         width=1440,
         height=880,
