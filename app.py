@@ -7011,9 +7011,6 @@ function openTvLogin(){
     }
   }
 }
-    },1000);
-  }
-}
 function tvLogout(){
   localStorage.removeItem('tv_login_remembered');
   toast('TradingView session cleared. Close and reopen the app to fully sign out.','info');
@@ -7022,7 +7019,7 @@ function reloadAllTvWidgets(){
   if(tvWidget)try{tvWidget.remove();}catch(e){}
   if(tradeTvWidget)try{tradeTvWidget.remove();}catch(e){}
   if(lastTvSymbol)loadTradingViewChart(lastTvSymbol);
-  if(lastTradeTvSymbol)initTradeTvChart(lastTradeTvSymbol);
+  if(lastTradeTvSym)initTradeTvChart(lastTradeTvSym);
   toast('All charts reloaded','success');
 }
 
