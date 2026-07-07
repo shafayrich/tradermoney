@@ -8194,6 +8194,28 @@ if __name__ == "__main__":
                 )
                 _tv_login_window = win
 
+                # Override window.open so OAuth popups redirect in-window instead of
+                # opening in the system browser (which breaks postMessage/opener)
+                def _inject_popup_fix():
+                    js = """
+                    (function(){
+                        if(window.__tvPatch)return;
+                        window.__tvPatch=true;
+                        var orig=window.open;
+                        window.open=function(url){
+                            if(!url)return null;
+                            setTimeout(function(){window.location.href=url},50);
+                            return null;
+                        };
+                    })();
+                    """
+                    try:
+                        win.evaluate_js(js)
+                    except Exception:
+                        pass
+
+                win.events.loaded += lambda: _inject_popup_fix()
+
                 def _on_closed():
                     main = None
                     for w in webview.windows:
