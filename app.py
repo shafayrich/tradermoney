@@ -55,7 +55,7 @@ import webview
 from flask import Flask, Response, jsonify, request, send_file
 from flask_cors import CORS
 
-APP_VERSION = "9.1.5"
+APP_VERSION = "9.1.6"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # AI CONFIGURATION
@@ -65,6 +65,8 @@ OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY") or base64.b64decode(
     "c2stb3ItdjEtYTc2ODhjODhiMjRhYWUwNTU0ZWMyNTY1OGEzNjBjMzBkYzZjNWRlNTQ0MDlmN2IwOWQ0MjFlYTYzODI5NTA0Ng=="
 ).decode()
 AI_MODELS = [
+    "google/gemini-2.0-flash-exp:free",
+    "meta-llama/llama-3.2-3b-instruct:free",
     "openai/gpt-4o-mini",
     "google/gemini-2.0-flash-001",
     "deepseek/deepseek-chat-v3-0324",
@@ -2795,6 +2797,12 @@ def _call_openrouter(messages: List[dict], retries: int = 3) -> str:
                 db.insert_log(f"[AI] 401 Unauthorized from {model} – API key may be invalid or expired")
                 return _get_offline_response(messages)
 
+            if resp.status_code == 402:
+                db.insert_log(f"[AI] 402 Payment Required from {model} – OpenRouter account needs credits")
+                # Skip to next model (free ones should work without credits)
+                time.sleep(1)
+                continue
+
             if resp.status_code == 503:
                 db.insert_log(f"[AI] 503 from {model}, trying next...")
                 time.sleep(2)
@@ -2803,6 +2811,11 @@ def _call_openrouter(messages: List[dict], retries: int = 3) -> str:
             if resp.status_code == 429:
                 db.insert_log(f"[AI] Rate limited on {model}, waiting...")
                 time.sleep(5)
+                continue
+
+            if resp.status_code != 200:
+                db.insert_log(f"[AI] {resp.status_code} from {model}: {resp.text[:200]}")
+                time.sleep(1)
                 continue
 
             resp.raise_for_status()
@@ -2836,6 +2849,7 @@ def _call_openrouter(messages: List[dict], retries: int = 3) -> str:
 
 
 def _get_offline_response(messages: List[dict]) -> str:
+    db.insert_log("[AI] Returning offline response – all models exhausted or API key invalid")
     last_user_msg = ""
     for msg in reversed(messages):
         if msg.get("role") == "user":
@@ -2844,7 +2858,7 @@ def _get_offline_response(messages: List[dict]) -> str:
 
     if any(word in last_user_msg for word in ["thesis", "liquidity", "reversal", "breakout", "momentum"]):
         return (
-            "I'm in offline mode but here's a step-by-step guide you can apply right now:\n\n"
+            "⚠️ Offline Mode (OpenRouter API unavailable).\n\n"
             "**For a Liquidity Reversal Thesis:**\n"
             "1. Go to the Strategy section in the sidebar\n"
             "2. Set EMA Fast=9, EMA Slow=50 for short-term reversals (or 20/50 for swing)\n"
@@ -2862,7 +2876,7 @@ def _get_offline_response(messages: List[dict]) -> str:
         )
     elif any(word in last_user_msg for word in ["indicator", "rsi", "macd", "ema", "signal"]):
         return (
-            "I'm currently in offline mode (AI API unavailable). Here's what I can tell you:\n\n"
+            "⚠️ Offline Mode (AI API unavailable). Here's what I can tell you:\n\n"
             "• EMA Crossover is your base signal – when the fast EMA crosses above the slow EMA, it's a buy signal\n"
             "• RSI below 30 suggests oversold (good for buying), above 70 suggests overbought (good for selling)\n"
             "• MACD crossing above signal line confirms bullish momentum\n"
@@ -2872,7 +2886,7 @@ def _get_offline_response(messages: List[dict]) -> str:
         )
     elif any(word in last_user_msg for word in ["broker", "connect", "alpaca", "ibkr"]):
         return (
-            "I'm currently in offline mode (AI API unavailable). For broker help:\n\n"
+            "⚠️ Offline Mode (AI API unavailable). For broker help:\n\n"
             "• Alpaca: Works on Free and Pro tiers. Use paper trading key from alpaca.markets\n"
             "• IBKR: Requires TWS/Gateway running. Ports: 7497 (paper), 7496 (live)\n"
             "• Tradier: Get access token from developer.tradier.com\n"
@@ -2881,7 +2895,7 @@ def _get_offline_response(messages: List[dict]) -> str:
         )
     elif any(word in last_user_msg for word in ["backtest", "strategy", "win rate"]):
         return (
-            "I'm currently in offline mode (AI API unavailable). Backtesting tips:\n\n"
+            "⚠️ Offline Mode (AI API unavailable). Backtesting tips:\n\n"
             "• Run backtests with at least 30 days of data for meaningful results\n"
             "• Combined indicators can achieve ~65% win rate in optimal conditions\n"
             "• Use Monte Carlo simulation to see worst/best case scenarios\n"
@@ -2891,7 +2905,7 @@ def _get_offline_response(messages: List[dict]) -> str:
         )
     elif any(word in last_user_msg for word in ["trade", "manual", "order", "buy", "sell"]):
         return (
-            "I'm in offline mode. Here's how to place a manual trade:\n\n"
+            "⚠️ Offline Mode. Here's how to place a manual trade:\n\n"
             "1. Click the Trade tab\n"
             "2. Enter Symbol (e.g. AAPL) and Quantity\n"
             "3. Click BUY or SELL (the active side is highlighted)\n"
@@ -2903,7 +2917,7 @@ def _get_offline_response(messages: List[dict]) -> str:
         )
     else:
         return (
-            "I'm currently in offline mode – the AI API (OpenRouter) is temporarily unavailable. "
+            "⚠️ Offline Mode – the AI API (OpenRouter) is temporarily unavailable. "
             "This could be due to an invalid API key, network issues, or service outage.\n\n"
             "What you can do now:\n"
             "• Check the Help tab for comprehensive guides\n"
@@ -4517,7 +4531,7 @@ FRONTEND_HTML = r"""
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>TraderMoney 9.1.5</title>
+<title>TraderMoney 9.1.6</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root {
@@ -5700,7 +5714,7 @@ button.ghost:hover { box-shadow: none; }
     <span class="sidebar-logo">TM</span>
     <div class="sidebar-title">
       <span class="sidebar-name">TraderMoney</span>
-      <span class="sidebar-version">v9.1.5</span>
+      <span class="sidebar-version">v9.1.6</span>
     </div>
     <div class="sidebar-actions">
       <button onclick="location.reload()" title="Refresh"><svg class="icon" style="width:13px;height:13px;" viewBox="0 0 24 24"><path d="M17.65 6.35A7.958 7.958 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg></button>
@@ -5723,9 +5737,6 @@ button.ghost:hover { box-shadow: none; }
       <div>
         <label>Telegram Token <span style="color:var(--muted);font-weight:400;">(Pro)</span></label><input type="password" id="tgt">
         <label>Telegram Chat ID <span style="color:var(--muted);font-weight:400;">(Pro)</span></label><input type="text" id="tgc">
-      </div>
-      <div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border);">
-        <button onclick="showTvLoginModal()" style="width:100%;padding:8px;border:1px solid var(--border3);border-radius:6px;background:var(--glass);color:var(--accent);font-size:.7rem;font-weight:600;cursor:pointer;">Sign in with TradingView</button>
       </div>
     </div>
   </details>
@@ -6009,7 +6020,7 @@ button.ghost:hover { box-shadow: none; }
   <div id="tab-help" class="tab">
     <div class="hb">
       <input type="text" id="help-search" placeholder="Search help... (Cmd+F)" oninput="filterHelp()" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);font-size:.82rem;margin-bottom:10px;box-sizing:border-box;">
-      <h3>TraderMoney v9.1.5 – Complete Help Guide</h3>
+      <h3>TraderMoney v9.1.6 – Complete Help Guide</h3>
       <p style="font-size:.82rem;color:var(--muted);margin-top:-4px;">Your desktop algorithmic trading terminal. All features documented below.</p>
 
       <details>
@@ -6564,33 +6575,9 @@ button.ghost:hover { box-shadow: none; }
   <div id="logbar"></div>
 </div>
 
-<!-- TradingView Login Modal -->
-<div id="tv-login-modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.7);z-index:10001;backdrop-filter:blur(4px);align-items:center;justify-content:center;">
-  <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:28px 32px;max-width:380px;width:90%;text-align:center;box-shadow:0 20px 60px rgba(0,0,0,0.5);">
-    <div style="margin-bottom:16px;">
-      <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
-        <rect width="48" height="48" rx="8" fill="#131722"/>
-        <path d="M12 16h24v2H12zM12 22h20v2H12zM12 28h16v2H12zM12 34h24v2H12z" fill="#2962FF"/>
-        <path d="M36 16l4 4-4 4" stroke="#2962FF" stroke-width="2" fill="none"/>
-        <path d="M36 28l4 4-4 4" stroke="#2962FF" stroke-width="2" fill="none"/>
-      </svg>
-    </div>
-    <div style="font-size:1rem;font-weight:700;color:var(--text);margin-bottom:4px;">TradingView</div>
-    <div style="font-size:.7rem;color:var(--muted);margin-bottom:20px;line-height:1.5;">Sign in to sync your chart layouts,<br>indicators, and drawings across devices.</div>
-    <button id="tv-login-signin" onclick="tvLoginSignIn()" style="width:100%;padding:10px;border:none;border-radius:8px;background:#2962FF;color:#fff;font-size:.8rem;font-weight:600;cursor:pointer;margin-bottom:8px;">Sign in with TradingView</button>
-    <button id="tv-login-guest" onclick="tvLoginGuest()" style="width:100%;padding:10px;border:1px solid var(--border3);border-radius:8px;background:var(--glass);color:var(--text);font-size:.8rem;font-weight:500;cursor:pointer;">Continue as Guest</button>
-    <label style="display:flex;align-items:center;justify-content:center;gap:6px;margin-top:14px;font-size:.65rem;color:var(--muted);cursor:pointer;">
-      <input type="checkbox" id="tv-remember-me" checked>
-      Remember me
-    </label>
-    <div style="margin-top:8px;font-size:.55rem;color:var(--muted);">Signing in opens tradingview.com in a new tab</div>
-    <div id="tv-login-status" style="margin-top:8px;font-size:.65rem;color:var(--muted);display:none;"></div>
-  </div>
-</div>
-
-<!-- TradingView embedded chart + Lightweight Charts for Trade tab -->
+<!-- Chart libraries -->
 <script src="https://s3.tradingview.com/tv.js"></script>
-<script src="https://unpkg.com/lightweight-charts@4.2.1/dist/lightweight-charts.standalone.production.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 <script>
 'use strict';
  const $=id=>document.getElementById(id);
@@ -6948,51 +6935,6 @@ function loadTradingViewChart(symbol){
   $('chart-buy-btn').onclick=()=>chartTrade('buy');
   $('chart-sell-btn').onclick=()=>chartTrade('sell');
 })();
-
-/* ── TradingView Login ── */
-function showTvLoginModal(){
-  const modal=$('tv-login-modal');
-  if(!modal)return;
-  // Auto-close terms if open (conflicting overlays)
-  const to=$('terms-modal-overlay');
-  if(to&&to.classList.contains('show'))to.classList.remove('show');
-  modal.style.display='flex';
-}
-function hideTvLoginModal(){
-  const modal=$('tv-login-modal');
-  if(modal)modal.style.display='none';
-}
-function tvLoginSignIn(){
-  const status=$('tv-login-status');
-  if(status){status.style.display='block';status.textContent='Opening TradingView sign-in...';status.style.color='var(--accent)';}
-  window.open('https://www.tradingview.com/accounts/signin/','_blank','width=600,height=700');
-  // If "Remember me" is checked, save pref so modal doesn't re-show
-  const rm=$('tv-remember-me');
-  if(rm&&rm.checked)localStorage.setItem('tv_login_remembered','true');
-  setTimeout(()=>{
-    if(status){status.textContent='Sign in page opened. Come back after signing in.';status.style.color='var(--muted)';}
-  },2000);
-}
-function tvLoginGuest(){
-  const rm=$('tv-remember-me');
-  const remember=rm&&rm.checked;
-  if(remember)localStorage.setItem('tv_login_remembered','true');
-  hideTvLoginModal();
-  toast('Continuing as guest. You can sign in anytime from Connection settings.','info');
-}
-// Auto-show on first launch if not remembered
-setTimeout(()=>{
-  if(!localStorage.getItem('tv_login_remembered')){
-    showTvLoginModal();
-  }
-},3000);
-// Click outside modal to close
-document.addEventListener('click',function(e){
-  const modal=$('tv-login-modal');
-  if(modal&&modal.style.display==='flex'&&e.target===modal){
-    hideTvLoginModal();
-  }
-});
 
 function reloadChart(){
   refreshTickers();
@@ -7529,35 +7471,34 @@ document.querySelectorAll('.tbtn').forEach(b=>{b.addEventListener('click',functi
   };
 })();
 
-/* ── Trade Tab Live Chart (Lightweight Charts) ── */
-let tradeChart=null,tradeChartSeries=null,tradePriceLine=null,tradeChartInterval=null;
+/* ── Trade Tab Live Chart ── */
+let tradeChart=null,tradeChartInterval=null;
 let _lastTradeSym='';
-async function initTradeChart(){
+function initTradeChart(){
   const container=$('trade-chart-container');
   if(!container||container.clientWidth===0)return;
-  if(tradeChart){try{tradeChart.remove();}catch(e){}tradeChart=null;tradeChartSeries=null;tradePriceLine=null;}
-  try{
-    tradeChart=LightweightCharts.createChart(container,{
-      width:container.clientWidth,height:container.clientHeight||300,
-      layout:{background:{color:'transparent'},textColor:'#94a3b8'},
-      grid:{vertLines:{color:'rgba(255,255,255,0.04)'},horzLines:{color:'rgba(255,255,255,0.04)'}},
-      timeScale:{borderColor:'rgba(255,255,255,0.08)',timeVisible:true,secondsVisible:false},
-      rightPriceScale:{borderColor:'rgba(255,255,255,0.08)'},
-      crosshair:{mode:LightweightCharts.CrosshairMode.Normal},
-    });
-    tradeChartSeries=tradeChart.addCandlestickSeries({
-      upColor:'#00c9a7',downColor:'#ef4444',borderDownColor:'#ef4444',borderUpColor:'#00c9a7',
-      wickDownColor:'#ef4444',wickUpColor:'#00c9a7',
-    });
-    tradePriceLine=tradeChart.addLineSeries({color:'#2962FF',lineWidth:1,lineStyle:LightweightCharts.LineStyle.Dotted,lastValueVisible:true,title:'Live'});
-    loadTradeChartData();
-    if(!tradeChartInterval) tradeChartInterval=setInterval(loadTradeChartData,5000);
-    const ro=new ResizeObserver(()=>{
-      if(tradeChart&&container.clientWidth>0)
-        tradeChart.applyOptions({width:container.clientWidth,height:container.clientHeight});
-    });
-    ro.observe(container);
-  }catch(e){console.error('Trade chart init error:',e);}
+  if(tradeChart){tradeChart.destroy();tradeChart=null;}
+  const canvas=document.createElement('canvas');
+  container.innerHTML='';
+  container.appendChild(canvas);
+  tradeChart=new Chart(canvas,{
+    type:'bar',
+    data:{datasets:[
+      {label:'Wick',data:[],backgroundColor:'rgba(148,163,184,0.4)',borderColor:'rgba(148,163,184,0.4)',borderWidth:1,barPercentage:0.15},
+      {label:'Body',data:[],borderWidth:1,barPercentage:0.65}
+    ]},
+    options:{
+      responsive:true,maintainAspectRatio:false,
+      animation:{duration:200},
+      plugins:{legend:{display:false},tooltip:{enabled:true,mode:'index',intersect:false}},
+      scales:{
+        x:{type:'linear',offset:false,ticks:{color:'#5b6778',font:{size:9},maxTicksLimit:8},grid:{color:'rgba(255,255,255,0.04)'},border:{color:'rgba(255,255,255,0.08)'}},
+        y:{ticks:{color:'#5b6778',font:{size:9}},grid:{color:'rgba(255,255,255,0.04)'},border:{color:'rgba(255,255,255,0.08)'}}
+      }
+    }
+  });
+  loadTradeChartData();
+  if(!tradeChartInterval) tradeChartInterval=setInterval(loadTradeChartData,5000);
 }
 async function loadTradeChartData(){
   const sym=$('trade-symbol');
@@ -7571,18 +7512,24 @@ async function loadTradeChartData(){
       fetch(`/api/live_price?symbol=${s}`)
     ]);
     const data=await candleR.json();
-    if(Array.isArray(data)&&data.length&&tradeChartSeries){
-      tradeChartSeries.setData(data.map(d=>({time:d.time,open:d.open,high:d.high,low:d.low,close:d.close})));
-      tradeChart.timeScale().fitContent();
-    }
     const priceData=await priceR.json();
-    if(priceData&&priceData.price>0&&tradePriceLine){
-      const now=Math.floor(Date.now()/1000);
-      tradePriceLine.setData([{time:now,value:priceData.price}]);
+    if(!Array.isArray(data)||!data.length||!tradeChart)return;
+    const upColor='#00c9a7',dnColor='#ef4444';
+    const wickData=[],bodyData=[],bodyColors=[];
+    for(const d of data){
+      const x=d.time*1000;
+      wickData.push({x,y:[d.low,d.high]});
+      const isUp=d.close>=d.open;
+      bodyData.push({x,y:[Math.min(d.open,d.close),Math.max(d.open,d.close)]});
+      bodyColors.push(isUp?upColor:dnColor);
     }
+    tradeChart.data.datasets[0].data=wickData;
+    tradeChart.data.datasets[1].data=bodyData;
+    tradeChart.data.datasets[1].backgroundColor=bodyColors;
+    tradeChart.data.datasets[1].borderColor=bodyColors;
+    tradeChart.update('none');
   }catch(e){/*ignore*/}
 }
-// Immediate chart update on ANY input to the symbol field
 document.addEventListener('DOMContentLoaded',function(){
   const symInput=$('trade-symbol');
   if(symInput){
@@ -8200,7 +8147,7 @@ if __name__ == "__main__":
 
     try:
         webview.create_window(
-            "TraderMoney 9.1.5",
+            "TraderMoney 9.1.6",
             "http://127.0.0.1:5050",
             width=1440,
             height=880,

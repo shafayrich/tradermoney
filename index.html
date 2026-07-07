@@ -654,7 +654,7 @@
             </p>
             <div class="version-pill fade-in delay-2">
                 <span class="dot"></span>
-                <span>Latest <strong id="version-number">v9.1.5</strong></span>
+                <span>Latest <strong id="version-number">v9.1.6</strong></span>
             </div>
             <div class="dl-section fade-in delay-3">
                 <div class="dl-group">
@@ -839,7 +839,21 @@
 
             <div class="changelog-card">
                 <span class="tag" style="background:var(--accent);color:#000;font-weight:700;">Latest</span>
-                <h3>v9.1.5 — Bug Fixes: Website HTML, AI Chat Stuck in Offline Mode, Release v9.1.5</h3>
+                <h3>v9.1.6 — Removed TradingView Login, Replaced Lightweight Charts with Chart.js, AI Reliability & Embedded Key</h3>
+                <div class="date">July 6, 2026</div>
+                <ul>
+                    <li><strong>Removed TradingView Login Modal:</strong> Completely removed the TV login popup and sidebar sign-in button to streamline the onboarding experience.</li>
+                    <li><strong>Replaced Lightweight Charts with Chart.js:</strong> The manual Trade tab live chart now uses Chart.js (floating-bar candlesticks) instead of TradingView's Lightweight Charts – no TradingView dependency for the trade chart.</li>
+                    <li><strong>Embedded OpenRouter API Key:</strong> The AI chatbot now ships with a built-in OpenRouter key, so AI works out of the box without requiring users to configure environment variables. The <code>OPENROUTER_API_KEY</code> env var still takes precedence if set.</li>
+                    <li><strong>Added Free OpenRouter Models:</strong> Added <code>gemini-2.0-flash-exp:free</code> and <code>llama-3.2-3b-instruct:free</code> as the first fallback models, so the AI works without requiring paid credits on the OpenRouter account.</li>
+                    <li><strong>Better AI Error Logging:</strong> Detailed HTTP status code logging (including 402 Payment Required) so failures are diagnosable from the app logs.</li>
+                    <li><strong>Clearer Offline Mode Messages:</strong> All offline AI responses now include a ⚠️ prefix explaining that the API is unavailable.</li>
+                </ul>
+            </div>
+
+            <div class="changelog-card">
+                <span class="tag tag-fix">Fixes</span>
+                <h3>v9.1.5 — Bug Fixes: Website HTML, AI Chat Stuck in Offline Mode</h3>
                 <div class="date">July 6, 2026</div>
                 <ul>
                     <li><strong>Fixed Website HTML Glitch:</strong> Removed orphaned list elements that caused visual layout issues on the changelog section.</li>
