@@ -55,7 +55,7 @@ import webview
 from flask import Flask, Response, jsonify, request, send_file
 from flask_cors import CORS
 
-APP_VERSION = "9.1.6"
+APP_VERSION = "9.1.7"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # AI CONFIGURATION
@@ -4531,7 +4531,7 @@ FRONTEND_HTML = r"""
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>TraderMoney 9.1.6</title>
+<title>TraderMoney 9.1.7</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root {
@@ -5714,7 +5714,7 @@ button.ghost:hover { box-shadow: none; }
     <span class="sidebar-logo">TM</span>
     <div class="sidebar-title">
       <span class="sidebar-name">TraderMoney</span>
-      <span class="sidebar-version">v9.1.6</span>
+      <span class="sidebar-version">v9.1.7</span>
     </div>
     <div class="sidebar-actions">
       <button onclick="location.reload()" title="Refresh"><svg class="icon" style="width:13px;height:13px;" viewBox="0 0 24 24"><path d="M17.65 6.35A7.958 7.958 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg></button>
@@ -5947,6 +5947,8 @@ button.ghost:hover { box-shadow: none; }
         <input id="chart-trade-qty" type="number" value="1" min="0.001" step="1" style="width:44px;height:24px;font-size:.6rem;padding:0 4px;text-align:center;border:1px solid rgba(255,255,255,0.15);border-radius:4px;background:rgba(0,0,0,0.4);color:#fff;">
         <button id="chart-buy-btn" style="padding:3px 10px;border:none;border-radius:4px;background:#00c9a7;color:#000;font-size:.6rem;font-weight:700;cursor:pointer;">BUY</button>
         <button id="chart-sell-btn" style="padding:3px 10px;border:none;border-radius:4px;background:#ef4444;color:#fff;font-size:.6rem;font-weight:700;cursor:pointer;">SELL</button>
+        <span style="width:1px;height:16px;background:rgba(255,255,255,0.15);margin:0 2px;"></span>
+        <button id="chart-tv-login" style="padding:3px 8px;border:1px solid rgba(41,98,255,0.4);border-radius:4px;background:rgba(41,98,255,0.1);color:#2962FF;font-size:.55rem;font-weight:600;cursor:pointer;white-space:nowrap;">TV Login</button>
         <span id="chart-trade-msg" style="font-size:.55rem;color:#94a3b8;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></span>
       </div>
     </div>
@@ -6020,7 +6022,7 @@ button.ghost:hover { box-shadow: none; }
   <div id="tab-help" class="tab">
     <div class="hb">
       <input type="text" id="help-search" placeholder="Search help... (Cmd+F)" oninput="filterHelp()" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);font-size:.82rem;margin-bottom:10px;box-sizing:border-box;">
-      <h3>TraderMoney v9.1.6 – Complete Help Guide</h3>
+      <h3>TraderMoney v9.1.7 – Complete Help Guide</h3>
       <p style="font-size:.82rem;color:var(--muted);margin-top:-4px;">Your desktop algorithmic trading terminal. All features documented below.</p>
 
       <details>
@@ -6900,8 +6902,8 @@ function loadTradingViewChart(symbol){
     container_id:'chart-c',symbol:symbol,interval:'1',timezone:'Etc/UTC',
     theme:isLight?'light':'dark',style:'1',locale:'en',toolbar_bg:bg,
     enable_publishing:false,allow_symbol_change:true,autosize:true,studies:[],
+    enabled_features:['header_widget_api'],
     disabled_features:[
-      'use_localstorage_for_settings','header_saveload','save_chart_properties_to_local_storage',
       'show_logo_on_all_charts','caption_buttons_text_if_possible'
     ],
     overrides:{
@@ -6934,6 +6936,17 @@ function loadTradingViewChart(symbol){
   }
   $('chart-buy-btn').onclick=()=>chartTrade('buy');
   $('chart-sell-btn').onclick=()=>chartTrade('sell');
+  $('chart-tv-login').onclick=()=>{
+    if(tvWidget&&tvWidget.login){
+      toast('Opening TradingView sign-in...','info');
+      tvWidget.login();
+    }else{
+      const a=document.createElement('a');
+      a.href='https://www.tradingview.com/accounts/signin/';
+      a.target='_blank';a.rel='noopener';a.click();
+      toast('TradingView sign-in opened in your browser','info');
+    }
+  };
 })();
 
 function reloadChart(){
@@ -8147,7 +8160,7 @@ if __name__ == "__main__":
 
     try:
         webview.create_window(
-            "TraderMoney 9.1.6",
+            "TraderMoney 9.1.7",
             "http://127.0.0.1:5050",
             width=1440,
             height=880,
