@@ -654,7 +654,7 @@
             </p>
             <div class="version-pill fade-in delay-2">
                 <span class="dot"></span>
-                <span>Latest <strong id="version-number">v9.1.7</strong></span>
+                <span>Latest <strong id="version-number">v9.1.8</strong></span>
             </div>
             <div class="dl-section fade-in delay-3">
                 <div class="dl-group">
@@ -839,14 +839,14 @@
 
             <div class="changelog-card">
                 <span class="tag" style="background:var(--accent);color:#000;font-weight:700;">Latest</span>
-                <h3>v9.1.7 — TradingView Login from Chart, Save/Load Layout Enabled</h3>
+                <h3>v9.1.8 — TradingView Login in Connection Settings, Full TV Chart in Trade Tab, Working AI</h3>
                 <div class="date">July 6, 2026</div>
                 <ul>
-                    <li><strong>Fixed TV Login Flow:</strong> The "TV Login" button now opens the TradingView sign-in page in a new app window (not the system browser). Cookies are shared, so after logging in and closing the window, the chart auto-reloads with your authenticated session for real-time data.</li>
-                    <li><strong>Chart Reload Button:</strong> Added a ↻ button next to the TV Login button for manual chart refresh after signing in.</li>
-                    <li><strong>Save/Load Chart Layouts:</strong> Re-enabled TradingView's save/load layout feature so logged-in users can persist their chart configurations.</li>
-                    <li><strong>Chart Settings Persistence:</strong> Re-enabled localStorage for TradingView settings so your chart preferences are remembered between sessions.</li>
-                    <li><strong>Fixed AI Models:</strong> Replaced unavailable free models with working ones (<code>openrouter/free</code>, <code>cohere/north-mini-code:free</code>, <code>liquid/lfm-2.5-1.2b-instruct:free</code>, <code>qwen/qwen3-next-80b-a3b-instruct:free</code>) so the AI chatbot works out of the box even without credits.</li>
+                    <li><strong>TV Login in Connection Settings:</strong> Added a "Sign in with TradingView" button in the sidebar Connection section alongside broker settings. Opens TV login in a new app window — cookies are shared so login persists across widgets.</li>
+                    <li><strong>Full TV Chart in Trade Tab:</strong> Replaced the Chart.js chart with a live TradingView widget (same as the Charts tab, but smaller). Real-time data, indicators, all chart tools — no custom candles, no delay.</li>
+                    <li><strong>Auto-Reload After Login:</strong> Close the TV login window and all charts (Charts + Trade) reload automatically with your authenticated session.</li>
+                    <li><strong>Working AI:</strong> Replaced dead free models with working ones (<code>openrouter/free</code>, <code>cohere/north-mini-code:free</code>, <code>liquid/lfm-2.5-1.2b-instruct:free</code>). AI works out of the box without credits.</li>
+                    <li><strong>TradingView Save/Load Layouts:</strong> Re-enabled so logged-in users can persist chart layouts, indicators, and drawings to their TV account.</li>
                 </ul>
             </div>
 

@@ -55,7 +55,7 @@ import webview
 from flask import Flask, Response, jsonify, request, send_file
 from flask_cors import CORS
 
-APP_VERSION = "9.1.7"
+APP_VERSION = "9.1.8"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # AI CONFIGURATION
@@ -4534,7 +4534,7 @@ FRONTEND_HTML = r"""
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>TraderMoney 9.1.7</title>
+<title>TraderMoney 9.1.8</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root {
@@ -5717,7 +5717,7 @@ button.ghost:hover { box-shadow: none; }
     <span class="sidebar-logo">TM</span>
     <div class="sidebar-title">
       <span class="sidebar-name">TraderMoney</span>
-      <span class="sidebar-version">v9.1.7</span>
+      <span class="sidebar-version">v9.1.8</span>
     </div>
     <div class="sidebar-actions">
       <button onclick="location.reload()" title="Refresh"><svg class="icon" style="width:13px;height:13px;" viewBox="0 0 24 24"><path d="M17.65 6.35A7.958 7.958 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg></button>
@@ -5740,6 +5740,15 @@ button.ghost:hover { box-shadow: none; }
       <div>
         <label>Telegram Token <span style="color:var(--muted);font-weight:400;">(Pro)</span></label><input type="password" id="tgt">
         <label>Telegram Chat ID <span style="color:var(--muted);font-weight:400;">(Pro)</span></label><input type="text" id="tgc">
+      </div>
+      <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border2);">
+        <div style="font-size:.65rem;font-weight:600;color:var(--muted);margin-bottom:6px;display:flex;align-items:center;gap:4px;">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+          TradingView Login
+        </div>
+        <div style="font-size:.55rem;color:var(--muted);margin-bottom:6px;line-height:1.4;">Sign in to sync chart layouts, indicators, and drawings. Get real-time data if your TV account has data subscriptions.</div>
+        <button id="sidebar-tv-login" onclick="openTvLogin()" style="width:100%;padding:7px;border:1px solid rgba(41,98,255,0.4);border-radius:6px;background:rgba(41,98,255,0.1);color:#2962FF;font-size:.65rem;font-weight:600;cursor:pointer;">Sign in with TradingView</button>
+        <button onclick="tvLogout()" style="width:100%;padding:5px;border:none;border-radius:4px;background:transparent;color:var(--muted);font-size:.55rem;cursor:pointer;margin-top:3px;">Sign out</button>
       </div>
     </div>
   </details>
@@ -6026,7 +6035,7 @@ button.ghost:hover { box-shadow: none; }
   <div id="tab-help" class="tab">
     <div class="hb">
       <input type="text" id="help-search" placeholder="Search help... (Cmd+F)" oninput="filterHelp()" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);font-size:.82rem;margin-bottom:10px;box-sizing:border-box;">
-      <h3>TraderMoney v9.1.7 – Complete Help Guide</h3>
+      <h3>TraderMoney v9.1.8 – Complete Help Guide</h3>
       <p style="font-size:.82rem;color:var(--muted);margin-top:-4px;">Your desktop algorithmic trading terminal. All features documented below.</p>
 
       <details>
@@ -6542,7 +6551,9 @@ button.ghost:hover { box-shadow: none; }
               Live Chart
               <span style="font-size:.55rem;font-weight:400;color:var(--muted);margin-left:auto;" id="trade-chart-sym">AAPL</span>
             </div>
-            <div id="trade-chart-container" style="flex:1;min-height:0;"></div>
+            <div id="trade-chart-container" style="flex:1;min-height:0;position:relative;">
+              <div id="trade-chart-c" style="width:100%;height:100%;"></div>
+            </div>
           </div>
         </div>
 
@@ -6583,7 +6594,6 @@ button.ghost:hover { box-shadow: none; }
 
 <!-- Chart libraries -->
 <script src="https://s3.tradingview.com/tv.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 <script>
 'use strict';
  const $=id=>document.getElementById(id);
@@ -6940,27 +6950,7 @@ function loadTradingViewChart(symbol){
   }
   $('chart-buy-btn').onclick=()=>chartTrade('buy');
   $('chart-sell-btn').onclick=()=>chartTrade('sell');
-  $('chart-tv-login').onclick=()=>{
-    const w=window.open('https://www.tradingview.com/accounts/signin/','tv_login','width=600,height=700,scrollbars=yes');
-    if(!w){
-      // Popup blocked – fallback to system browser
-      const a=document.createElement('a');
-      a.href='https://www.tradingview.com/accounts/signin/';
-      a.target='_blank';a.rel='noopener';a.click();
-      toast('TradingView sign-in opened in your browser. After signing in, click Reload Chart to sync.','info');
-    }else{
-      toast('TradingView sign-in opened. Log in and close the window, then click Reload Chart.','info');
-      // Check periodically if the window was closed, then reload chart
-      const checkClosed=setInterval(()=>{
-        if(w.closed){
-          clearInterval(checkClosed);
-          toast('TV login window closed. Reloading chart...','info');
-          if(tvWidget)try{tvWidget.remove();}catch(e){}
-          if(lastTvSymbol)loadTradingViewChart(lastTvSymbol);
-        }
-      },1000);
-    }
-  };
+  $('chart-tv-login').onclick=()=>openTvLogin();
   $('chart-reload-btn').onclick=()=>{
     if(tvWidget)try{tvWidget.remove();}catch(e){}
     if(lastTvSymbol)loadTradingViewChart(lastTvSymbol);
@@ -6995,6 +6985,36 @@ function refreshTickers(){
     if(raw.length){setTickers(raw);loadTradingViewChart(cs(raw[0]));}
     toast('Tickers refreshed','success');
   });
+}
+/* ── TradingView Login ── */
+function openTvLogin(){
+  const w=window.open('https://www.tradingview.com/accounts/signin/','tv_login','width=600,height=700,scrollbars=yes');
+  if(!w){
+    const a=document.createElement('a');
+    a.href='https://www.tradingview.com/accounts/signin/';
+    a.target='_blank';a.rel='noopener';a.click();
+    toast('TradingView sign-in opened in your browser. After signing in, reload to sync.','info');
+  }else{
+    toast('TradingView sign-in opened. Log in and close the window to auto-reload charts.','info');
+    const checkClosed=setInterval(()=>{
+      if(w.closed){
+        clearInterval(checkClosed);
+        toast('TV login window closed. Reloading charts...','info');
+        reloadAllTvWidgets();
+      }
+    },1000);
+  }
+}
+function tvLogout(){
+  localStorage.removeItem('tv_login_remembered');
+  toast('TradingView session cleared. Close and reopen the app to fully sign out.','info');
+}
+function reloadAllTvWidgets(){
+  if(tvWidget)try{tvWidget.remove();}catch(e){}
+  if(tradeTvWidget)try{tradeTvWidget.remove();}catch(e){}
+  if(lastTvSymbol)loadTradingViewChart(lastTvSymbol);
+  if(lastTradeTvSymbol)initTradeTvChart(lastTradeTvSymbol);
+  toast('All charts reloaded','success');
 }
 
 /* ── Config load/save ── */
@@ -7498,69 +7518,47 @@ document.querySelectorAll('.tbtn').forEach(b=>{b.addEventListener('click',functi
   const origSwitch=switchTab;
   switchTab=function(name){
     origSwitch(name);
-    if(name==='trade'){startTradePolling();initTradeChart();}
+    if(name==='trade'){startTradePolling();initTradeTvChart();}
     else{stopTradePolling();}
   };
 })();
 
-/* ── Trade Tab Live Chart ── */
-let tradeChart=null,tradeChartInterval=null;
-let _lastTradeSym='';
-function initTradeChart(){
-  const container=$('trade-chart-container');
+/* ── Trade Tab Live Chart (TradingView Widget) ── */
+let tradeTvWidget=null;
+let lastTradeTvSym='';
+function initTradeTvChart(symbol){
+  if(!symbol){
+    const sym=$('trade-symbol');
+    symbol=sym?sym.value.trim().toUpperCase()||'AAPL':'AAPL';
+  }
+  lastTradeTvSym=symbol;
+  const symEl=$('trade-chart-sym');
+  if(symEl)symEl.textContent=symbol;
+  const container=$('trade-chart-c');
   if(!container||container.clientWidth===0)return;
-  if(tradeChart){tradeChart.destroy();tradeChart=null;}
-  const canvas=document.createElement('canvas');
-  container.innerHTML='';
-  container.appendChild(canvas);
-  tradeChart=new Chart(canvas,{
-    type:'bar',
-    data:{datasets:[
-      {label:'Wick',data:[],backgroundColor:'rgba(148,163,184,0.4)',borderColor:'rgba(148,163,184,0.4)',borderWidth:1,barPercentage:0.15},
-      {label:'Body',data:[],borderWidth:1,barPercentage:0.65}
-    ]},
-    options:{
-      responsive:true,maintainAspectRatio:false,
-      animation:{duration:200},
-      plugins:{legend:{display:false},tooltip:{enabled:true,mode:'index',intersect:false}},
-      scales:{
-        x:{type:'linear',offset:false,ticks:{color:'#5b6778',font:{size:9},maxTicksLimit:8},grid:{color:'rgba(255,255,255,0.04)'},border:{color:'rgba(255,255,255,0.08)'}},
-        y:{ticks:{color:'#5b6778',font:{size:9}},grid:{color:'rgba(255,255,255,0.04)'},border:{color:'rgba(255,255,255,0.08)'}}
-      }
+  if(tradeTvWidget){try{tradeTvWidget.remove();}catch(e){}tradeTvWidget=null;}
+  const isLight=document.body.classList.contains('light');
+  const bg=isLight?'#ffffff':'#0c0c0c';
+  const grid=isLight?'#e5e7eb':'#1a1a1a';
+  const upCol=isLight?'#00c9a7':'#00c9a7';
+  const dnCol=isLight?'#ef4444':'#ef4444';
+  tradeTvWidget=new TradingView.widget({
+    container_id:'trade-chart-c',symbol:symbol,interval:'1',timezone:'Etc/UTC',
+    theme:isLight?'light':'dark',style:'1',locale:'en',toolbar_bg:bg,
+    enable_publishing:false,allow_symbol_change:true,autosize:true,studies:[],
+    enabled_features:['header_widget_api'],
+    disabled_features:[
+      'show_logo_on_all_charts','caption_buttons_text_if_possible'
+    ],
+    overrides:{
+      "paneProperties.background":bg,"paneProperties.backgroundType":"solid",
+      "paneProperties.vertGridProperties.color":grid,"paneProperties.horzGridProperties.color":grid,
+      "mainSeriesProperties.candleStyle.upColor":upCol,"mainSeriesProperties.candleStyle.downColor":dnCol,
+      "mainSeriesProperties.candleStyle.wickUpColor":upCol,"mainSeriesProperties.candleStyle.wickDownColor":dnCol,
+      "mainSeriesProperties.candleStyle.borderUpColor":upCol,"mainSeriesProperties.candleStyle.borderDownColor":dnCol,
     }
   });
-  loadTradeChartData();
-  if(!tradeChartInterval) tradeChartInterval=setInterval(loadTradeChartData,5000);
-}
-async function loadTradeChartData(){
-  const sym=$('trade-symbol');
-  const s=sym?sym.value.trim().toUpperCase()||'AAPL':'AAPL';
-  _lastTradeSym=s;
-  const symEl=$('trade-chart-sym');
-  if(symEl)symEl.textContent=s;
-  try{
-    const [candleR,priceR]=await Promise.all([
-      fetch(`/api/candles?symbol=${s}&interval=1m`),
-      fetch(`/api/live_price?symbol=${s}`)
-    ]);
-    const data=await candleR.json();
-    const priceData=await priceR.json();
-    if(!Array.isArray(data)||!data.length||!tradeChart)return;
-    const upColor='#00c9a7',dnColor='#ef4444';
-    const wickData=[],bodyData=[],bodyColors=[];
-    for(const d of data){
-      const x=d.time*1000;
-      wickData.push({x,y:[d.low,d.high]});
-      const isUp=d.close>=d.open;
-      bodyData.push({x,y:[Math.min(d.open,d.close),Math.max(d.open,d.close)]});
-      bodyColors.push(isUp?upColor:dnColor);
-    }
-    tradeChart.data.datasets[0].data=wickData;
-    tradeChart.data.datasets[1].data=bodyData;
-    tradeChart.data.datasets[1].backgroundColor=bodyColors;
-    tradeChart.data.datasets[1].borderColor=bodyColors;
-    tradeChart.update('none');
-  }catch(e){/*ignore*/}
+  setTimeout(()=>{if(tradeTvWidget&&tradeTvWidget.resize)tradeTvWidget.resize();},200);
 }
 document.addEventListener('DOMContentLoaded',function(){
   const symInput=$('trade-symbol');
@@ -7570,7 +7568,7 @@ document.addEventListener('DOMContentLoaded',function(){
         clearTimeout(this._chartTimer);
         this._chartTimer=setTimeout(()=>{
           const s=this.value.trim().toUpperCase();
-          if(s&&s!==_lastTradeSym)loadTradeChartData();
+          if(s&&s!==lastTradeTvSym)initTradeTvChart(s);
         },400);
       });
     });
@@ -8179,7 +8177,7 @@ if __name__ == "__main__":
 
     try:
         webview.create_window(
-            "TraderMoney 9.1.7",
+            "TraderMoney 9.1.8",
             "http://127.0.0.1:5050",
             width=1440,
             height=880,
