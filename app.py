@@ -65,7 +65,10 @@ OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY") or base64.b64decode(
     "c2stb3ItdjEtYTc2ODhjODhiMjRhYWUwNTU0ZWMyNTY1OGEzNjBjMzBkYzZjNWRlNTQ0MDlmN2IwOWQ0MjFlYTYzODI5NTA0Ng=="
 ).decode()
 AI_MODELS = [
-    "google/gemini-2.0-flash-exp:free",
+    "openrouter/free",
+    "cohere/north-mini-code:free",
+    "liquid/lfm-2.5-1.2b-instruct:free",
+    "qwen/qwen3-next-80b-a3b-instruct:free",
     "meta-llama/llama-3.2-3b-instruct:free",
     "openai/gpt-4o-mini",
     "google/gemini-2.0-flash-001",
@@ -5949,6 +5952,7 @@ button.ghost:hover { box-shadow: none; }
         <button id="chart-sell-btn" style="padding:3px 10px;border:none;border-radius:4px;background:#ef4444;color:#fff;font-size:.6rem;font-weight:700;cursor:pointer;">SELL</button>
         <span style="width:1px;height:16px;background:rgba(255,255,255,0.15);margin:0 2px;"></span>
         <button id="chart-tv-login" style="padding:3px 8px;border:1px solid rgba(41,98,255,0.4);border-radius:4px;background:rgba(41,98,255,0.1);color:#2962FF;font-size:.55rem;font-weight:600;cursor:pointer;white-space:nowrap;">TV Login</button>
+        <button id="chart-reload-btn" style="padding:3px 6px;border:1px solid rgba(255,255,255,0.15);border-radius:4px;background:rgba(255,255,255,0.05);color:var(--muted);font-size:.5rem;cursor:pointer;" title="Reload chart">↻</button>
         <span id="chart-trade-msg" style="font-size:.55rem;color:#94a3b8;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></span>
       </div>
     </div>
@@ -6937,15 +6941,30 @@ function loadTradingViewChart(symbol){
   $('chart-buy-btn').onclick=()=>chartTrade('buy');
   $('chart-sell-btn').onclick=()=>chartTrade('sell');
   $('chart-tv-login').onclick=()=>{
-    if(tvWidget&&tvWidget.login){
-      toast('Opening TradingView sign-in...','info');
-      tvWidget.login();
-    }else{
+    const w=window.open('https://www.tradingview.com/accounts/signin/','tv_login','width=600,height=700,scrollbars=yes');
+    if(!w){
+      // Popup blocked – fallback to system browser
       const a=document.createElement('a');
       a.href='https://www.tradingview.com/accounts/signin/';
       a.target='_blank';a.rel='noopener';a.click();
-      toast('TradingView sign-in opened in your browser','info');
+      toast('TradingView sign-in opened in your browser. After signing in, click Reload Chart to sync.','info');
+    }else{
+      toast('TradingView sign-in opened. Log in and close the window, then click Reload Chart.','info');
+      // Check periodically if the window was closed, then reload chart
+      const checkClosed=setInterval(()=>{
+        if(w.closed){
+          clearInterval(checkClosed);
+          toast('TV login window closed. Reloading chart...','info');
+          if(tvWidget)try{tvWidget.remove();}catch(e){}
+          if(lastTvSymbol)loadTradingViewChart(lastTvSymbol);
+        }
+      },1000);
     }
+  };
+  $('chart-reload-btn').onclick=()=>{
+    if(tvWidget)try{tvWidget.remove();}catch(e){}
+    if(lastTvSymbol)loadTradingViewChart(lastTvSymbol);
+    toast('Chart reloaded','success');
   };
 })();
 
