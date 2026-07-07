@@ -6988,20 +6988,29 @@ function refreshTickers(){
 }
 /* ── TradingView Login ── */
 function openTvLogin(){
-  const w=window.open('https://www.tradingview.com/accounts/signin/','tv_login','width=600,height=700,scrollbars=yes');
-  if(!w){
-    const a=document.createElement('a');
-    a.href='https://www.tradingview.com/accounts/signin/';
-    a.target='_blank';a.rel='noopener';a.click();
-    toast('TradingView sign-in opened in your browser. After signing in, reload to sync.','info');
-  }else{
-    toast('TradingView sign-in opened. Log in and close the window to auto-reload charts.','info');
-    const checkClosed=setInterval(()=>{
-      if(w.closed){
-        clearInterval(checkClosed);
-        toast('TV login window closed. Reloading charts...','info');
-        reloadAllTvWidgets();
+  if(window.pywebview&&pywebview.api){
+    pywebview.api.open_tv_login().then(result=>{
+      if(result==='ok'){
+        toast('TradingView sign-in opened. Log in and close the window to auto-reload.','info');
+      }else{
+        toast('Failed to open TV login: '+result,'error');
+        // Fallback to window.open
+        const w=window.open('https://www.tradingview.com/accounts/signin/','tv_login','width=600,height=700');
+        if(w)toast('TV sign-in opened in a new window','info');
       }
+    });
+  }else{
+    const w=window.open('https://www.tradingview.com/accounts/signin/','tv_login','width=600,height=700');
+    if(!w){
+      const a=document.createElement('a');
+      a.href='https://www.tradingview.com/accounts/signin/';
+      a.target='_blank';a.rel='noopener';a.click();
+      toast('TradingView sign-in opened in your browser. After signing in, reload to sync.','info');
+    }else{
+      toast('TradingView sign-in opened. Log in and close the window to auto-reload.','info');
+    }
+  }
+}
     },1000);
   }
 }
@@ -8175,13 +8184,44 @@ if __name__ == "__main__":
     flask_thread.start()
     time.sleep(1.2)
 
+    _tv_login_window = None
+
+    class _Api:
+        def open_tv_login(self):
+            global _tv_login_window
+            try:
+                win = webview.create_window(
+                    "TradingView Login",
+                    "https://www.tradingview.com/accounts/signin/",
+                    width=600, height=700,
+                )
+                _tv_login_window = win
+
+                def _on_closed():
+                    main = None
+                    for w in webview.windows:
+                        if w is not win:
+                            main = w
+                            break
+                    if main:
+                        try:
+                            main.evaluate_js('setTimeout(function(){reloadAllTvWidgets()},500)')
+                        except Exception:
+                            pass
+
+                win.events.closed += _on_closed
+                return "ok"
+            except Exception as e:
+                return f"error: {e}"
+
     try:
-        webview.create_window(
+        window = webview.create_window(
             "TraderMoney 9.1.8",
             "http://127.0.0.1:5050",
             width=1440,
             height=880,
             min_size=(980, 700),
+            js_api=_Api(),
         )
         webview.start()
     finally:
