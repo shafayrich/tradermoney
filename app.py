@@ -62,9 +62,10 @@ APP_VERSION = "9.1.4"
 # ═══════════════════════════════════════════════════════════════════════════════
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY") or "INJECT_OPENROUTER_API_KEY"
 AI_MODELS = [
-    "deepseek/deepseek-v4-flash",
-    "google/gemini-2.5-flash",
+    "openai/gpt-4o-mini",
+    "google/gemini-2.0-flash-001",
     "deepseek/deepseek-chat-v3-0324",
+    "anthropic/claude-3-haiku",
 ]
 FREE_CHAT_DAILY_LIMIT = 5
 NEWS_API_KEY = os.environ.get("NEWS_API_KEY", "")
@@ -2766,6 +2767,11 @@ def _call_openrouter(messages: List[dict], retries: int = 3) -> str:
 
     if not OPENROUTER_API_KEY or len(OPENROUTER_API_KEY) < 20:
         return _get_offline_response(messages)
+    if OPENROUTER_API_KEY == "INJECT_OPENROUTER_API_KEY":
+        db.insert_log("[AI] OpenRouter API key is the default placeholder – set OPENROUTER_API_KEY env var")
+        return ("AI Chat is not configured yet. The app uses OpenRouter to power TraderBot. "
+                "To enable: set the OPENROUTER_API_KEY environment variable before launching, "
+                "or edit the OPENROUTER_API_KEY value in app.py. Get a free key at openrouter.ai/keys")
 
     for attempt in range(retries):
         model = models_to_try[attempt % len(models_to_try)]
@@ -4181,8 +4187,8 @@ def api_chat():
             })
         _chat_counter["count"] += 1
 
-    if not OPENROUTER_API_KEY or OPENROUTER_API_KEY.startswith("sk-YOUR"):
-        return jsonify({"reply": "AI Chat not configured (set OPENROUTER_API_KEY in app.py)."})
+    if not OPENROUTER_API_KEY or OPENROUTER_API_KEY.startswith("sk-YOUR") or OPENROUTER_API_KEY == "INJECT_OPENROUTER_API_KEY":
+        return jsonify({"reply": "AI Chat not configured – set OPENROUTER_API_KEY environment variable. Get a free key at openrouter.ai/keys"})
 
     if not session_id:
         session_id = db.create_chat_session()
