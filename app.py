@@ -8194,18 +8194,20 @@ if __name__ == "__main__":
                 )
                 _tv_login_window = win
 
-                # Override window.open so OAuth popups redirect in-window instead of
-                # opening in the system browser (which breaks postMessage/opener)
+                # Override window.open to use pywebview API so OAuth popups stay
+                # within the webview (shared cookie store) instead of opening in
+                # the system browser (broken postMessage/opener)
                 def _inject_popup_fix():
                     js = """
                     (function(){
                         if(window.__tvPatch)return;
                         window.__tvPatch=true;
-                        var orig=window.open;
                         window.open=function(url){
                             if(!url)return null;
-                            setTimeout(function(){window.location.href=url},50);
-                            return null;
+                            if(typeof pywebview!=='undefined'&&pywebview.api){
+                                pywebview.api.open_popup(url);
+                            }
+                            return {closed:false,close:function(){this.closed=true},focus:function(){}};
                         };
                     })();
                     """
@@ -8232,6 +8234,13 @@ if __name__ == "__main__":
                 return "ok"
             except Exception as e:
                 return f"error: {e}"
+
+        def open_popup(self, url):
+            try:
+                webview.create_window("", url, width=500, height=650)
+                return "ok"
+            except Exception:
+                return "error"
 
     try:
         window = webview.create_window(
