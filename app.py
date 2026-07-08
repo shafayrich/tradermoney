@@ -8184,23 +8184,21 @@ if __name__ == "__main__":
     _tv_login_window = None
 
     class _Api:
+        def __init__(self):
+            self._login_win = None
+
         def open_tv_login(self):
-            global _tv_login_window
             try:
                 win = webview.create_window(
                     "TradingView Login",
                     "https://www.tradingview.com/accounts/signin/",
                     width=600, height=700,
                 )
-                _tv_login_window = win
+                self._login_win = win
 
-                # Override window.open to use pywebview API so OAuth popups stay
-                # within the webview (shared cookie store) instead of opening in
-                # the system browser (broken postMessage/opener)
-                def _inject_popup_fix():
+                def _inject():
                     js = """
-                    (function(){
-                        if(window.__tvPatch)return;
+                    if(!window.__tvPatch){
                         window.__tvPatch=true;
                         window.open=function(url){
                             if(!url)return null;
@@ -8209,16 +8207,17 @@ if __name__ == "__main__":
                             }
                             return {closed:false,close:function(){this.closed=true},focus:function(){}};
                         };
-                    })();
+                    }
                     """
                     try:
                         win.evaluate_js(js)
                     except Exception:
                         pass
 
-                win.events.loaded += lambda: _inject_popup_fix()
+                win.events.loaded += lambda: _inject()
 
-                def _on_closed():
+                def _on_login_closed():
+                    self._login_win = None
                     main = None
                     for w in webview.windows:
                         if w is not win:
@@ -8230,14 +8229,23 @@ if __name__ == "__main__":
                         except Exception:
                             pass
 
-                win.events.closed += _on_closed
+                win.events.closed += _on_login_closed
                 return "ok"
             except Exception as e:
                 return f"error: {e}"
 
         def open_popup(self, url):
             try:
-                webview.create_window("", url, width=500, height=650)
+                popup = webview.create_window("", url, width=500, height=650)
+
+                def _on_popup_closed():
+                    if self._login_win:
+                        try:
+                            self._login_win.load_url('https://www.tradingview.com/accounts/signin/')
+                        except Exception:
+                            pass
+
+                popup.events.closed += _on_popup_closed
                 return "ok"
             except Exception:
                 return "error"
