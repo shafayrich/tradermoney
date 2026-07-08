@@ -8193,6 +8193,7 @@ if __name__ == "__main__":
                     "TradingView Login",
                     "https://www.tradingview.com/accounts/signin/",
                     width=600, height=700,
+                    js_api=self,
                 )
                 self._login_win = win
 
