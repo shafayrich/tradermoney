@@ -654,7 +654,7 @@
             </p>
             <div class="version-pill fade-in delay-2">
                 <span class="dot"></span>
-                <span>Latest <strong id="version-number">v9.1.8</strong></span>
+                <span>Latest <strong id="version-number">v9.1.9</strong></span>
             </div>
             <div class="dl-section fade-in delay-3">
                 <div class="dl-group">
@@ -839,6 +839,15 @@
 
             <div class="changelog-card">
                 <span class="tag" style="background:var(--accent);color:#000;font-weight:700;">Latest</span>
+                <h3>v9.1.9 — Fixed Google/Apple Social Login (Redirect Mode)</h3>
+                <div class="date">July 9, 2026</div>
+                <ul>
+                    <li><strong>Fixed Google & Apple Social Login:</strong> TradingView's OAuth popups couldn't communicate back to the login window because pywebview can't set <code>window.opener</code>. Switched from popup to redirect mode — the login window navigates directly to Google/Apple for OAuth, then redirects back to TradingView with auth cookies. Social login now works within the app.</li>
+                </ul>
+            </div>
+
+            <div class="changelog-card">
+                <span class="tag tag-improve">Improved</span>
                 <h3>v9.1.8 — TradingView Login in Connection Settings, Full TV Chart in Trade Tab, Working AI</h3>
                 <div class="date">July 6, 2026</div>
                 <ul>
