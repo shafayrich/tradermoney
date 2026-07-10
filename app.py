@@ -5746,9 +5746,9 @@ button.ghost:hover { box-shadow: none; }
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
           TradingView Login
         </div>
-        <div style="font-size:.55rem;color:var(--muted);margin-bottom:6px;line-height:1.4;">Sign in to sync chart layouts, indicators, and drawings. Get real-time data if your TV account has data subscriptions.</div>
+        <div style="font-size:.55rem;color:var(--muted);margin-bottom:6px;line-height:1.4;">Sign in to sync chart layouts, indicators, and drawings. Get real-time data if your TV account has data subscriptions. <strong>Note:</strong> Use <strong>Email/Password</strong> login inside the app. Google &amp; Apple sign-in are not supported in desktop apps.</div>
         <button id="sidebar-tv-login" onclick="openTvLogin()" style="width:100%;padding:7px;border:1px solid rgba(41,98,255,0.4);border-radius:6px;background:rgba(41,98,255,0.1);color:#2962FF;font-size:.65rem;font-weight:600;cursor:pointer;">Sign in with TradingView</button>
-        <button onclick="tvLogout()" style="width:100%;padding:5px;border:none;border-radius:4px;background:transparent;color:var(--muted);font-size:.55rem;cursor:pointer;margin-top:3px;">Sign out</button>
+        <button onclick="tvLogout()" style="width:100%;padding:5px;border:none;border-radius:4px;background:transparent;color:var(--muted);font-size:.55rem;cursor:pointer;margin-top:3px;">Clear session</button>
       </div>
     </div>
   </details>
@@ -8196,30 +8196,6 @@ if __name__ == "__main__":
                     js_api=self,
                 )
                 self._login_win = win
-
-                def _inject():
-                    js = """
-                    if(!window.__tvPatch){
-                        window.__tvPatch=true;
-                        window.open=function(url){
-                            if(!url)return null;
-                            window.location.href=url;
-                            var _w={closed:false,close:function(){_w.closed=true},focus:function(){},
-                                postMessage:function(){},addEventListener:function(){},
-                                removeEventListener:function(){},document:{"location":{}},
-                                location:{href:"",assign:function(){},replace:function(){}},
-                                setTimeout:function(){},clearTimeout:function(){},
-                                setInterval:function(){},clearInterval:function(){}};
-                            return _w;
-                        };
-                    }
-                    """
-                    try:
-                        win.evaluate_js(js)
-                    except Exception:
-                        pass
-
-                win.events.loaded += lambda: _inject()
 
                 def _on_login_closed():
                     self._login_win = None

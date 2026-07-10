@@ -842,7 +842,8 @@
                 <h3>v9.1.9 — Fixed Google/Apple Social Login (Redirect Mode)</h3>
                 <div class="date">July 9, 2026</div>
                 <ul>
-                    <li><strong>Fixed Google & Apple Social Login:</strong> TradingView's OAuth popups couldn't communicate back to the login window because pywebview can't set <code>window.opener</code>. Switched from popup to redirect mode — the login window navigates directly to Google/Apple for OAuth, then redirects back to TradingView with auth cookies. Social login now works within the app.</li>
+                    <li><strong>Removed window.open Override:</strong> The previous attempt to route OAuth popups through redirects broke TradingView's normal login flow. Removed the JS override entirely so email/password login works naturally in the webview.</li>
+                    <li><strong>Clarified Login Options:</strong> Google &amp; Apple sign-in are blocked by the providers in desktop apps (WKWebView). The UI now clearly tells users to use email/password login inside the app.</li>
                 </ul>
             </div>
 
