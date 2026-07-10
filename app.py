@@ -5749,12 +5749,13 @@ button.ghost:hover { box-shadow: none; }
         <div style="font-size:.55rem;color:var(--muted);margin-bottom:6px;line-height:1.4;">Sign in to sync chart layouts, indicators, and drawings. Get real-time data if your TV account has data subscriptions.</div>
         <button id="sidebar-tv-login" onclick="openTvLogin()" style="width:100%;padding:7px;border:1px solid rgba(41,98,255,0.4);border-radius:6px;background:rgba(41,98,255,0.1);color:#2962FF;font-size:.65rem;font-weight:600;cursor:pointer;">Sign in with TradingView</button>
         <button onclick="tvLogout()" style="width:100%;padding:5px;border:none;border-radius:4px;background:transparent;color:var(--muted);font-size:.55rem;cursor:pointer;margin-top:3px;">Sign out</button>
-        <div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border2);">
+        <div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border2);display:flex;flex-direction:column;gap:4px;">
+          <button onclick="syncTvSession()" style="width:100%;padding:6px;border:1px solid var(--border);border-radius:5px;background:var(--surface);color:var(--text);font-size:.6rem;font-weight:600;cursor:pointer;">🌐 Sync TV Session (visit tradingview.com)</button>
           <div onclick="toggleTvCookieSection()" style="font-size:.55rem;color:var(--muted);cursor:pointer;display:flex;align-items:center;gap:4px;user-select:none;">
-            <span id="tv-cookie-toggle">▶</span> Already logged in browser? Paste session cookies
+            <span id="tv-cookie-toggle">▶</span> Paste session cookies (advanced)
           </div>
-          <div id="tv-cookie-section" style="display:none;margin-top:6px;">
-            <div style="font-size:.5rem;color:var(--muted);margin-bottom:4px;line-height:1.3;">Log in at <strong>tradingview.com</strong> in your browser, then copy <code>sessionid</code> and <code>sessionid_sign</code> from DevTools → Application → Cookies → tradingview.com. Paste them below.</div>
+          <div id="tv-cookie-section" style="display:none;margin-top:2px;">
+            <div style="font-size:.5rem;color:var(--muted);margin-bottom:4px;line-height:1.3;">Log in at <strong>tradingview.com</strong> in your browser, then copy <code>sessionid</code> and <code>sessionid_sign</code> from DevTools → Application → Cookies → tradingview.com. Paste below.</div>
             <input type="text" id="tv-sessionid" placeholder="sessionid" style="width:100%;padding:5px 6px;border:1px solid var(--border);border-radius:4px;background:var(--surface);color:var(--text);font-size:.6rem;margin-bottom:4px;box-sizing:border-box;">
             <input type="text" id="tv-sessionid-sign" placeholder="sessionid_sign" style="width:100%;padding:5px 6px;border:1px solid var(--border);border-radius:4px;background:var(--surface);color:var(--text);font-size:.6rem;margin-bottom:4px;box-sizing:border-box;">
             <button onclick="injectTvCookies()" style="width:100%;padding:5px;border:1px solid rgba(41,98,255,0.4);border-radius:4px;background:rgba(41,98,255,0.1);color:#2962FF;font-size:.6rem;font-weight:600;cursor:pointer;">Set Cookies & Reload Charts</button>
@@ -7027,6 +7028,11 @@ function tvLogout(){
   localStorage.removeItem('tv_login_remembered');
   toast('TradingView session cleared. Close and reopen the app to fully sign out.','info');
 }
+function syncTvSession(){
+  if(confirm('Navigate to TradingView to sync your login? The app will reload when you return.')){
+    window.location.href='https://www.tradingview.com';
+  }
+}
 function toggleTvCookieSection(){
   var s=document.getElementById('tv-cookie-section');
   var t=document.getElementById('tv-cookie-toggle');
@@ -8254,10 +8260,20 @@ if __name__ == "__main__":
                 import platform
                 if platform.system() != 'Darwin':
                     return "Cookie injection requires macOS (native WKWebsiteDataStore)"
-                from Foundation import NSHTTPCookieName, NSHTTPCookieValue, NSHTTPCookieDomain, NSHTTPCookiePath, NSHTTPCookieSecure, NSHTTPCookie
+                from Foundation import NSHTTPCookieName, NSHTTPCookieValue, NSHTTPCookieDomain, NSHTTPCookiePath, NSHTTPCookieSecure, NSHTTPCookie, NSDate
                 from WebKit import WKWebsiteDataStore
-                store = WKWebsiteDataStore.defaultDataStore()
-                cookie_store = store.httpCookieStore()
+                from webview.platforms.cocoa import BrowserView
+                if self._main_window is None:
+                    return "error: main window not ready"
+                bv = BrowserView.instances.get(self._main_window.uid)
+                if bv is None:
+                    return "error: browser view not found"
+                try:
+                    bv.datastore._setResourceLoadStatisticsEnabled_(False)
+                except Exception:
+                    pass
+                cookie_store = bv.datastore.httpCookieStore()
+                expiry = NSDate.dateWithTimeIntervalSinceNow_(86400 * 30)
                 for name, value in (("sessionid", sessionid), ("sessionid_sign", sessionid_sign)):
                     props = {
                         NSHTTPCookieName: name,
@@ -8268,13 +8284,45 @@ if __name__ == "__main__":
                     }
                     cookie = NSHTTPCookie.cookieWithProperties_(props)
                     cookie_store.setCookie_completionHandler_(cookie, None)
+                import time
+                time.sleep(0.3)
                 if self._main_window:
                     self._main_window.evaluate_js('setTimeout(function(){reloadAllTvWidgets()},500)')
                 return "ok"
             except Exception as e:
                 return f"error: {e}"
 
+        def debug_tv_cookies(self):
+            try:
+                from WebKit import WKWebsiteDataStore
+                from CoreFoundation import CFRunLoopRunInMode, kCFRunLoopDefaultMode
+                store = WKWebsiteDataStore.defaultDataStore()
+                cookie_store = store.httpCookieStore()
+                result = []
+                done = []
+                def on_get(cookies):
+                    for c in cookies:
+                        nm = str(c.name() or '')
+                        dn = str(c.domain() or '')
+                        if 'tradingview' in dn or 'session' in nm:
+                            result.append(f"{nm}={c.value()[:40] or ''} (domain={dn})")
+                    done.append(True)
+                cookie_store.getAllCookies_(on_get)
+                for _ in range(50):
+                    CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.01, False)
+                    if done:
+                        break
+                return str(result) if result else "No TradingView cookies found"
+            except Exception as e:
+                return f"debug error: {e}"
+
     try:
+        try:
+            import WebKit
+            ds = WebKit.WKWebsiteDataStore.defaultDataStore()
+            ds._setResourceLoadStatisticsEnabled_(False)
+        except Exception:
+            pass
         _api_instance = _Api()
         window = webview.create_window(
             "TraderMoney 9.1.9",
@@ -8285,6 +8333,30 @@ if __name__ == "__main__":
             js_api=_api_instance,
         )
         _api_instance._main_window = window
+
+        def _on_main_loaded():
+            try:
+                window.evaluate_js("""
+                if(window.location.hostname.includes('tradingview.com')){
+                    var el=document.getElementById('__tm_return');
+                    if(!el){
+                        el=document.createElement('div');
+                        el.id='__tm_return';
+                        el.style.cssText='position:fixed;bottom:20px;right:20px;z-index:99999;background:#2962FF;color:#fff;border:none;border-radius:8px;padding:10px 18px;font-size:14px;cursor:pointer;box-shadow:0 2px 10px rgba(0,0,0,0.3);font-family:-apple-system,BlinkMacSystemFont,sans-serif;';
+                        el.textContent='\\u21A9 Return to TraderMoney';
+                        el.onclick=function(){window.location.href='http://127.0.0.1:5050';};
+                        document.body.appendChild(el);
+                        var s=document.createElement('div');
+                        s.style.cssText='position:fixed;bottom:0;left:0;right:0;z-index:99998;background:rgba(41,98,255,0.95);color:#fff;padding:8px 16px;font-size:12px;text-align:center;font-family:-apple-system,BlinkMacSystemFont,sans-serif;';
+                        s.textContent='Connected to TraderMoney. Log in and click \\u201CReturn\\u201D to go back.';
+                        document.body.appendChild(s);
+                    }
+                }
+                """)
+            except Exception:
+                pass
+
+        window.events.loaded += _on_main_loaded
         webview.start()
     finally:
         _unregister_session()
