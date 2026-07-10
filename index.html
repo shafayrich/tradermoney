@@ -842,8 +842,8 @@
                 <h3>v9.1.9 — Fixed Google/Apple Social Login (Redirect Mode)</h3>
                 <div class="date">July 9, 2026</div>
                 <ul>
-                    <li><strong>Removed window.open Override:</strong> The previous attempt to route OAuth popups through redirects broke TradingView's normal login flow. Removed the JS override entirely so email/password login works naturally in the webview.</li>
-                    <li><strong>Clarified Login Options:</strong> Google &amp; Apple sign-in are blocked by the providers in desktop apps (WKWebView). The UI now clearly tells users to use email/password login inside the app.</li>
+                    <li><strong>Cookie Injection Login:</strong> Google/Apple OAuth is permanently blocked in desktop WKWebView. Added native macOS cookie injection via PyObjC + WKWebsiteDataStore — users log in on TradingView in their browser, copy <code>sessionid</code> + <code>sessionid_sign</code> from DevTools, and paste into the app. Charts reload with full authenticated session. No extra dependencies needed.</li>
+                    <li><strong>Removed window.open Override:</strong> The previous redirect-based OAuth attempt broke email/password login. Removed all JS overrides entirely — email/password login in the webview now works naturally.</li>
                 </ul>
             </div>
 

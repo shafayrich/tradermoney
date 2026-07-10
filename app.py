@@ -5746,9 +5746,21 @@ button.ghost:hover { box-shadow: none; }
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
           TradingView Login
         </div>
-        <div style="font-size:.55rem;color:var(--muted);margin-bottom:6px;line-height:1.4;">Sign in to sync chart layouts, indicators, and drawings. Get real-time data if your TV account has data subscriptions. <strong>Note:</strong> Use <strong>Email/Password</strong> login inside the app. Google &amp; Apple sign-in are not supported in desktop apps.</div>
+        <div style="font-size:.55rem;color:var(--muted);margin-bottom:6px;line-height:1.4;">Sign in to sync chart layouts, indicators, and drawings. Get real-time data if your TV account has data subscriptions.</div>
         <button id="sidebar-tv-login" onclick="openTvLogin()" style="width:100%;padding:7px;border:1px solid rgba(41,98,255,0.4);border-radius:6px;background:rgba(41,98,255,0.1);color:#2962FF;font-size:.65rem;font-weight:600;cursor:pointer;">Sign in with TradingView</button>
-        <button onclick="tvLogout()" style="width:100%;padding:5px;border:none;border-radius:4px;background:transparent;color:var(--muted);font-size:.55rem;cursor:pointer;margin-top:3px;">Clear session</button>
+        <button onclick="tvLogout()" style="width:100%;padding:5px;border:none;border-radius:4px;background:transparent;color:var(--muted);font-size:.55rem;cursor:pointer;margin-top:3px;">Sign out</button>
+        <div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border2);">
+          <div onclick="toggleTvCookieSection()" style="font-size:.55rem;color:var(--muted);cursor:pointer;display:flex;align-items:center;gap:4px;user-select:none;">
+            <span id="tv-cookie-toggle">▶</span> Already logged in browser? Paste session cookies
+          </div>
+          <div id="tv-cookie-section" style="display:none;margin-top:6px;">
+            <div style="font-size:.5rem;color:var(--muted);margin-bottom:4px;line-height:1.3;">Log in at <strong>tradingview.com</strong> in your browser, then copy <code>sessionid</code> and <code>sessionid_sign</code> from DevTools → Application → Cookies → tradingview.com. Paste them below.</div>
+            <input type="text" id="tv-sessionid" placeholder="sessionid" style="width:100%;padding:5px 6px;border:1px solid var(--border);border-radius:4px;background:var(--surface);color:var(--text);font-size:.6rem;margin-bottom:4px;box-sizing:border-box;">
+            <input type="text" id="tv-sessionid-sign" placeholder="sessionid_sign" style="width:100%;padding:5px 6px;border:1px solid var(--border);border-radius:4px;background:var(--surface);color:var(--text);font-size:.6rem;margin-bottom:4px;box-sizing:border-box;">
+            <button onclick="injectTvCookies()" style="width:100%;padding:5px;border:1px solid rgba(41,98,255,0.4);border-radius:4px;background:rgba(41,98,255,0.1);color:#2962FF;font-size:.6rem;font-weight:600;cursor:pointer;">Set Cookies & Reload Charts</button>
+            <div id="tv-cookie-status" style="font-size:.5rem;margin-top:4px;"></div>
+          </div>
+        </div>
       </div>
     </div>
   </details>
@@ -7015,6 +7027,32 @@ function tvLogout(){
   localStorage.removeItem('tv_login_remembered');
   toast('TradingView session cleared. Close and reopen the app to fully sign out.','info');
 }
+function toggleTvCookieSection(){
+  var s=document.getElementById('tv-cookie-section');
+  var t=document.getElementById('tv-cookie-toggle');
+  if(!s||!t)return;
+  if(s.style.display==='none'||!s.style.display){
+    s.style.display='block';t.textContent='▼';
+  }else{
+    s.style.display='none';t.textContent='▶';
+  }
+}
+function injectTvCookies(){
+  var sid=document.getElementById('tv-sessionid');
+  var sig=document.getElementById('tv-sessionid-sign');
+  var st=document.getElementById('tv-cookie-status');
+  if(!sid||!sig||!st)return;
+  var sv=sid.value.trim(),sg=sig.value.trim();
+  if(!sv||!sg){st.textContent='Please fill in both fields.';return;}
+  st.textContent='Injecting cookies...';
+  pywebview.api.inject_tv_cookies(sv,sg).then(function(r){
+    if(r==='ok'){
+      st.textContent=String.fromCharCode(10003)+' Cookies set! Charts reloading...';
+    }else{
+      st.textContent=String.fromCharCode(10007)+' Error: '+r;
+    }
+  });
+}
 function reloadAllTvWidgets(){
   if(tvWidget)try{tvWidget.remove();}catch(e){}
   if(tradeTvWidget)try{tradeTvWidget.remove();}catch(e){}
@@ -8186,6 +8224,7 @@ if __name__ == "__main__":
     class _Api:
         def __init__(self):
             self._login_win = None
+            self._main_window = None
 
         def open_tv_login(self):
             try:
@@ -8199,14 +8238,9 @@ if __name__ == "__main__":
 
                 def _on_login_closed():
                     self._login_win = None
-                    main = None
-                    for w in webview.windows:
-                        if w is not win:
-                            main = w
-                            break
-                    if main:
+                    if self._main_window:
                         try:
-                            main.evaluate_js('setTimeout(function(){reloadAllTvWidgets()},500)')
+                            self._main_window.evaluate_js('setTimeout(function(){reloadAllTvWidgets()},500)')
                         except Exception:
                             pass
 
@@ -8215,15 +8249,42 @@ if __name__ == "__main__":
             except Exception as e:
                 return f"error: {e}"
 
+        def inject_tv_cookies(self, sessionid, sessionid_sign):
+            try:
+                import platform
+                if platform.system() != 'Darwin':
+                    return "Cookie injection requires macOS (native WKWebsiteDataStore)"
+                from Foundation import NSHTTPCookieName, NSHTTPCookieValue, NSHTTPCookieDomain, NSHTTPCookiePath, NSHTTPCookieSecure, NSHTTPCookie
+                from WebKit import WKWebsiteDataStore
+                store = WKWebsiteDataStore.defaultDataStore()
+                cookie_store = store.httpCookieStore()
+                for name, value in (("sessionid", sessionid), ("sessionid_sign", sessionid_sign)):
+                    props = {
+                        NSHTTPCookieName: name,
+                        NSHTTPCookieValue: value,
+                        NSHTTPCookieDomain: ".tradingview.com",
+                        NSHTTPCookiePath: "/",
+                        NSHTTPCookieSecure: "TRUE",
+                    }
+                    cookie = NSHTTPCookie.cookieWithProperties_(props)
+                    cookie_store.setCookie_completionHandler_(cookie, None)
+                if self._main_window:
+                    self._main_window.evaluate_js('setTimeout(function(){reloadAllTvWidgets()},500)')
+                return "ok"
+            except Exception as e:
+                return f"error: {e}"
+
     try:
+        _api_instance = _Api()
         window = webview.create_window(
             "TraderMoney 9.1.9",
             "http://127.0.0.1:5050",
             width=1440,
             height=880,
             min_size=(980, 700),
-            js_api=_Api(),
+            js_api=_api_instance,
         )
+        _api_instance._main_window = window
         webview.start()
     finally:
         _unregister_session()
