@@ -55,7 +55,7 @@ import webview
 from flask import Flask, Response, jsonify, request, send_file
 from flask_cors import CORS
 
-APP_VERSION = "9.1.9"
+APP_VERSION = "9.2.0"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # AI CONFIGURATION
@@ -422,6 +422,7 @@ _DEFAULT_CONFIG: dict = {
     "tickers": "AAPL",
     "mode": "signal",
     "quantity": 1,
+    "max_spend": 0,
     "emas": [9, 50],
     "use_bracket": False,
     "sl_percent": 2.0,
@@ -2502,6 +2503,13 @@ class TradingEngine(threading.Thread):
             return
 
         qty = self.per_ticker_qty.get(sym, self.config.get("quantity", 1))
+        max_spend = float(self.config.get("max_spend", 0))
+        if max_spend > 0 and price > 0:
+            max_qty = int(max_spend / price)
+            if max_qty < 1:
+                self._log(f"[Execute] max_spend {max_spend} < price {price}, skipping")
+                return
+            qty = min(qty, max_qty) if qty > 0 else max_qty
         sf = SignalAnalyzer._sf
         use_trailing = self.config.get("use_trailing", False)
         trail_pct = float(self.config.get("trailing_percent", 1.5))
@@ -4534,7 +4542,7 @@ FRONTEND_HTML = r"""
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>TraderMoney 9.1.9</title>
+<title>TraderMoney 9.2.0</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root {
@@ -4592,7 +4600,7 @@ body {
   background: var(--bg);
   color: var(--text);
   display: flex; height: 100vh; overflow: hidden;
-  color-scheme: dark; font-weight: 400; font-size: 12.5px; line-height: 1.5;
+  color-scheme: dark; font-weight: 400; font-size: 14px; line-height: 1.5;
   -webkit-font-smoothing: antialiased;
 }
 svg.icon { width: 12px; height: 12px; fill: currentColor; vertical-align: middle; margin-right: 3px; flex-shrink: 0; }
@@ -5717,7 +5725,7 @@ button.ghost:hover { box-shadow: none; }
     <span class="sidebar-logo">TM</span>
     <div class="sidebar-title">
       <span class="sidebar-name">TraderMoney</span>
-      <span class="sidebar-version">v9.1.9</span>
+      <span class="sidebar-version">v9.2.0</span>
     </div>
     <div class="sidebar-actions">
       <button onclick="location.reload()" title="Refresh"><svg class="icon" style="width:13px;height:13px;" viewBox="0 0 24 24"><path d="M17.65 6.35A7.958 7.958 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg></button>
@@ -5742,26 +5750,9 @@ button.ghost:hover { box-shadow: none; }
         <label>Telegram Chat ID <span style="color:var(--muted);font-weight:400;">(Pro)</span></label><input type="text" id="tgc">
       </div>
       <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border2);">
-        <div style="font-size:.65rem;font-weight:600;color:var(--muted);margin-bottom:6px;display:flex;align-items:center;gap:4px;">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
-          TradingView Login
-        </div>
-        <div style="font-size:.55rem;color:var(--muted);margin-bottom:6px;line-height:1.4;">Sign in to sync chart layouts, indicators, and drawings. Get real-time data if your TV account has data subscriptions.</div>
-        <button id="sidebar-tv-login" onclick="openTvLogin()" style="width:100%;padding:7px;border:1px solid rgba(41,98,255,0.4);border-radius:6px;background:rgba(41,98,255,0.1);color:#2962FF;font-size:.65rem;font-weight:600;cursor:pointer;">Sign in with TradingView</button>
-        <button onclick="tvLogout()" style="width:100%;padding:5px;border:none;border-radius:4px;background:transparent;color:var(--muted);font-size:.55rem;cursor:pointer;margin-top:3px;">Sign out</button>
-        <div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border2);display:flex;flex-direction:column;gap:4px;">
-          <button onclick="syncTvSession()" style="width:100%;padding:6px;border:1px solid var(--border);border-radius:5px;background:var(--surface);color:var(--text);font-size:.6rem;font-weight:600;cursor:pointer;">🌐 Sync TV Session (visit tradingview.com)</button>
-          <div onclick="toggleTvCookieSection()" style="font-size:.55rem;color:var(--muted);cursor:pointer;display:flex;align-items:center;gap:4px;user-select:none;">
-            <span id="tv-cookie-toggle">▶</span> Paste session cookies (advanced)
-          </div>
-          <div id="tv-cookie-section" style="display:none;margin-top:2px;">
-            <div style="font-size:.5rem;color:var(--muted);margin-bottom:4px;line-height:1.3;">Log in at <strong>tradingview.com</strong> in your browser, then copy <code>sessionid</code> and <code>sessionid_sign</code> from DevTools → Application → Cookies → tradingview.com. Paste below.</div>
-            <input type="text" id="tv-sessionid" placeholder="sessionid" style="width:100%;padding:5px 6px;border:1px solid var(--border);border-radius:4px;background:var(--surface);color:var(--text);font-size:.6rem;margin-bottom:4px;box-sizing:border-box;">
-            <input type="text" id="tv-sessionid-sign" placeholder="sessionid_sign" style="width:100%;padding:5px 6px;border:1px solid var(--border);border-radius:4px;background:var(--surface);color:var(--text);font-size:.6rem;margin-bottom:4px;box-sizing:border-box;">
-            <button onclick="injectTvCookies()" style="width:100%;padding:5px;border:1px solid rgba(41,98,255,0.4);border-radius:4px;background:rgba(41,98,255,0.1);color:#2962FF;font-size:.6rem;font-weight:600;cursor:pointer;">Set Cookies & Reload Charts</button>
-            <div id="tv-cookie-status" style="font-size:.5rem;margin-top:4px;"></div>
-          </div>
-        </div>
+        <label>Max Spend Per Trade <span style="color:var(--muted);font-weight:400;">(0 = unlimited)</span></label>
+        <input type="number" id="max-spend" value="0" min="0" step="10" style="width:100%;padding:6px 7px;border:1px solid var(--border);border-radius:5px;background:var(--surface);color:var(--text);font-size:.7rem;box-sizing:border-box;">
+        <div style="font-size:.55rem;color:var(--muted);margin-top:2px;line-height:1.3;">Limits the dollar amount the bot can spend per trade. E.g. set to 200 to cap trades at $200. Set to 0 for no limit.</div>
       </div>
     </div>
   </details>
@@ -6048,7 +6039,7 @@ button.ghost:hover { box-shadow: none; }
   <div id="tab-help" class="tab">
     <div class="hb">
       <input type="text" id="help-search" placeholder="Search help... (Cmd+F)" oninput="filterHelp()" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);font-size:.82rem;margin-bottom:10px;box-sizing:border-box;">
-      <h3>TraderMoney v9.1.9 – Complete Help Guide</h3>
+      <h3>TraderMoney v9.2.0 – Complete Help Guide</h3>
       <p style="font-size:.82rem;color:var(--muted);margin-top:-4px;">Your desktop algorithmic trading terminal. All features documented below.</p>
 
       <details>
@@ -6067,6 +6058,12 @@ button.ghost:hover { box-shadow: none; }
             <li>Click <b>Start Bot</b> to begin analyzing markets</li>
             <li>View signals in the Signals tab, charts in Charts tab</li>
           </ol>
+          <h4>Position Sizing</h4>
+          <p style="font-size:.82rem;">Two ways to control trade size:</p>
+          <ul style="font-size:.82rem;line-height:1.7;">
+            <li><b>Share/Contract Quantity:</b> Set a fixed number of shares per trade via the Default Qty field. Per-ticker overrides supported: <code>AAPL:10</code> = 10 shares of AAPL.</li>
+            <li><b>Max Spend ($):</b> Set a dollar cap in Connection settings (e.g. $200). The bot will never spend more than this amount per trade, regardless of share count. Shares are calculated as <code>max_spend / current_price</code>. Set to 0 for unlimited. Works with all brokers.</li>
+          </ul>
           <h4>Auto Trading</h4>
           <p style="font-size:.82rem;">Set Mode to "Auto Trade" (Pro only) to automatically execute trades when signals fire. Configure position sizing via quantity field or per-ticker quantity in ticker format (e.g. AAPL:10).</p>
         </div>
@@ -6850,7 +6847,7 @@ function buildCfg(){
   const ip=collectIndicatorParams();
   return{broker:cfg.broker||'Alpaca',tickers:gv('tickers','AAPL'),timeframe:gv('tf','1m'),
     emas:[parseInt(gv('emaf','9')),parseInt(gv('emas','50'))],
-    quantity:parseInt(gv('qty','1'))||1,mode:gv('mode','signal'),direction:gv('dir','both'),
+    quantity:parseInt(gv('qty','1'))||1,max_spend:parseFloat(gv('max-spend','0'))||0,mode:gv('mode','signal'),direction:gv('dir','both'),
     use_default_qty:gc('udefqty'),use_bracket:gc('ubracket'),
     sl_percent:parseFloat(gv('slp','2')),tp_percent:parseFloat(gv('tpp','4')),
     use_atr_stops:gc('uatr'),use_trailing:gc('utrail'),trailing_percent:parseFloat(gv('tralp','1.5')),use_scale_out:gc('uscale'),scale_pct1:parseFloat(gv('scale-tp1','2.0')),scale_pct2:parseFloat(gv('scale-tp2','4.0')),scale_tp1:parseInt(gv('scale-p1','60')),scale_tp2:parseInt(gv('scale-p2','40')),use_mtf_confirmation:gc('umtf'),mtf_timeframe:gv('mtf-tf','5m'),use_news_override:gc('unewsov'),    telegram:{token:gv('tgt'),chat_id:gv('tgc')},
@@ -6905,6 +6902,7 @@ function initUI(c){
   sv('emaf',c.emas?c.emas[0]:9);sv('emas',c.emas?c.emas[1]:50);
   sc('udefqty',c.use_default_qty!==false);toggleDefQty();
   sv('qty',c.quantity||1);
+  sv('max-spend',c.max_spend||0);
   if(c.telegram){sv('tgt',c.telegram.token||'');sv('tgc',c.telegram.chat_id||'');}
   sv('slp',c.sl_percent||2);sv('tpp',c.tp_percent||4);
   sc('ursi',c.use_rsi!==false);sc('umacd',c.use_macd!==false);
@@ -6963,7 +6961,7 @@ function loadTradingViewChart(symbol){
   }
   $('chart-buy-btn').onclick=()=>chartTrade('buy');
   $('chart-sell-btn').onclick=()=>chartTrade('sell');
-  $('chart-tv-login').onclick=()=>openTvLogin();
+
   $('chart-reload-btn').onclick=()=>{
     if(tvWidget)try{tvWidget.remove();}catch(e){}
     if(lastTvSymbol)loadTradingViewChart(lastTvSymbol);
@@ -6999,73 +6997,7 @@ function refreshTickers(){
     toast('Tickers refreshed','success');
   });
 }
-/* ── TradingView Login ── */
-function openTvLogin(){
-  if(window.pywebview&&pywebview.api){
-    pywebview.api.open_tv_login().then(result=>{
-      if(result==='ok'){
-        toast('TradingView sign-in opened. Log in and close the window to auto-reload.','info');
-      }else{
-        toast('Failed to open TV login: '+result,'error');
-        // Fallback to window.open
-        const w=window.open('https://www.tradingview.com/accounts/signin/','tv_login','width=600,height=700');
-        if(w)toast('TV sign-in opened in a new window','info');
-      }
-    });
-  }else{
-    const w=window.open('https://www.tradingview.com/accounts/signin/','tv_login','width=600,height=700');
-    if(!w){
-      const a=document.createElement('a');
-      a.href='https://www.tradingview.com/accounts/signin/';
-      a.target='_blank';a.rel='noopener';a.click();
-      toast('TradingView sign-in opened in your browser. After signing in, reload to sync.','info');
-    }else{
-      toast('TradingView sign-in opened. Log in and close the window to auto-reload.','info');
-    }
-  }
-}
-function tvLogout(){
-  localStorage.removeItem('tv_login_remembered');
-  toast('TradingView session cleared. Close and reopen the app to fully sign out.','info');
-}
-function syncTvSession(){
-  if(confirm('Navigate to TradingView to sync your login? The app will reload when you return.')){
-    window.location.href='https://www.tradingview.com';
-  }
-}
-function toggleTvCookieSection(){
-  var s=document.getElementById('tv-cookie-section');
-  var t=document.getElementById('tv-cookie-toggle');
-  if(!s||!t)return;
-  if(s.style.display==='none'||!s.style.display){
-    s.style.display='block';t.textContent='▼';
-  }else{
-    s.style.display='none';t.textContent='▶';
-  }
-}
-function injectTvCookies(){
-  var sid=document.getElementById('tv-sessionid');
-  var sig=document.getElementById('tv-sessionid-sign');
-  var st=document.getElementById('tv-cookie-status');
-  if(!sid||!sig||!st)return;
-  var sv=sid.value.trim(),sg=sig.value.trim();
-  if(!sv||!sg){st.textContent='Please fill in both fields.';return;}
-  st.textContent='Injecting cookies...';
-  pywebview.api.inject_tv_cookies(sv,sg).then(function(r){
-    if(r==='ok'){
-      st.textContent=String.fromCharCode(10003)+' Cookies set! Charts reloading...';
-    }else{
-      st.textContent=String.fromCharCode(10007)+' Error: '+r;
-    }
-  });
-}
-function reloadAllTvWidgets(){
-  if(tvWidget)try{tvWidget.remove();}catch(e){}
-  if(tradeTvWidget)try{tradeTvWidget.remove();}catch(e){}
-  if(lastTvSymbol)loadTradingViewChart(lastTvSymbol);
-  if(lastTradeTvSym)initTradeTvChart(lastTradeTvSym);
-  toast('All charts reloaded','success');
-}
+
 
 /* ── Config load/save ── */
 async function loadConfig(){
@@ -7089,7 +7021,7 @@ async function saveConfig(){
   toast('Config saved','success');
 }
 
-const DEF={broker:'Alpaca',tickers:'AAPL',mode:'signal',direction:'both',use_default_qty:true,quantity:1,emas:[9,50],use_bracket:false,sl_percent:2,tp_percent:4,timeframe:'1m',telegram:{},use_rsi:true,use_macd:true,use_vwap:true,use_bollinger:true,use_adx:true,use_vol_confirm:true,use_supertrend:true,use_stochastic:true,use_atr_stops:true,alpaca:{api_key:'',secret_key:'',paper:true},ibkr:{host:'',port:'',client_id:''},tradier:{access_token:'',account_id:'',sandbox:false},binance:{api_key:'',api_secret:'',testnet:true},bybit:{api_key:'',api_secret:'',testnet:true},okx:{api_key:'',api_secret:'',api_passphrase:'',demo:true}};
+const DEF={broker:'Alpaca',tickers:'AAPL',mode:'signal',direction:'both',use_default_qty:true,quantity:1,max_spend:0,emas:[9,50],use_bracket:false,sl_percent:2,tp_percent:4,timeframe:'1m',telegram:{},use_rsi:true,use_macd:true,use_vwap:true,use_bollinger:true,use_adx:true,use_vol_confirm:true,use_supertrend:true,use_stochastic:true,use_atr_stops:true,alpaca:{api_key:'',secret_key:'',paper:true},ibkr:{host:'',port:'',client_id:''},tradier:{access_token:'',account_id:'',sandbox:false},binance:{api_key:'',api_secret:'',testnet:true},bybit:{api_key:'',api_secret:'',testnet:true},okx:{api_key:'',api_secret:'',api_passphrase:'',demo:true}};
 function resetDef(){cfg=JSON.parse(JSON.stringify(DEF));licValid=false;applyFreeTierUI();sv('lickey','');initUI(cfg);saveConfig();toast('Reset to factory defaults','success');}
 
 /* ── Thesis Builder ── */
@@ -8225,107 +8157,14 @@ if __name__ == "__main__":
     flask_thread.start()
     time.sleep(1.2)
 
-    _tv_login_window = None
-
     class _Api:
         def __init__(self):
-            self._login_win = None
             self._main_window = None
 
-        def open_tv_login(self):
-            try:
-                win = webview.create_window(
-                    "TradingView Login",
-                    "https://www.tradingview.com/accounts/signin/",
-                    width=600, height=700,
-                    js_api=self,
-                )
-                self._login_win = win
-
-                def _on_login_closed():
-                    self._login_win = None
-                    if self._main_window:
-                        try:
-                            self._main_window.evaluate_js('setTimeout(function(){reloadAllTvWidgets()},500)')
-                        except Exception:
-                            pass
-
-                win.events.closed += _on_login_closed
-                return "ok"
-            except Exception as e:
-                return f"error: {e}"
-
-        def inject_tv_cookies(self, sessionid, sessionid_sign):
-            try:
-                import platform
-                if platform.system() != 'Darwin':
-                    return "Cookie injection requires macOS (native WKWebsiteDataStore)"
-                from Foundation import NSHTTPCookieName, NSHTTPCookieValue, NSHTTPCookieDomain, NSHTTPCookiePath, NSHTTPCookieSecure, NSHTTPCookie, NSDate
-                from WebKit import WKWebsiteDataStore
-                from webview.platforms.cocoa import BrowserView
-                if self._main_window is None:
-                    return "error: main window not ready"
-                bv = BrowserView.instances.get(self._main_window.uid)
-                if bv is None:
-                    return "error: browser view not found"
-                try:
-                    bv.datastore._setResourceLoadStatisticsEnabled_(False)
-                except Exception:
-                    pass
-                cookie_store = bv.datastore.httpCookieStore()
-                expiry = NSDate.dateWithTimeIntervalSinceNow_(86400 * 30)
-                for name, value in (("sessionid", sessionid), ("sessionid_sign", sessionid_sign)):
-                    props = {
-                        NSHTTPCookieName: name,
-                        NSHTTPCookieValue: value,
-                        NSHTTPCookieDomain: ".tradingview.com",
-                        NSHTTPCookiePath: "/",
-                        NSHTTPCookieSecure: "TRUE",
-                    }
-                    cookie = NSHTTPCookie.cookieWithProperties_(props)
-                    cookie_store.setCookie_completionHandler_(cookie, None)
-                import time
-                time.sleep(0.3)
-                if self._main_window:
-                    self._main_window.evaluate_js('setTimeout(function(){reloadAllTvWidgets()},500)')
-                return "ok"
-            except Exception as e:
-                return f"error: {e}"
-
-        def debug_tv_cookies(self):
-            try:
-                from WebKit import WKWebsiteDataStore
-                from CoreFoundation import CFRunLoopRunInMode, kCFRunLoopDefaultMode
-                store = WKWebsiteDataStore.defaultDataStore()
-                cookie_store = store.httpCookieStore()
-                result = []
-                done = []
-                def on_get(cookies):
-                    for c in cookies:
-                        nm = str(c.name() or '')
-                        dn = str(c.domain() or '')
-                        if 'tradingview' in dn or 'session' in nm:
-                            result.append(f"{nm}={c.value()[:40] or ''} (domain={dn})")
-                    done.append(True)
-                cookie_store.getAllCookies_(on_get)
-                for _ in range(50):
-                    CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.01, False)
-                    if done:
-                        break
-                return str(result) if result else "No TradingView cookies found"
-            except Exception as e:
-                return f"debug error: {e}"
-
     try:
-        try:
-            import WebKit
-            ds = WebKit.WKWebsiteDataStore.defaultDataStore()
-            ds._setResourceLoadStatisticsEnabled_(False)
-        except Exception:
-            pass
         _api_instance = _Api()
         window = webview.create_window(
-            "TraderMoney 9.1.9",
+            "TraderMoney 9.2.0",
             "http://127.0.0.1:5050",
             width=1440,
             height=880,
@@ -8333,30 +8172,6 @@ if __name__ == "__main__":
             js_api=_api_instance,
         )
         _api_instance._main_window = window
-
-        def _on_main_loaded():
-            try:
-                window.evaluate_js("""
-                if(window.location.hostname.includes('tradingview.com')){
-                    var el=document.getElementById('__tm_return');
-                    if(!el){
-                        el=document.createElement('div');
-                        el.id='__tm_return';
-                        el.style.cssText='position:fixed;bottom:20px;right:20px;z-index:99999;background:#2962FF;color:#fff;border:none;border-radius:8px;padding:10px 18px;font-size:14px;cursor:pointer;box-shadow:0 2px 10px rgba(0,0,0,0.3);font-family:-apple-system,BlinkMacSystemFont,sans-serif;';
-                        el.textContent='\\u21A9 Return to TraderMoney';
-                        el.onclick=function(){window.location.href='http://127.0.0.1:5050';};
-                        document.body.appendChild(el);
-                        var s=document.createElement('div');
-                        s.style.cssText='position:fixed;bottom:0;left:0;right:0;z-index:99998;background:rgba(41,98,255,0.95);color:#fff;padding:8px 16px;font-size:12px;text-align:center;font-family:-apple-system,BlinkMacSystemFont,sans-serif;';
-                        s.textContent='Connected to TraderMoney. Log in and click \\u201CReturn\\u201D to go back.';
-                        document.body.appendChild(s);
-                    }
-                }
-                """)
-            except Exception:
-                pass
-
-        window.events.loaded += _on_main_loaded
         webview.start()
     finally:
         _unregister_session()
