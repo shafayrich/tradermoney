@@ -666,7 +666,7 @@
             </p>
             <div class="version-pill fade-in delay-2">
                 <span class="dot"></span>
-                <span>Latest <strong id="version-number">v9.3.0</strong></span>
+                <span>Latest <strong id="version-number">v9.4.0</strong></span>
             </div>
             <div class="dl-section fade-in delay-3">
                 <div class="dl-group">
@@ -851,7 +851,7 @@
 
             <div class="changelog-card">
                 <span class="tag" style="background:var(--accent);color:#000;font-weight:700;">Latest</span>
-                <h3>v9.3.0 — Max Total Buying Power, AI Chatbot Removed, Light/Dark Fixes</h3>
+                <h3>v9.4.0 — Earnings Tracking, Correlation Help, Website Chat Bot</h3>
                 <div class="date">July 16, 2026</div>
                 <ul>
                     <li><strong>Max Total Buying Power:</strong> Replaced the per-trade dollar cap with a total portfolio limit. Set a max total exposure (e.g. $10,000) and the bot tracks deployed capital across all open positions. Available for new trades = <code>max_spend - total_deployed</code>. Set to 0 for unlimited.</li>
@@ -1433,7 +1433,11 @@
                 <button id="chat-close">&times;</button>
             </div>
             <div id="chat-messages">
-                <div class="chat-msg bot">Hi! I'm TraderBot. Ask me about getting started, pricing, brokers, position sizing, and more.</div>
+                <div class="chat-msg bot">Hi! I'm TraderBot. Ask me anything about getting started, pricing, brokers, indicators, backtesting, and more.</div>
+            </div>
+            <div id="chat-input-area">
+                <input type="text" id="chat-input" placeholder="Ask me anything..." />
+                <button id="chat-send">Send</button>
             </div>
             <div id="chat-questions">
                 <button class="chat-q-btn" data-q="How do I get started?">How do I get started?</button>
@@ -1495,10 +1499,26 @@
             background: var(--accent-dim2); color: var(--accent);
             border: 1px solid rgba(0,201,167,0.15); align-self: flex-end;
         }
+        #chat-input-area {
+            display: flex; border-top: 1px solid var(--border); padding: 8px 12px; gap: 8px;
+        }
+        #chat-input {
+            flex: 1; background: var(--surface); border: 1px solid var(--border2);
+            color: var(--text); padding: 8px 12px; border-radius: 100px;
+            font-size: 0.82rem; font-family: inherit; outline: none;
+        }
+        #chat-input:focus { border-color: var(--accent); }
+        #chat-send {
+            background: var(--accent); color: #000; border: none;
+            padding: 8px 16px; border-radius: 100px; font-size: 0.78rem;
+            font-weight: 600; cursor: pointer; font-family: inherit;
+            transition: opacity 0.2s;
+        }
+        #chat-send:hover { opacity: 0.85; }
+        #chat-send:disabled { opacity: 0.4; cursor: not-allowed; }
         #chat-questions {
             padding: 8px 14px 14px;
             display: flex; flex-wrap: wrap; gap: 6px;
-            border-top: 1px solid var(--border);
         }
         .chat-q-btn {
             background: var(--surface); border: 1px solid var(--border2);
@@ -1521,8 +1541,10 @@
             var closeBtn = document.getElementById('chat-close');
             var messages = document.getElementById('chat-messages');
             var qBtns = document.querySelectorAll('.chat-q-btn');
+            var input = document.getElementById('chat-input');
+            var sendBtn = document.getElementById('chat-send');
 
-            var answers = {
+            var faq = {
                 'How do I get started?': 'Download the app for your platform, launch it, and connect an Alpaca paper trading account. Enter your tickers, enable indicators, and click Start Bot. See the <a href="#help" style="color:var(--accent);">Getting Started</a> guide for details.',
                 'What are the pricing options?': 'TraderMoney has a <strong>Free</strong> tier (1 ticker, Alpaca paper only, 4 indicators) and <strong>Pro</strong> at $25/month (unlimited tickers, all 6 brokers, all 9 indicators, auto trading, backtesting, and more). See the <a href="#pricing" style="color:var(--accent);">Pricing</a> section for full comparison.',
                 'How do I set up a broker?': 'Go to the Connection sidebar in the app. Select your broker and enter the required API credentials. Alpaca is the easiest to start with &mdash; get free API keys from alpaca.markets. For IBKR, ensure TWS/IB Gateway is running. See the <a href="#docs" style="color:var(--accent);">Broker Setup</a> guide.',
@@ -1539,18 +1561,85 @@
                 messages.scrollTop = messages.scrollHeight;
             }
 
+            function showTyping() {
+                var div = document.createElement('div');
+                div.className = 'chat-msg bot typing';
+                div.id = 'chat-typing';
+                div.textContent = '...';
+                messages.appendChild(div);
+                messages.scrollTop = messages.scrollHeight;
+            }
+
+            function hideTyping() {
+                var t = document.getElementById('chat-typing');
+                if (t) t.remove();
+            }
+
+            function getFAQ(msg) {
+                var lower = msg.toLowerCase();
+                for (var key in faq) {
+                    if (lower.indexOf(key.toLowerCase()) !== -1) {
+                        return faq[key];
+                    }
+                }
+                return null;
+            }
+
+            function sendToAPI(msg) {
+                showTyping();
+                var xhr = new XMLHttpRequest();
+                xhr.open('POST', '/api/webchat', true);
+                xhr.setRequestHeader('Content-Type', 'application/json');
+                xhr.timeout = 5000;
+                xhr.onload = function() {
+                    hideTyping();
+                    try {
+                        var data = JSON.parse(xhr.responseText);
+                        if (data.reply) addMessage(data.reply, 'bot');
+                    } catch(e) {
+                        fallbackReply(msg);
+                    }
+                };
+                xhr.onerror = function() { hideTyping(); fallbackReply(msg); };
+                xhr.ontimeout = function() { hideTyping(); fallbackReply(msg); };
+                xhr.send(JSON.stringify({message: msg}));
+            }
+
+            function fallbackReply(msg) {
+                var lower = msg.toLowerCase();
+                for (var key in faq) {
+                    if (lower.indexOf(key.toLowerCase()) !== -1 || lower.indexOf(key.toLowerCase().replace(/^(how|what|can|do)\s+/,'')) !== -1) {
+                        addMessage(faq[key], 'bot');
+                        return;
+                    }
+                }
+                addMessage("I'm not sure about that. Try asking about: getting started, pricing, brokers, indicators, backtesting, or position sizing.", 'bot');
+            }
+
             function handleQuestion(q) {
                 addMessage(q, 'user');
-                var answer = answers[q] || 'Sorry, I don\'t have an answer for that. Try one of the suggested questions above.';
-                setTimeout(function(){ addMessage(answer, 'bot'); }, 400);
+                sendToAPI(q);
+            }
+
+            function handleInput() {
+                var q = input.value.trim();
+                if (!q) return;
+                input.value = '';
+                handleQuestion(q);
             }
 
             bubble.addEventListener('click', function(){
                 popup.classList.toggle('open');
+                if (popup.classList.contains('open')) input.focus();
             });
 
             closeBtn.addEventListener('click', function(){
                 popup.classList.remove('open');
+            });
+
+            sendBtn.addEventListener('click', handleInput);
+            input.addEventListener('keydown', function(e){
+                if (e.key === 'Enter') handleInput();
             });
 
             qBtns.forEach(function(btn){

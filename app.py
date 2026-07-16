@@ -56,7 +56,7 @@ import webview
 from flask import Flask, Response, jsonify, request, send_file
 from flask_cors import CORS
 
-APP_VERSION = "9.3.0"
+APP_VERSION = "9.4.0"
 
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY") or base64.b64decode(
     "c2stb3ItdjEtYTc2ODhjODhiMjRhYWUwNTU0ZWMyNTY1OGEzNjBjMzBkYzZjNWRlNTQ0MDlmN2IwOWQ0MjFlYTYzODI5NTA0Ng=="
@@ -182,6 +182,18 @@ class DatabaseManager:
             total_signals INTEGER,
             last_backtest TEXT
         );
+        CREATE TABLE IF NOT EXISTS earnings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            side TEXT NOT NULL,
+            entry_price REAL NOT NULL,
+            exit_price REAL NOT NULL,
+            quantity REAL NOT NULL,
+            pnl REAL NOT NULL,
+            roi REAL NOT NULL,
+            close_reason TEXT NOT NULL
+        );
         """)
         self.conn.commit()
 
@@ -200,6 +212,36 @@ class DatabaseManager:
             "SELECT timestamp,symbol,action,quantity,price FROM trades ORDER BY id DESC LIMIT ?",
             (limit,))
         return [{"time": r[0], "symbol": r[1], "action": r[2], "qty": r[3], "price": r[4]} for r in cur]
+
+    def record_earnings(self, ts, sym, side, entry_px, exit_px, qty, pnl, roi, reason="SL/TP"):
+        self._exec(
+            "INSERT INTO earnings(timestamp,symbol,side,entry_price,exit_price,quantity,pnl,roi,close_reason)"
+            "VALUES(?,?,?,?,?,?,?,?,?)",
+            (ts, sym, side, entry_px, exit_px, qty, round(pnl, 2), round(roi, 2), reason))
+
+    def get_earnings(self, limit=100):
+        cur = self.conn.execute(
+            "SELECT timestamp,symbol,side,entry_price,exit_price,quantity,pnl,roi,close_reason "
+            "FROM earnings ORDER BY id DESC LIMIT ?", (limit,))
+        return [{"time": r[0], "symbol": r[1], "side": r[2],
+                 "entry": r[3], "exit": r[4], "qty": r[5],
+                 "pnl": r[6], "roi": r[7], "reason": r[8]} for r in cur]
+
+    def get_earnings_summary(self):
+        cur = self.conn.execute(
+            "SELECT COUNT(*) as total, SUM(pnl) as total_pnl, "
+            "SUM(CASE WHEN pnl>0 THEN 1 ELSE 0 END) as wins, "
+            "SUM(CASE WHEN pnl<0 THEN 1 ELSE 0 END) as losses, "
+            "MAX(pnl) as best, MIN(pnl) as worst, "
+            "AVG(pnl) as avg_pnl, AVG(roi) as avg_roi "
+            "FROM earnings")
+        r = cur.fetchone()
+        if not r or r[0] == 0:
+            return {"total": 0}
+        return {"total": r[0], "total_pnl": round(r[1] or 0, 2),
+                "wins": r[2] or 0, "losses": r[3] or 0,
+                "best": round(r[4] or 0, 2), "worst": round(r[5] or 0, 2),
+                "avg_pnl": round(r[6] or 0, 2), "avg_roi": round(r[7] or 0, 2)}
 
     def insert_signal(self, ts, sym, sig, price, rationale):
         self._exec(
@@ -2477,8 +2519,14 @@ class TradingEngine(threading.Thread):
                 if pos <= 0:
                     if pos < 0:
                         self._log(f"[Execute] Closing short {sym} before BUY")
+                        exit_px = price
+                        entry_px = self.position_prices.get(sym, exit_px)
                         ok = self._submit_with_retry(sym, abs(pos), "buy")
                         if ok:
+                            close_qty = abs(pos)
+                            pnl = (entry_px - exit_px) * close_qty
+                            roi = ((entry_px - exit_px) / entry_px * 100) if entry_px else 0
+                            db.record_earnings(_ts(), sym, "SHORT", entry_px, exit_px, close_qty, pnl, roi, "Signal")
                             self.positions[sym] = 0
                             self.position_prices.pop(sym, None)
                             self.bracket_positions.discard(sym)
@@ -2537,8 +2585,14 @@ class TradingEngine(threading.Thread):
                 if pos >= 0:
                     if pos > 0:
                         self._log(f"[Execute] Closing long {sym} before SELL")
+                        exit_px = price
+                        entry_px = self.position_prices.get(sym, exit_px)
                         ok = self._submit_with_retry(sym, pos, "sell")
                         if ok:
+                            close_qty = pos
+                            pnl = (exit_px - entry_px) * close_qty
+                            roi = ((exit_px - entry_px) / entry_px * 100) if entry_px else 0
+                            db.record_earnings(_ts(), sym, "LONG", entry_px, exit_px, close_qty, pnl, roi, "Signal")
                             self.positions[sym] = 0
                             self.position_prices.pop(sym, None)
                             self.bracket_positions.discard(sym)
@@ -2596,11 +2650,21 @@ class TradingEngine(threading.Thread):
         except Exception as e:
             self.ui_queue.put(("error", f"Execute error {sym}: {e}"))
 
-    def _close_position(self, sym):
-        self.positions.pop(sym, None)
-        self.position_prices.pop(sym, None)
+    def _close_position(self, sym, exit_price=0, reason="SL/TP"):
+        qty = self.positions.pop(sym, 0)
+        entry_px = self.position_prices.pop(sym, None)
         self.bracket_positions.discard(sym)
         self.trailing_stops.pop(sym, None)
+        if entry_px and exit_price > 0 and abs(qty) > 0:
+            close_qty = abs(qty)
+            is_long = qty > 0
+            if is_long:
+                pnl = (exit_price - entry_px) * close_qty
+            else:
+                pnl = (entry_px - exit_price) * close_qty
+            roi = ((pnl) / (entry_px * close_qty) * 100) if entry_px * close_qty else 0
+            db.record_earnings(_ts(), sym, "LONG" if is_long else "SHORT",
+                               entry_px, exit_price, close_qty, pnl, roi, reason)
 
     def _sl_tp_watchdog_loop(self):
         sl_pct = self.config.get("sl_percent", 2.0)
@@ -2637,7 +2701,7 @@ class TradingEngine(threading.Thread):
                             if price <= trail_stop:
                                 self.trailing_stops[sym]["active"] = False
                                 self.broker.submit_order(sym, abs(qty), "sell")
-                                self._close_position(sym)
+                                self._close_position(sym, price, "Trailing Stop")
                                 self._telegram(f"<b>Trailing Stop</b> triggered {sym} @ ${price:.2f}")
                                 continue
                         elif ts.get("active") and ts.get("side") == "short":
@@ -2649,18 +2713,18 @@ class TradingEngine(threading.Thread):
                             if price >= trail_stop:
                                 self.trailing_stops[sym]["active"] = False
                                 self.broker.submit_order(sym, abs(qty), "buy")
-                                self._close_position(sym)
+                                self._close_position(sym, price, "Trailing Stop")
                                 self._telegram(f"<b>Trailing Stop</b> triggered {sym} @ ${price:.2f}")
                                 continue
                     if (is_long and price <= stop) or (not is_long and price >= stop):
                         self.broker.submit_order(
                             sym, abs(qty), "sell" if is_long else "buy")
-                        self._close_position(sym)
+                        self._close_position(sym, price, "Stop Loss")
                         self._telegram(f"<b>Stop Loss</b> triggered {sym} @ ${price:.2f}")
                     elif (is_long and price >= take) or (not is_long and price <= take):
                         self.broker.submit_order(
                             sym, abs(qty), "sell" if is_long else "buy")
-                        self._close_position(sym)
+                        self._close_position(sym, price, "Take Profit")
                         self._telegram(f"<b>Take Profit</b> triggered {sym} @ ${price:.2f}")
             except Exception:
                 pass
@@ -3977,6 +4041,34 @@ def correlation_matrix():
 def leaderboard():
     return jsonify({"leaderboard": db.get_leaderboard()})
 
+@app.route("/api/earnings", methods=["GET"])
+def api_earnings():
+    trades = db.get_earnings(100)
+    summary = db.get_earnings_summary()
+    return jsonify({"trades": trades, "summary": summary})
+
+@app.route("/api/webchat", methods=["POST"])
+def api_webchat():
+    data = request.json or {}
+    msg = data.get("message", "").strip().lower()
+    if not msg:
+        return jsonify({"reply": "Hi! I'm TraderBot. Ask me about getting started, pricing, brokers, indicators, or backtesting."})
+    responses = {
+        "getting started": "To get started with TraderMoney:\n1. Download the latest release\n2. Open the app — it runs locally\n3. Pick Alpaca (free paper trading) and enter your API keys\n4. Set tickers (e.g. AAPL, TSLA) and timeframe (e.g. 1m or 5m)\n5. Enable indicators and click Start Bot!\n\nWatch signals appear in real-time. For auto-trading, get a Pro license.",
+        "pricing": "TraderMoney has two tiers:\n• **Free:** Alpaca paper trading, signal-only, 1 ticker, core indicators (RSI/MACD/VWAP/Bollinger)\n• **Pro ($15):** All brokers, auto-trade, all indicators, multiple tickers, Telegram alerts, thesis builder\n\nGet Pro at tradermoney.gumroad.com",
+        "broker": "Supported brokers:\n• **Alpaca** — Free tier, paper trading ready\n• **IBKR** — Requires TWS/Gateway running\n• **Tradier** — Get access token from developer.tradier.com\n• **Binance, Bybit, OKX** — Crypto with testnet options\n\nAlpaca works out of the box on free tier. Others need Pro license.",
+        "indicator": "TraderMoney has 9 indicators:\n• **Core (Free):** RSI, MACD, VWAP, Bollinger Bands\n• **Pro:** ADX, Volume Confirmation, SuperTrend, Stochastic, ATR Stops\n\nEach indicator votes BUY/SELL/NEUTRAL. Using more indicators together increases signal confidence (~65% win rate with all 9).",
+        "backtest": "Run backtests with 30+ days of historical data. Click the Backtest tab, set parameters (days, initial cash, fees), and click Run. Results show: win rate, profit factor, Sharpe ratio, max drawdown, equity curve, and Monte Carlo simulations. Export to CSV or PDF.",
+        "position sizing": "Two ways to control trade size:\n• **Default Qty** — Fixed shares per trade (e.g. 10 shares of AAPL)\n• **Max Total Buying Power** — Set a total portfolio cap (e.g. $10,000). The bot never exceeds this across all positions.\n\nPer-ticker overrides: AAPL:10 = 10 shares of AAPL.",
+        "hello": "Hey there! 👋 I'm TraderBot. Ask me about getting started, pricing, brokers, indicators, backtesting, or anything about TraderMoney!",
+        "hi": "Hey there! 👋 I'm TraderBot. Ask me about getting started, pricing, brokers, indicators, backtesting, or anything about TraderMoney!",
+        "help": "I can help with:\n• Getting started guide\n• Pricing & licensing\n• Broker setup (Alpaca, IBKR, etc.)\n• Indicators & signals\n• Backtesting\n• Position sizing\n\nJust ask!",
+        "thanks": "You're welcome! If you have any other questions, just ask. Happy trading! 🚀",
+    }
+    for key, reply in responses.items():
+        if key in msg:
+            return jsonify({"reply": reply})
+    return jsonify({"reply": "I'm not sure about that. Try asking about: getting started, pricing, brokers, indicators, backtesting, or position sizing. Or say 'help' to see what I can do!"})
 
 @app.route("/api/thesis/save", methods=["POST"])
 def save_thesis():
@@ -4247,7 +4339,7 @@ FRONTEND_HTML = r"""
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>TraderMoney 9.3.0</title>
+<title>TraderMoney 9.4.0</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root {
@@ -5308,7 +5400,7 @@ button.ghost:hover { box-shadow: none; }
     <span class="sidebar-logo">TM</span>
     <div class="sidebar-title">
       <span class="sidebar-name">TraderMoney</span>
-      <span class="sidebar-version">v9.3.0</span>
+      <span class="sidebar-version">v9.4.0</span>
     </div>
     <div class="sidebar-actions">
       <button onclick="location.reload()" title="Refresh"><svg class="icon" style="width:13px;height:13px;" viewBox="0 0 24 24"><path d="M17.65 6.35A7.958 7.958 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg></button>
@@ -5561,9 +5653,25 @@ button.ghost:hover { box-shadow: none; }
   </div>
 
   <!-- History tab -->
-  <div id="tab-history" class="tab">
-    <div id="histlist" style="overflow:auto;flex:1;"></div>
-    <div id="hstempty" class="empty-placeholder" style="display:none;">No orders yet.</div>
+  <div id="tab-history" class="tab" style="padding:18px 20px;overflow:auto;flex:1;display:flex;flex-direction:column;gap:16px;">
+    <div id="earnings-summary" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;"></div>
+    <div class="card" style="padding:14px;border:1px solid var(--border);">
+      <div style="font-size:.75rem;font-weight:700;color:var(--text);margin-bottom:10px;display:flex;align-items:center;gap:6px;">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+        Closed Trade Earnings
+      </div>
+      <div id="earnings-list" style="font-size:.65rem;color:var(--muted);min-height:30px;">
+        <p style="text-align:center;padding:8px 0;">No closed trades yet.</p>
+      </div>
+    </div>
+    <div class="card" style="padding:14px;border:1px solid var(--border);">
+      <div style="font-size:.75rem;font-weight:700;color:var(--text);margin-bottom:10px;display:flex;align-items:center;gap:6px;">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+        Order History
+      </div>
+      <div id="histlist" style="font-size:.65rem;color:var(--muted);min-height:30px;"></div>
+      <div id="hstempty" style="display:none;text-align:center;padding:8px 0;">No orders yet.</div>
+    </div>
   </div>
 
   <!-- Backtest tab -->
@@ -5603,7 +5711,7 @@ button.ghost:hover { box-shadow: none; }
   <div id="tab-help" class="tab">
     <div class="hb">
       <input type="text" id="help-search" placeholder="Search help... (Cmd+F)" oninput="filterHelp()" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);font-size:.82rem;margin-bottom:10px;box-sizing:border-box;">
-      <h3>TraderMoney v9.3.0 – Complete Help Guide</h3>
+      <h3>TraderMoney v9.4.0 – Complete Help Guide</h3>
       <p style="font-size:.82rem;color:var(--muted);margin-top:-4px;">Your desktop algorithmic trading terminal. All features documented below.</p>
 
       <details>
@@ -5634,14 +5742,14 @@ button.ghost:hover { box-shadow: none; }
       </details>
 
       <details open>
-        <summary style="cursor:pointer;color:var(--accent);font-weight:600;">What's New in v9.3.0</summary>
+        <summary style="cursor:pointer;color:var(--accent);font-weight:600;">What's New in v9.4.0</summary>
         <div style="padding:8px 0;font-size:.82rem;line-height:1.7;">
           <ul>
-            <li><b>Max Total Buying Power:</b> Replaced the per-trade max spend with a total portfolio capital cap. Set a max total exposure (e.g. $10,000) and the bot tracks deployed capital across all open positions. New trades are sized to stay under the cap.</li>
-            <li><b>Removed AI Chatbot:</b> The AI chatbot has been removed from the app. Replaced with an FAQ help bot on the TraderMoney website.</li>
-            <li><b>Fixed Light Mode Chart:</b> The TradingView chart in the Manual Trade tab now correctly switches theme when toggling light/dark mode.</li>
-            <li><b>Correlation Tab:</b> New standalone Correlation tab replaces the old Analysis tab.</li>
-            <li><b>Help Sections Updated:</b> Full version history now documented in the help guide, from v5 through v9. Website help section redesigned with responsive tables and legal terms.</li>
+            <li><b>Earnings &amp; P&L Tracking:</b> Every closed position now records realized P&L, ROI, and close reason (Signal, Stop Loss, Take Profit, Trailing Stop) in a new earnings table. The History tab shows a summary grid with total P&L, win rate, best/worst trade, and average ROI.</li>
+            <li><b>Correlation Matrix Help:</b> The help tab now explains what the correlation matrix measures, how to read it (strong/moderate/weak color codes), and how to use it for portfolio risk management.</li>
+            <li><b>Website TraderBot Chat:</b> The website's help bot now has a free-form text input and sends messages to the Flask app's /api/webchat endpoint when running locally. Falls back to FAQ responses when the app is offline.</li>
+            <li><b>Max Total Buying Power:</b> Tracks total deployed capital across all open positions (sum of abs(pos) × entry price). New trades are sized to stay under the cap.</li>
+            <li><b>Fixed Light Mode Chart:</b> The TradingView chart now correctly switches theme when toggling light/dark mode.</li>
           </ul>
         </div>
       </details>
@@ -5975,14 +6083,17 @@ button.ghost:hover { box-shadow: none; }
 
       <hr>
 
-      <h4>AI Chat</h4>
-      <ul>
-        <li>Powered by OpenRouter. Models: Gemini 2.5 Flash, DeepSeek, Llama 4 Maverick (auto-fallback).</li>
-        <li>Sessions can be renamed and deleted via hover actions on session list.</li>
-        <li>Bot messages support bold, italic, code formatting.</li>
-        <li>Free: 5 messages/day. Pro: unlimited.</li>
-        <li>Offline fallback returns useful built-in answers when API is unavailable.</li>
+      <h4>Correlation Matrix</h4>
+      <p style="font-size:.82rem;line-height:1.6;">The <b>Correlation Matrix</b> shows how your tickers move in relation to each other. It downloads 30 days of daily price data from Yahoo Finance and calculates the <b>Pearson correlation coefficient</b> between every pair of tickers.</p>
+      <p style="font-size:.82rem;line-height:1.6;"><b>How to read it:</b> Values range from <span style="color:#4ade80;">+1.00</span> (perfect positive correlation) to <span style="color:#ef4444;">-1.00</span> (perfect negative correlation). A value of 0 means no relationship.</p>
+      <ul style="font-size:.82rem;line-height:1.7;">
+        <li><b style="color:#4ade80;">+0.70 to +1.00</b> — Strong positive correlation. Tickers move in the same direction. <i>Example: SPY and QQQ (both track US markets).</i></li>
+        <li><b style="color:#eab308;">+0.30 to +0.70</b> — Moderate positive correlation. Some relationship but not lockstep.</li>
+        <li><b style="color:var(--muted);">-0.30 to +0.30</b> — Weak or no correlation. Tickers move independently.</li>
+        <li><b style="color:#f97316;">-0.70 to -0.30</b> — Moderate negative correlation. Tickers tend to move opposite.</li>
+        <li><b style="color:#4ade80;">-1.00 to -0.70</b> — Strong negative correlation. <i>Example: crude oil and airline stocks often move in opposite directions.</i></li>
       </ul>
+      <p style="font-size:.82rem;line-height:1.6;"><b>How to use it:</b> A low-correlation portfolio reduces risk. If two of your tickers have a correlation above 0.80, they'll likely crash together — consider replacing one with a less-correlated asset. The color coding makes it easy to spot relationships at a glance: green = strong positive, red = negative.</p>
 
       <hr>
 
@@ -6570,6 +6681,50 @@ async function loadConfig(){
 }
 function loadHistory(){
   fetch('/api/status').then(r=>r.json()).then(d=>{renderSignals(d.signals);renderOrders(d.orders);}).catch(()=>{});
+  loadEarnings();
+}
+async function loadEarnings(){
+  try{
+    const r=await fetch('/api/earnings');
+    const d=await r.json();
+    renderEarningsSummary(d.summary);
+    renderEarningsList(d.trades);
+  }catch(e){}
+}
+function renderEarningsSummary(s){
+  const el=$('earnings-summary');
+  if(!el)return;
+  if(!s||!s.total){el.innerHTML='';return;}
+  const winRate=s.total>0?((s.wins/s.total)*100).toFixed(1):'0.0';
+  const sign=s.total_pnl>=0?'+':'';
+  const cls=s.total_pnl>=0?'var(--accent)':'var(--danger)';
+  el.innerHTML=`
+    <div class="card" style="padding:10px 12px;text-align:center;"><div style="font-size:.55rem;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;">Total P&L</div><div style="font-size:.85rem;font-weight:700;color:${cls};margin-top:2px;">${sign}$${fmt(s.total_pnl)}</div></div>
+    <div class="card" style="padding:10px 12px;text-align:center;"><div style="font-size:.55rem;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;">Win Rate</div><div style="font-size:.85rem;font-weight:700;color:var(--text);margin-top:2px;">${winRate}%</div></div>
+    <div class="card" style="padding:10px 12px;text-align:center;"><div style="font-size:.55rem;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;">Wins / Losses</div><div style="font-size:.85rem;font-weight:700;color:var(--text);margin-top:2px;"><span style="color:var(--accent);">${s.wins}</span> / <span style="color:var(--danger);">${s.losses}</span></div></div>
+    <div class="card" style="padding:10px 12px;text-align:center;"><div style="font-size:.55rem;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;">Avg ROI</div><div style="font-size:.85rem;font-weight:700;color:var(--text);margin-top:2px;">${s.avg_roi?fmt(s.avg_roi,2):'0.00'}%</div></div>
+    <div class="card" style="padding:10px 12px;text-align:center;"><div style="font-size:.55rem;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;">Best Trade</div><div style="font-size:.85rem;font-weight:700;color:var(--accent);margin-top:2px;">+$${fmt(s.best)}</div></div>
+    <div class="card" style="padding:10px 12px;text-align:center;"><div style="font-size:.55rem;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;">Worst Trade</div><div style="font-size:.85rem;font-weight:700;color:var(--danger);margin-top:2px;">-$${fmt(Math.abs(s.worst))}</div></div>`;
+}
+function renderEarningsList(trades){
+  const el=$('earnings-list');
+  if(!el)return;
+  if(!trades||!trades.length){
+    el.innerHTML='<p style="text-align:center;padding:8px 0;">No closed trades yet.</p>';
+    return;
+  }
+  el.innerHTML=trades.map(t=>{
+    const pnlCls=t.pnl>=0?'up':'dn';
+    const sign=t.pnl>=0?'+':'';
+    return `<div style="display:flex;align-items:center;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border);font-size:.65rem;">
+      <div><span style="font-weight:600;color:var(--text);">${t.symbol}</span> <span style="color:${t.side==='LONG'?'var(--accent)':'var(--danger)'};font-size:.6rem;">${t.side}</span> <span style="font-size:.55rem;color:var(--muted);">${t.reason}</span></div>
+      <div style="text-align:right;">
+        <div style="font-weight:600;color:var(--${pnlCls==='up'?'accent':'danger'});">${sign}$${fmt(t.pnl)}</div>
+        <div style="font-size:.55rem;color:var(--muted);">$${fmt(t.entry)} → $${fmt(t.exit)} · ${t.qty} shares</div>
+        <div style="font-size:.55rem;color:var(--muted);">${t.time.slice(5,16)}</div>
+      </div>
+    </div>`;
+  }).join('');
 }
 async function saveConfig(){
   cfg=buildCfg();
@@ -7645,7 +7800,7 @@ if __name__ == "__main__":
     try:
         _api_instance = _Api()
         window = webview.create_window(
-            "TraderMoney 9.3.0",
+            "TraderMoney 9.4.0",
             "http://127.0.0.1:5050",
             width=1440,
             height=880,
