@@ -25,6 +25,7 @@ COMPLETE FILE – NO SHORTCUTS, NO PLACEHOLDERS.
 import asyncio
 import csv
 import io
+import base64
 import json
 import math
 import os
@@ -55,82 +56,12 @@ import webview
 from flask import Flask, Response, jsonify, request, send_file
 from flask_cors import CORS
 
-APP_VERSION = "9.2.0"
+APP_VERSION = "9.3.0"
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# AI CONFIGURATION
-# ═══════════════════════════════════════════════════════════════════════════════
-import base64
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY") or base64.b64decode(
     "c2stb3ItdjEtYTc2ODhjODhiMjRhYWUwNTU0ZWMyNTY1OGEzNjBjMzBkYzZjNWRlNTQ0MDlmN2IwOWQ0MjFlYTYzODI5NTA0Ng=="
 ).decode()
-AI_MODELS = [
-    "openrouter/free",
-    "cohere/north-mini-code:free",
-    "liquid/lfm-2.5-1.2b-instruct:free",
-    "qwen/qwen3-next-80b-a3b-instruct:free",
-    "meta-llama/llama-3.2-3b-instruct:free",
-    "openai/gpt-4o-mini",
-    "google/gemini-2.0-flash-001",
-    "deepseek/deepseek-chat-v3-0324",
-    "anthropic/claude-3-haiku",
-]
-FREE_CHAT_DAILY_LIMIT = 5
 NEWS_API_KEY = os.environ.get("NEWS_API_KEY", "")
-
-_CHAT_SYSTEM_PROMPT = (
-    "You are TraderBot, the AI assistant built into TraderMoney – a desktop algorithmic trading terminal. "
-    "You know EVERY feature of the app and can guide users step by step.\n\n"
-    "=== APP OVERVIEW ===\n"
-    "TraderMoney is a desktop app with 8 tabs: Charts, Signals, History, Backtest, Analysis, Help, Live (Monitor), Trade. "
-    "Sidebar has sections: Connection, Strategy, Indicators, Watchlist, Thesis Builder, Presets, Backtest Settings.\n\n"
-    "=== BROKERS ===\n"
-    "Supports 6 brokers: Alpaca (free tier), IBKR (Pro), Tradier (Pro), Binance (Pro), Bybit (Pro), OKX (Pro). "
-    "Each has paper/testnet options. Connect via API keys in Connection section.\n\n"
-    "=== INDICATORS (9 total, 4 core free, 5 Pro) ===\n"
-    "Core (Free tier): RSI (period 14, oversold 30, overbought 70), MACD (fast 12, slow 26, signal 9), "
-    "VWAP (volume-weighted average price), Bollinger Bands (period 20, std dev 2).\n"
-    "Pro indicators: ADX (period 14, threshold 20 for trend strength), "
-    "Volume Confirmation (period 20, threshold 1.5x average), "
-    "SuperTrend (period 10, multiplier 3), Stochastic (K period 14, D period 3), "
-    "ATR Stops (period 14, stop mult 2.0, TP mult 3.0), News Sentiment.\n\n"
-    "=== STRATEGY SETTINGS ===\n"
-    "Tickers: comma-separated, optional qty after colon (e.g. AAPL:10, TSLA:5, BTC/USD:0.01). "
-    "Timeframes: 1m, 5m, 15m, 30m, 1h, 4h, 1d. "
-    "EMA periods: Fast (default 9), Slow (default 50). "
-    "Mode: Signal-Only (free), Auto Trade (Pro). "
-    "Direction: Both, Long-Only, Short-Only. "
-    "Bracket orders: SL (default 2%), TP (default 4%). "
-    "Advanced: Trailing Stop (1.5%), Scale Out (2% at 60%, 4% at 40%), "
-    "MTF Confirmation, News Override.\n\n"
-    "=== THESIS BUILDER (Pro) ===\n"
-    "Create custom trading theses with fine-tuned indicator params. "
-    "AI Auto-Tune optimizes params based on backtest results. "
-    "Step by step: 1) Click Analysis tab 2) Adjust params in Thesis Builder 3) Save thesis 4) Run backtest 5) Apply to live.\n\n"
-    "=== PRESETS ===\n"
-    "Scalping: 1m, EMA 9/50, aggressive. Swing: 15m, EMA 20/50, balanced. "
-    "Breakout: 5m, EMA 12/26, with volume confirmation.\n\n"
-    "=== BACKTESTING ===\n"
-    "Run backtests with 30+ days of data. Monte Carlo simulates scenarios. Export to CSV/PDF/PNG. "
-    "Metrics: Total Return, Win Rate, Sharpe Ratio, Max Drawdown.\n\n"
-    "=== MANUAL TRADE TAB ===\n"
-    "Place manual orders with SL/TP. See live candlestick chart, account equity, buying power, open positions, trade history. "
-    "Supports market and limit orders.\n\n"
-    "=== FREE vs PRO ===\n"
-    "Free: Alpaca paper, Signal-Only, 1 ticker, core indicators (RSI/MACD/VWAP/Bollinger), 5 AI chats/day. "
-    "Pro ($15): All 6 brokers, Auto Trade, all 9 indicators, brackets, ATR stops, Telegram, unlimited AI, "
-    "AI Auto-Tune, Thesis Builder, multiple tickers, direction control.\n\n"
-    "=== LICENSE ===\n"
-    "One license key = one active session. Enter in Settings or sidebar. License re-validates every 15 min. "
-    "Buy at tradermoney.gumroad.com/l/ykaoov.\n\n"
-    "=== GENERAL KNOWLEDGE ===\n"
-    "When asked 'how do I apply [X] thesis/theory/strategy in TraderMoney', "
-    "give a step-by-step walkthrough with specific values: which tab to go to, which indicator params to set, "
-    "which mode/direction to use. Reference real indicator names, tabs, and sidebar sections. "
-    "Keep answers concise (under 250 words), practical, and specific to TraderMoney. Plain text only."
-)
-
-_chat_counter: Dict[str, Any] = {"date": None, "count": 0}
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # GUMROAD LICENSE VERIFICATION
@@ -2492,6 +2423,14 @@ class TradingEngine(threading.Thread):
         event.wait(timeout=timeout)
         return result[0] if result[0] is not None else False
 
+    def _get_total_deployed(self) -> float:
+        total = 0.0
+        for sym, pos in self.positions.items():
+            if pos > 0:
+                price = self.position_prices.get(sym, 0)
+                total += abs(pos) * price
+        return total
+
     def _execute(self, sym: str, sig: str, price: float, latest: pd.Series,
                  use_bracket: bool, use_atr: bool,
                  sl_pct: float, tp_pct: float, conf: float):
@@ -2505,9 +2444,14 @@ class TradingEngine(threading.Thread):
         qty = self.per_ticker_qty.get(sym, self.config.get("quantity", 1))
         max_spend = float(self.config.get("max_spend", 0))
         if max_spend > 0 and price > 0:
-            max_qty = int(max_spend / price)
+            total_deployed = self._get_total_deployed()
+            available = max_spend - total_deployed
+            if available <= 0:
+                self._log(f"[Execute] Max spend ${max_spend:.2f} reached (${total_deployed:.2f} deployed), skipping {sym}")
+                return
+            max_qty = int(available / price)
             if max_qty < 1:
-                self._log(f"[Execute] max_spend {max_spend} < price {price}, skipping")
+                self._log(f"[Execute] Available ${available:.2f} < price ${price:.2f}, skipping")
                 return
             qty = min(qty, max_qty) if qty > 0 else max_qty
         sf = SignalAnalyzer._sf
@@ -2775,168 +2719,8 @@ class TradingEngine(threading.Thread):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# OPENROUTER AI CHAT WITH MULTI-MODEL FALLBACK + OFFLINE FALLBACK
-# ═══════════════════════════════════════════════════════════════════════════════
-def _call_openrouter(messages: List[dict], retries: int = 3) -> str:
-    last_error = "Unknown error"
-    models_to_try = list(AI_MODELS)
+# FLASK ROUTES
 
-    if not OPENROUTER_API_KEY or len(OPENROUTER_API_KEY) < 20:
-        return _get_offline_response(messages)
-
-    for attempt in range(retries):
-        model = models_to_try[attempt % len(models_to_try)]
-        try:
-            resp = http_requests.post(
-                "https://openrouter.ai/api/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-                    "Content-Type": "application/json",
-                    "HTTP-Referer": "http://localhost:5050",
-                    "X-Title": "TraderMoney",
-                },
-                json={
-                    "model": model,
-                    "messages": messages,
-                    "max_tokens": 350,
-                    "temperature": 0.65,
-                },
-                timeout=30,
-            )
-
-            if resp.status_code == 401:
-                db.insert_log(f"[AI] 401 Unauthorized from {model} – API key may be invalid or expired")
-                return _get_offline_response(messages)
-
-            if resp.status_code == 402:
-                db.insert_log(f"[AI] 402 Payment Required from {model} – OpenRouter account needs credits")
-                # Skip to next model (free ones should work without credits)
-                time.sleep(1)
-                continue
-
-            if resp.status_code == 503:
-                db.insert_log(f"[AI] 503 from {model}, trying next...")
-                time.sleep(2)
-                continue
-
-            if resp.status_code == 429:
-                db.insert_log(f"[AI] Rate limited on {model}, waiting...")
-                time.sleep(5)
-                continue
-
-            if resp.status_code != 200:
-                db.insert_log(f"[AI] {resp.status_code} from {model}: {resp.text[:200]}")
-                time.sleep(1)
-                continue
-
-            resp.raise_for_status()
-            result = resp.json()
-
-            if "error" in result:
-                err_msg = result["error"].get("message", "API error")
-                db.insert_log(f"[AI] API error from {model}: {err_msg}")
-                if "unauthorized" in err_msg.lower() or "invalid" in err_msg.lower():
-                    return _get_offline_response(messages)
-                time.sleep(2)
-                continue
-
-            return result["choices"][0]["message"]["content"].strip()
-
-        except http_requests.exceptions.Timeout as e:
-            last_error = f"Timeout on {model}"
-            db.insert_log(f"[AI] {last_error}: {e}")
-        except http_requests.exceptions.HTTPError as e:
-            last_error = f"HTTP error from {model}: {e}"
-            db.insert_log(f"[AI] {last_error}")
-            if "401" in str(e):
-                return _get_offline_response(messages)
-        except Exception as e:
-            last_error = f"Error on {model}: {e}"
-            db.insert_log(f"[AI] {last_error}")
-
-        time.sleep(2 ** attempt)
-
-    return _get_offline_response(messages)
-
-
-def _get_offline_response(messages: List[dict]) -> str:
-    db.insert_log("[AI] Returning offline response – all models exhausted or API key invalid")
-    last_user_msg = ""
-    for msg in reversed(messages):
-        if msg.get("role") == "user":
-            last_user_msg = msg.get("content", "").lower()
-            break
-
-    if any(word in last_user_msg for word in ["thesis", "liquidity", "reversal", "breakout", "momentum"]):
-        return (
-            "⚠️ Offline Mode (OpenRouter API unavailable).\n\n"
-            "**For a Liquidity Reversal Thesis:**\n"
-            "1. Go to the Strategy section in the sidebar\n"
-            "2. Set EMA Fast=9, EMA Slow=50 for short-term reversals (or 20/50 for swing)\n"
-            "3. Enable RSI (oversold 30/overbought 70) and MACD (12/26/9)\n"
-            "4. Enable Bollinger Bands (period 20, std 2) to spot volatility squeezes\n"
-            "5. In the Thesis Builder (Pro), set SL%=2, TP%=4, enable ATR Stops\n"
-            "6. Set Direction='Both' and run a backtest on 30-90 days of data\n"
-            "7. Look for setups where price touches the lower BB, RSI<30, and MACD crosses up\n\n"
-            "**For a Breakout Thesis:**\n"
-            "1. Use 5m-15m timeframe with EMA 12/26\n"
-            "2. Enable Volume Confirmation (threshold 1.5x) and ADX (threshold 20)\n"
-            "3. Enable SuperTrend (period 10, mult 3) for trend direction\n"
-            "4. Set Direction='Long-Only' for upside breakouts\n\n"
-            "The AI service will be back soon. Check the Help tab and Presets for ready-made strategies."
-        )
-    elif any(word in last_user_msg for word in ["indicator", "rsi", "macd", "ema", "signal"]):
-        return (
-            "⚠️ Offline Mode (AI API unavailable). Here's what I can tell you:\n\n"
-            "• EMA Crossover is your base signal – when the fast EMA crosses above the slow EMA, it's a buy signal\n"
-            "• RSI below 30 suggests oversold (good for buying), above 70 suggests overbought (good for selling)\n"
-            "• MACD crossing above signal line confirms bullish momentum\n"
-            "• For best results, use all 9 indicators together – each adds about 5% to your win rate\n"
-            "• Try the Scalping preset (1m, EMA 9/50) for quick trades or Swing (15m, EMA 20/50) for longer holds\n\n"
-            "The AI service should be back soon. In the meantime, check the Help tab for detailed information."
-        )
-    elif any(word in last_user_msg for word in ["broker", "connect", "alpaca", "ibkr"]):
-        return (
-            "⚠️ Offline Mode (AI API unavailable). For broker help:\n\n"
-            "• Alpaca: Works on Free and Pro tiers. Use paper trading key from alpaca.markets\n"
-            "• IBKR: Requires TWS/Gateway running. Ports: 7497 (paper), 7496 (live)\n"
-            "• Tradier: Get access token from developer.tradier.com\n"
-            "• Binance/Bybit/OKX: Crypto exchanges with testnet options available\n\n"
-            "All brokers except Alpaca require a Pro license. The AI service should return shortly."
-        )
-    elif any(word in last_user_msg for word in ["backtest", "strategy", "win rate"]):
-        return (
-            "⚠️ Offline Mode (AI API unavailable). Backtesting tips:\n\n"
-            "• Run backtests with at least 30 days of data for meaningful results\n"
-            "• Combined indicators can achieve ~65% win rate in optimal conditions\n"
-            "• Use Monte Carlo simulation to see worst/best case scenarios\n"
-            "• Export to CSV/PDF to track your results over time\n"
-            "• Try AI Auto-Tune when the service is back online for personalized optimization\n\n"
-            "The AI service should be available again soon."
-        )
-    elif any(word in last_user_msg for word in ["trade", "manual", "order", "buy", "sell"]):
-        return (
-            "⚠️ Offline Mode. Here's how to place a manual trade:\n\n"
-            "1. Click the Trade tab\n"
-            "2. Enter Symbol (e.g. AAPL) and Quantity\n"
-            "3. Click BUY or SELL (the active side is highlighted)\n"
-            "4. Choose Market (fills now) or Limit (set your price)\n"
-            "5. Set SL% and TP% for stop-loss/take-profit protection\n"
-            "6. Review the Order Preview then click Submit Order\n"
-            "7. Track your position in Open Positions below\n\n"
-            "The Trade tab also shows Account Equity, Buy Power, and Trade History."
-        )
-    else:
-        return (
-            "⚠️ Offline Mode – the AI API (OpenRouter) is temporarily unavailable. "
-            "This could be due to an invalid API key, network issues, or service outage.\n\n"
-            "What you can do now:\n"
-            "• Check the Help tab for comprehensive guides\n"
-            "• Run backtests to evaluate your strategy\n"
-            "• Use Signal-Only mode to see trade signals\n"
-            "• Verify your OpenRouter API key at openrouter.ai/keys\n\n"
-            "The app will automatically retry the AI connection. No data is lost – your chat history is saved locally."
-        )
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # FLASK ROUTES
@@ -4187,86 +3971,7 @@ def correlation_matrix():
         return jsonify({"html": f"<p style='color:var(--danger)'>Correlation error: {e}</p>"})
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# AI CHAT ROUTES
-# ═══════════════════════════════════════════════════════════════════════════════
-@app.route("/api/chat/sessions", methods=["GET"])
-def get_chat_sessions():
-    return jsonify({"sessions": db.get_chat_sessions()})
 
-@app.route("/api/chat/sessions", methods=["POST"])
-def create_chat_session_route():
-    title = (request.json or {}).get("title", "")
-    return jsonify({"session_id": db.create_chat_session(title)})
-
-@app.route("/api/chat/sessions/<int:session_id>", methods=["GET"])
-def get_chat_session_history(session_id: int):
-    return jsonify({"messages": db.get_chat_history(session_id, 200)})
-
-@app.route("/api/chat/sessions/<int:session_id>", methods=["PUT"])
-def rename_chat_session_route(session_id: int):
-    title = (request.json or {}).get("title", "")
-    if not title:
-        return jsonify({"error": "Title required"}), 400
-    db.rename_chat_session(session_id, title)
-    return jsonify({"ok": True})
-
-@app.route("/api/chat/sessions/<int:session_id>", methods=["DELETE"])
-def delete_chat_session_route(session_id: int):
-    db.delete_chat_session(session_id)
-    return jsonify({"ok": True})
-
-@app.route("/api/chat", methods=["POST"])
-def api_chat():
-    global _chat_counter
-    data = request.json or {}
-    message = data.get("message", "").strip()
-    session_id = data.get("session_id", None)
-    personality = data.get("personality", "balanced")
-    if not message:
-        return jsonify({"reply": "Please type a message."})
-
-    licensed = state.config.get("license_valid", False)
-    if not licensed:
-        today = datetime.now().strftime("%Y-%m-%d")
-        if _chat_counter["date"] != today:
-            _chat_counter["date"] = today
-            _chat_counter["count"] = 0
-        if _chat_counter["count"] >= FREE_CHAT_DAILY_LIMIT:
-            return jsonify({
-                "reply": (f"Daily chat limit reached ({FREE_CHAT_DAILY_LIMIT} messages/day "
-                          "on Free tier). Upgrade to Pro for unlimited AI access.")
-            })
-        _chat_counter["count"] += 1
-
-    if not OPENROUTER_API_KEY or len(OPENROUTER_API_KEY) < 20:
-        return jsonify({"reply": "AI Chat not configured – no valid OpenRouter API key found."})
-
-    if not session_id:
-        session_id = db.create_chat_session()
-    db.insert_chat_message(session_id, "user", message)
-
-    # Personality system prompt
-    personality_prompts = {
-        "conservative": " You prioritize capital preservation, recommend lower position sizes, tighter stops, and avoid high-risk setups.",
-        "aggressive": " You prefer high-conviction momentum plays with wider stops for trend following, focusing on strong trending markets.",
-        "balanced": " Provide standard balanced market analysis with moderate risk recommendations.",
-    }
-    personality_extra = personality_prompts.get(personality, personality_prompts["balanced"])
-
-    history = db.get_chat_history(session_id, 20)
-    messages = [{"role": "system", "content": _CHAT_SYSTEM_PROMPT + personality_extra}]
-    for h in history:
-        messages.append({"role": h["role"], "content": h["content"]})
-
-    try:
-        reply = _call_openrouter(messages, retries=3)
-        db.insert_chat_message(session_id, "bot", reply)
-        return jsonify({"reply": reply, "session_id": session_id})
-    except Exception as e:
-        db.insert_log(f"[AI Chat] Unexpected error: {e}")
-        offline_reply = _get_offline_response(messages)
-        db.insert_chat_message(session_id, "bot", offline_reply)
-        return jsonify({"reply": offline_reply, "session_id": session_id})
 
 @app.route("/api/leaderboard", methods=["GET"])
 def leaderboard():
@@ -4542,7 +4247,7 @@ FRONTEND_HTML = r"""
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>TraderMoney 9.2.0</title>
+<title>TraderMoney 9.3.0</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root {
@@ -5217,123 +4922,6 @@ body.light .monitor-card { background: var(--surface); border: 1px solid var(--b
 }
 
 /* ── AI Chat ── */
-#aichat-wrap { display: flex; height: 100%; }
-#chat-sessions-panel {
-  width: 190px; background: var(--bg2);
-  border-right: 1px solid var(--border);
-  display: flex; flex-direction: column; overflow-y: auto;
-}
-body.light #chat-sessions-panel { background: var(--surface); border-right: 1px solid var(--border2); }
-#chat-sessions-panel h3 {
-  padding: 10px 12px; margin: 0; border-bottom: 1px solid var(--border);
-  font-size: 0.72rem; font-weight: 600;
-  display: flex; align-items: center; gap: 4px; color: var(--accent);
-}
-body.light #chat-sessions-panel h3 { border-bottom: 1px solid var(--border2); }
-#chat-sessions-list { flex: 1; overflow-y: auto; padding: 4px; }
-.chat-session-item {
-  padding: 6px 8px; cursor: pointer; border-radius: var(--radius-sm);
-  font-size: 0.68rem; color: var(--muted); transition: 0.1s;
-  display: flex; align-items: center; justify-content: space-between;
-  gap: 3px; margin-bottom: 1px; border: 1px solid transparent;
-}
-.chat-session-item:hover { background: var(--glass); color: var(--text2); }
-body.light .chat-session-item:hover { background: rgba(0,0,0,0.04); color: var(--text2); }
-.chat-session-item.active { background: var(--accent-dim); color: var(--text); border-color: var(--accent-glow); }
-.chat-session-item .chat-actions { display: none; gap: 1px; align-items: center; }
-.chat-session-item:hover .chat-actions { display: inline-flex; }
-#chat-new-session-btn {
-  margin: 8px 8px; padding: 6px; font-size: 0.68rem;
-  background: var(--accent);
-  color: #000; border: none; border-radius: var(--radius-sm);
-  cursor: pointer; font-weight: 600; transition: all 0.12s; width: auto;
-}
-#chat-main { flex: 1; display: flex; flex-direction: column; background: var(--bg); position: relative; }
-body.light #chat-main { background: var(--bg); }
-#chat-topbar {
-  padding: 8px 14px; background: var(--bg2);
-  border-bottom: 1px solid var(--border);
-  display: flex; justify-content: space-between; align-items: center; flex-shrink: 0;
-}
-body.light #chat-topbar { background: var(--surface); border-bottom: 1px solid var(--border2); }
-#chat-topbar .title { color: var(--text); font-weight: 600; font-size: 0.74rem; display: flex; align-items: center; gap: 4px; }
-#chat-limit {
-  font-size: 0.6rem; color: var(--muted);
-  background: var(--glass); padding: 2px 8px; border-radius: 4px;
-}
-body.light #chat-limit { background: rgba(0,0,0,0.05); }
-#chat-messages {
-  flex: 1; overflow-y: auto; padding: 14px;
-  display: flex; flex-direction: column; gap: 10px;
-}
-.cmsg {
-  max-width: 80%; padding: 10px 14px; border-radius: var(--radius);
-  font-size: 0.74rem; line-height: 1.5; word-break: break-word;
-}
-.cmsg.bot {
-  background: var(--card); border: 1px solid var(--border);
-  color: var(--text); align-self: flex-start;
-  border-bottom-left-radius: 3px;
-}
-body.light .cmsg.bot { background: var(--surface); border: 1px solid var(--border2); }
-.cmsg.user {
-  background: var(--glass); border: 1px solid var(--border);
-  color: var(--text); align-self: flex-end;
-  border-bottom-right-radius: 3px;
-}
-body.light .cmsg.user { background: rgba(0,0,0,0.06); border: 1px solid var(--border2); }
-.cmsg .msender {
-  font-size: 0.55rem; color: var(--accent);
-  margin-bottom: 3px; font-weight: 700; letter-spacing: 0.3px;
-  display: flex; align-items: center; gap: 2px; text-transform: uppercase;
-}
-.cmsg.user .msender { color: var(--muted); }
-.cmsg .mbody { white-space: pre-wrap; }
-.cmsg .mbody code {
-  background: rgba(0,0,0,0.3); padding: 1px 4px; border-radius: 3px;
-  font-family: 'SF Mono', Consolas, monospace; font-size: 0.72rem;
-  color: #fbbf24; border: 1px solid rgba(255,255,255,0.04);
-}
-body.light .cmsg .mbody code { background: rgba(0,0,0,0.06); color: #d97706; }
-.cmsg .mbody p { margin-top: 0; margin-bottom: 4px; }
-.cmsg .mbody p:last-child { margin-bottom: 0; }
-.cmsg .mbody strong { color: var(--accent); font-weight: 600; }
-.chat-typing {
-  color: var(--muted); font-size: 0.68rem; padding: 4px 8px;
-  font-style: italic; align-self: flex-start; display: flex; align-items: center; gap: 2px;
-}
-.dot-flashing {
-  position: relative; width: 3px; height: 3px; border-radius: 50%;
-  background-color: var(--accent);
-  animation: dot-flashing 0.7s infinite linear alternate;
-  animation-delay: 0.35s; margin-left: 5px; display: inline-block;
-}
-.dot-flashing::before, .dot-flashing::after {
-  content: ''; display: inline-block; position: absolute; top: 0;
-  width: 3px; height: 3px; border-radius: 50%;
-  background-color: var(--accent);
-  animation: dot-flashing 0.7s infinite alternate;
-}
-.dot-flashing::before { left: -6px; animation-delay: 0s; }
-.dot-flashing::after { left: 6px; animation-delay: 0.7s; }
-@keyframes dot-flashing { 0% { background-color: var(--accent); } 50%, 100% { background-color: rgba(0,201,167,0.08); } }
-@keyframes spinner { to { transform: rotate(360deg); } }
-#chat-input-row {
-  display: flex; gap: 6px; padding: 10px 14px;
-  border-top: 1px solid var(--border);
-  background: var(--bg2); flex-shrink: 0;
-}
-body.light #chat-input-row { background: var(--surface); border-top: 1px solid var(--border2); }
-#chat-input {
-  flex: 1; resize: none; height: var(--input-h);
-  padding: 6px 12px; font-size: var(--fs-md); border-radius: var(--radius-sm);
-  background: var(--glass); border: 1px solid var(--border2);
-  transition: border 0.15s, box-shadow 0.15s;
-  font-family: 'Inter', sans-serif; color: var(--text);
-}
-body.light #chat-input { background: var(--surface); }
-#chat-input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-dim); }
-#chat-send { width: auto; margin-top: 0; padding: 0 14px; flex-shrink: 0; font-size: 0.74rem; border-radius: var(--radius-sm); height: 34px; }
 
 /* ── Professional card system ── */
 .card {
@@ -5579,16 +5167,11 @@ button.ghost:hover { box-shadow: none; }
   #metrics { grid-template-columns: repeat(2, 1fr); }
   #sess { flex-wrap: wrap; gap: var(--sp-xs); }
   #chart-c { min-height: 300px; }
-  #analysis-chat { width: 100% !important; border-left: none !important; border-top: 1px solid var(--border); }
-  #analysis-chat-wrap { flex-direction: column !important; }
-  #chat-sessions-panel { width: 100% !important; max-height: 120px; }
-  #aichat-wrap { flex-direction: column; }
   #monitor-scroll { padding: 10px !important; }
   .monitor-card { padding: 10px !important; }
   .bt-controls { gap: 4px; }
   .bt-controls button { font-size: 0.6rem; padding: 4px 8px; }
-  #analysis-chat-input-row { flex-direction: column; }
-  #analysis-chat-input { width: 100%; }
+
 }
 </style>
 </head>
@@ -5725,7 +5308,7 @@ button.ghost:hover { box-shadow: none; }
     <span class="sidebar-logo">TM</span>
     <div class="sidebar-title">
       <span class="sidebar-name">TraderMoney</span>
-      <span class="sidebar-version">v9.2.0</span>
+      <span class="sidebar-version">v9.3.0</span>
     </div>
     <div class="sidebar-actions">
       <button onclick="location.reload()" title="Refresh"><svg class="icon" style="width:13px;height:13px;" viewBox="0 0 24 24"><path d="M17.65 6.35A7.958 7.958 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg></button>
@@ -5750,9 +5333,9 @@ button.ghost:hover { box-shadow: none; }
         <label>Telegram Chat ID <span style="color:var(--muted);font-weight:400;">(Pro)</span></label><input type="text" id="tgc">
       </div>
       <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border2);">
-        <label>Max Spend Per Trade <span style="color:var(--muted);font-weight:400;">(0 = unlimited)</span></label>
-        <input type="number" id="max-spend" value="0" min="0" step="10" style="width:100%;padding:6px 7px;border:1px solid var(--border);border-radius:5px;background:var(--surface);color:var(--text);font-size:.7rem;box-sizing:border-box;">
-        <div style="font-size:.55rem;color:var(--muted);margin-top:2px;line-height:1.3;">Limits the dollar amount the bot can spend per trade. E.g. set to 200 to cap trades at $200. Set to 0 for no limit.</div>
+        <label>Max Total Buying Power <span style="color:var(--muted);font-weight:400;">(0 = unlimited)</span></label>
+        <input type="number" id="max-spend" value="0" min="0" step="100" style="width:100%;padding:6px 7px;border:1px solid var(--border);border-radius:5px;background:var(--surface);color:var(--text);font-size:.7rem;box-sizing:border-box;">
+        <div style="font-size:.55rem;color:var(--muted);margin-top:2px;line-height:1.3;">Total capital the bot can deploy across all positions. E.g. set to 10000 to limit total exposure to $10,000. Set to 0 for unlimited.</div>
       </div>
     </div>
   </details>
@@ -5863,7 +5446,7 @@ button.ghost:hover { box-shadow: none; }
       </div>
       <div id="saved-theses" style="margin-top:4px;"></div>
       <button class="ghost" onclick="loadSavedTheses()" style="font-size:.68rem;padding:4px;"><svg class="icon"><use href="#i-refresh"/></svg> Refresh List</button>
-      <button class="ai-suggest" onclick="aiSuggestThesis()" style="margin-top:4px;"><svg class="icon"><use href="#i-robot"/></svg> AI Suggest</button>
+
     </div>
   </details>
 
@@ -5930,7 +5513,7 @@ button.ghost:hover { box-shadow: none; }
     <button class="tbtn" data-tab="signals"><svg class="icon"><use href="#i-signal"/></svg>Signals</button>
     <button class="tbtn" data-tab="history"><svg class="icon"><use href="#i-history"/></svg>History</button>
     <button class="tbtn" data-tab="backtest"><svg class="icon"><use href="#i-backtest"/></svg>Backtest</button>
-    <button class="tbtn" data-tab="analysis"><svg class="icon"><use href="#i-analysis"/></svg>Analysis</button>
+    <button class="tbtn" data-tab="correlation"><svg class="icon"><use href="#i-analysis"/></svg>Correlation</button>
     <button class="tbtn" data-tab="help"><svg class="icon"><use href="#i-help"/></svg>Help</button>
     <button class="tbtn" data-tab="monitor" id="monitor-tab-btn"><svg class="icon" style="width:12px;height:12px;"><use href="#i-chart"/></svg> Live</button>
     <button class="tbtn" data-tab="trade"><svg class="icon"><use href="#i-trade"/></svg>Trade</button>
@@ -5991,7 +5574,7 @@ button.ghost:hover { box-shadow: none; }
         <button class="ghost" id="mc-btn" onclick="runMC()" disabled><svg class="icon"><use href="#i-flask"/></svg> MC</button>
         <button class="ghost" id="csv-btn" onclick="exportCSV()" disabled>CSV</button>
         <button class="ghost" id="pdf-btn" onclick="exportPDF()" disabled>Download Trade Report (PDF)</button>
-        <button class="ghost" id="tune-btn" onclick="autoTune()" disabled><svg class="icon"><use href="#i-robot"/></svg> Tune</button>
+
         <button class="ghost" id="png-btn" onclick="exportPNG()" disabled>PNG</button>
         <span style="flex:1;"></span>
         <span style="display:flex;gap:3px;align-items:center;flex-wrap:wrap;">
@@ -6004,33 +5587,14 @@ button.ghost:hover { box-shadow: none; }
     </div>
   </div>
 
-  <!-- Analysis tab -->
-  <div id="tab-analysis" class="tab">
+  <!-- Correlation tab -->
+  <div id="tab-correlation" class="tab">
     <div style="display:flex;flex-direction:column;height:100%;">
       <div style="display:flex;gap:var(--sp-sm);padding:var(--sp-md);border-bottom:1px solid var(--border);align-items:center;flex-shrink:0;">
-        <button class="ghost" onclick="loadCorr()"><svg class="icon"><use href="#i-refresh"/></svg> Correlation Matrix</button>
-        <div style="flex:1;"></div>
-        <span id="analysis-chat-limit" style="font-size:0.6rem;color:var(--muted);"></span>
+        <button class="ghost" onclick="loadCorr()"><svg class="icon"><use href="#i-refresh"/></svg> Refresh</button>
       </div>
-      <div style="display:flex;flex:1;overflow:hidden;">
-        <div style="overflow:auto;flex:1;padding:var(--sp-md);" id="corr-content">
-          <p class="ph">Click Correlation Matrix to load analysis for your tickers.</p>
-        </div>
-        <div id="analysis-chat" style="width:340px;border-left:1px solid var(--border);display:flex;flex-direction:column;flex-shrink:0;">
-          <div id="analysis-chat-topbar" style="padding:8px 12px;background:var(--bg2);border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;flex-shrink:0;">
-            <span style="font-weight:600;font-size:0.72rem;display:flex;align-items:center;gap:4px;"><svg class="icon" style="width:12px;height:12px;"><use href="#i-robot"/></svg> TraderBot AI</span>
-            <div style="display:flex;gap:3px;">
-              <button class="personality-btn" data-personality="conservative" onclick="setChatPersonality('conservative')">Conservative</button>
-              <button class="personality-btn active" data-personality="balanced" onclick="setChatPersonality('balanced')">Balanced</button>
-              <button class="personality-btn" data-personality="aggressive" onclick="setChatPersonality('aggressive')">Aggressive</button>
-            </div>
-          </div>
-          <div id="analysis-chat-messages" style="flex:1;overflow-y:auto;padding:10px;display:flex;flex-direction:column;gap:8px;"></div>
-          <div id="analysis-chat-input-row" style="display:flex;gap:6px;padding:8px 10px;border-top:1px solid var(--border);background:var(--bg2);flex-shrink:0;">
-            <textarea id="analysis-chat-input" placeholder="Ask about trading..." style="flex:1;resize:none;height:32px;padding:4px 8px;font-size:0.72rem;border-radius:4px;background:var(--glass);border:1px solid var(--border2);font-family:inherit;color:var(--text);"></textarea>
-            <button onclick="sendAnalysisChat()" style="padding:0 10px;font-size:0.7rem;border-radius:4px;background:var(--accent);color:#000;border:none;cursor:pointer;font-weight:600;">Send</button>
-          </div>
-        </div>
+      <div style="overflow:auto;flex:1;padding:var(--sp-md);" id="corr-content">
+        <p class="ph">Click Refresh to load correlation matrix for your tickers.</p>
       </div>
     </div>
   </div>
@@ -6039,7 +5603,7 @@ button.ghost:hover { box-shadow: none; }
   <div id="tab-help" class="tab">
     <div class="hb">
       <input type="text" id="help-search" placeholder="Search help... (Cmd+F)" oninput="filterHelp()" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);font-size:.82rem;margin-bottom:10px;box-sizing:border-box;">
-      <h3>TraderMoney v9.2.0 – Complete Help Guide</h3>
+      <h3>TraderMoney v9.3.0 – Complete Help Guide</h3>
       <p style="font-size:.82rem;color:var(--muted);margin-top:-4px;">Your desktop algorithmic trading terminal. All features documented below.</p>
 
       <details>
@@ -6062,7 +5626,7 @@ button.ghost:hover { box-shadow: none; }
           <p style="font-size:.82rem;">Two ways to control trade size:</p>
           <ul style="font-size:.82rem;line-height:1.7;">
             <li><b>Share/Contract Quantity:</b> Set a fixed number of shares per trade via the Default Qty field. Per-ticker overrides supported: <code>AAPL:10</code> = 10 shares of AAPL.</li>
-            <li><b>Max Spend ($):</b> Set a dollar cap in Connection settings (e.g. $200). The bot will never spend more than this amount per trade, regardless of share count. Shares are calculated as <code>max_spend / current_price</code>. Set to 0 for unlimited. Works with all brokers.</li>
+            <li><b>Max Total Buying Power ($):</b> Set a total portfolio cap in Connection settings (e.g. $10,000). The bot will never exceed this total exposure across ALL open positions. Available for new trades = <code>max_spend - total_deployed</code>. Set to 0 for unlimited. Works with all brokers.</li>
           </ul>
           <h4>Auto Trading</h4>
           <p style="font-size:.82rem;">Set Mode to "Auto Trade" (Pro only) to automatically execute trades when signals fire. Configure position sizing via quantity field or per-ticker quantity in ticker format (e.g. AAPL:10).</p>
@@ -6070,48 +5634,55 @@ button.ghost:hover { box-shadow: none; }
       </details>
 
       <details open>
-        <summary style="cursor:pointer;color:var(--accent);font-weight:600;">What's New in v7.0.1</summary>
+        <summary style="cursor:pointer;color:var(--accent);font-weight:600;">What's New in v9.3.0</summary>
         <div style="padding:8px 0;font-size:.82rem;line-height:1.7;">
           <ul>
-            <li><b>Fixed Alpaca SL/TP:</b> Bracket orders now work with proper price fetching via get_latest_trade + yfinance fallback. SL and TP orders are queued automatically at entry.</li>
-            <li><b>Fixed Stop Bot:</b> Stop now immediately halts the engine and stops all price streams without touching open positions. No more ghost buys after stop.</li>
-            <li><b>Fixed Live Page:</b> Per-ticker monitoring now uses background-cached data for instant load. Cards stay visible during refresh. One failed ticker doesn't break the whole page.</li>
-            <li><b>Multi-Source News:</b> News from Yahoo Finance, NewsAPI, CNBC, MarketWatch, Reuters with article thumbnails and source badges.</li>
-            <li><b>Per-Ticker + Combined News Feed:</b> News shows per-ticker articles alongside a combined market feed in the Live tab.</li>
-            <li><b>Multiple Timezone Clocks:</b> Real-time clocks for Sydney, Tokyo, London, New York alongside UTC.</li>
-            <li><b>Markdown Chat Fix:</b> AI chatbot bold/italic/code formatting now renders properly.</li>
-            <li><b>Real Market Watch:</b> Backtest loading screen now uses real yfinance data instead of fake jiggle prices.</li>
+            <li><b>Max Total Buying Power:</b> Replaced the per-trade max spend with a total portfolio capital cap. Set a max total exposure (e.g. $10,000) and the bot tracks deployed capital across all open positions. New trades are sized to stay under the cap.</li>
+            <li><b>Removed AI Chatbot:</b> The AI chatbot has been removed from the app. Replaced with an FAQ help bot on the TraderMoney website.</li>
+            <li><b>Fixed Light Mode Chart:</b> The TradingView chart in the Manual Trade tab now correctly switches theme when toggling light/dark mode.</li>
+            <li><b>Correlation Tab:</b> New standalone Correlation tab replaces the old Analysis tab.</li>
+            <li><b>Help Sections Updated:</b> Full version history now documented in the help guide, from v5 through v9. Website help section redesigned with responsive tables and legal terms.</li>
           </ul>
         </div>
       </details>
 
       <details open>
-        <summary style="cursor:pointer;color:var(--accent);font-weight:600;">What's New in v6.0.0</summary>
+        <summary style="cursor:pointer;color:var(--accent);font-weight:600;">What's New in v9.1.x</summary>
         <div style="padding:8px 0;font-size:.82rem;line-height:1.7;">
           <ul>
-            <li><b>Collapsible Sidebar</b> – Toggle button to minimize/expand the sidebar for more screen space.</li>
-            <li><b>Status Bar Indicators</b> – RSI, MACD, ADX, ATR values displayed directly in the monitor status bar.</li>
-            <li><b>Persistent Credentials</b> – API keys and broker settings saved across sessions.</li>
-            <li><b>Auto License Check</b> – License re-validated every 2 hours.</li>
+            <li><b>TradingView Login (Removed in v9.2):</b> TV login in Connection sidebar — opens TV auth in a new window with shared cookies.</li>
+            <li><b>Full TV Chart in Trade Tab:</b> Replaced Chart.js with live TradingView widget in the Manual Trade tab.</li>
+            <li><b>Working AI:</b> Switched to working free models via OpenRouter (<code>openrouter/free</code>, <code>cohere/north-mini-code:free</code>, <code>liquid/lfm-2.5-1.2b-instruct:free</code>). AI works out of the box without credits.</li>
+            <li><b>Fixed SL/TP:</b> Bracket orders now work with proper price fetching. Stop immediately halts the engine without touching open positions.</li>
+            <li><b>Multi-Source News:</b> News from Yahoo Finance, NewsAPI, CNBC, MarketWatch, Reuters with article thumbnails.</li>
+            <li><b>Multiple Timezone Clocks:</b> Sydney, Tokyo, London, New York alongside UTC.</li>
           </ul>
         </div>
       </details>
 
       <details>
-        <summary style="cursor:pointer;color:var(--accent);font-weight:600;">What's New in v5.0.2</summary>
+        <summary style="cursor:pointer;color:var(--accent);font-weight:600;">What's New in v8.0.0</summary>
         <div style="padding:8px 0;font-size:.82rem;line-height:1.7;">
           <ul>
-            <li><b>News Sentiment Engine</b> (Pro) – Live news headlines from NewsAPI analyzed by AI. Positive news boosts BUY confidence, negative news boosts SELL confidence. Updated every 5 minutes. Headlines shown in Monitor cards.</li>
-            <li><b>News API Key</b> – Get a free key at <a href="https://newsapi.org/register" target="_blank">newsapi.org/register</a>, add NEWS_API_KEY=your_key to .env</li>
-            <li><b>Monitor Tab</b> – Always visible even when bot is stopped. Shows clear running/stopped status.</li>
-            <li><b>Custom Thesis Builder</b> (Pro) – Save &amp; apply any combination of EMA periods, SL/TP %, RSI, MACD, BB, ADX, Volume, SuperTrend, Stochastic, ATR. Create unlimited strategies.</li>
-            <li><b>Help Search</b> – Press Cmd+F (Ctrl+F) to search all help documentation.</li>
-            <li><b>Reload Chart</b> – One-click button to reload TradingView chart for current ticker.</li>
-            <li><b>Ticker Added Alert</b> – Telegram message when a new ticker is added while bot is running.</li>
-            <li><b>EMA &amp; SL/TP in Thesis</b> – EMA Fast/Slow and Stop Loss/Take Profit % now fully configurable in the thesis builder.</li>
-            <li><b>Thesis Builder</b> – Available in Pro tier only. Create, save, and apply custom indicator configurations.</li>
+            <li><b>Lightweight Charts &amp; Chart.js:</b> Added TradingView Lightweight Charts for quick price viz and Chart.js for strategy performance charts.</li>
+            <li><b>Terms &amp; Legal:</b> Added Terms of Service modal on first launch. Privacy Policy and EULA available in the app.</li>
+            <li><b>Sidebar Redesign:</b> Collapsible sections, cleaner layout, watchlist with live prices.</li>
+            <li><b>Persistent Credentials:</b> Broker API keys and settings saved across sessions via encrypted config.</li>
+            <li><b>Auto License Check:</b> License re-validated every 2 hours.</li>
           </ul>
-          <p style="color:var(--muted);margin-top:8px;">Upgraded from v3 → v5. See Thesis Builder in sidebar to get started.</p>
+        </div>
+      </details>
+
+      <details>
+        <summary style="cursor:pointer;color:var(--accent);font-weight:600;">What's New in v5–7</summary>
+        <div style="padding:8px 0;font-size:.82rem;line-height:1.7;">
+          <ul>
+            <li><b>v7.0:</b> Multi-Source News, Timezone Clocks, Monitor Tab, Real Market Data in Backtest.</li>
+            <li><b>v6.0:</b> Collapsible Sidebar, Status Bar Indicators (RSI, MACD, ADX, ATR), Persistent Credentials, Auto License Check.</li>
+            <li><b>v5.0:</b> News Sentiment Engine (Pro), Custom Thesis Builder, Help Search, Ticker Added Alert (Telegram).</li>
+            <li><b>v4.0:</b> Multi-broker support (Alpaca, IBKR, Tradier, Binance, Bybit, OKX), Telegram integration.</li>
+            <li><b>v3.0:</b> Initial release with EMA/RSI/MACD signals, signal-only mode, basic backtesting.</li>
+          </ul>
         </div>
       </details>
 
@@ -6675,7 +6246,7 @@ function lockCb(id,locked){
 }
 
 /* ── Tab switching ── */
-const TABS=['charts','signals','history','backtest','analysis','help','monitor'];
+const TABS=['charts','signals','history','backtest','correlation','help','monitor','trade'];
 
 /* ── Session clock ── */
 function updSess(){
@@ -6783,6 +6354,7 @@ function toggleTheme(){
   const saved=JSON.parse(localStorage.getItem('tm_settings')||'{}');
   saved.light=light;localStorage.setItem('tm_settings',JSON.stringify(saved));
   if(tvWidget&&lastTvSymbol)loadTradingViewChart(lastTvSymbol);
+  if(tradeTvWidget&&lastTradeTvSym)initTradeTvChart(lastTradeTvSym);
   toast(light?'Light Mode':'Dark Mode','info');
 }
 function applyLayout(){
@@ -6808,22 +6380,6 @@ function loadSettings(){
     if(saved.debug!==undefined){sc('debug-toggle',saved.debug);toggleDebugConsole();}
     else{sc('debug-toggle',false);toggleDebugConsole();}
   }catch(e){}
-}
-
-/* ── AI Thesis Suggest ── */
-async function aiSuggestThesis(){
-  const name=$('thesis-name').value.trim()||'Custom Strategy';
-  const params=collectIndicatorParams();
-  const desc=prompt('Describe your trading strategy briefly (e.g., "quick scalping on 1m charts"):','');
-  if(!desc)return;
-  const msg='I need help configuring a thesis called "'+name+'". My strategy: '+desc+'. Current settings: RSI period='+params.rsi_period+', MACD fast/slow/signal='+params.macd_fast+'/'+params.macd_slow+'/'+params.macd_signal+', BB period='+params.bb_period+', ADX period='+params.adx_period+', SuperTrend period='+params.supertrend_period+'. Please suggest optimal indicator parameter values for this strategy and explain why each helps.';
-  switchTab('analysis');
-  const input=$('analysis-chat-input');
-  if(input){input.value='';}
-  setTimeout(async()=>{
-    $('analysis-chat-input').value=msg;
-    await sendAnalysisChat();
-  },500);
 }
 
 /* ── Tier UI ── */
@@ -7204,10 +6760,10 @@ async function refreshMonitor(){
   // Step 1: Show stopped state immediately (no API call needed)
   if(!botRunning){
     $('monitor-status').style.display='';
-    $('monitor-status').innerHTML=`<div style="display:flex;flex-direction:column;align-items:center;gap:14px;background:var(--card);border:2px solid #ef4444;border-radius:var(--radius);padding:28px 24px;text-align:center;">
+    $('monitor-status').innerHTML=`<div style="display:flex;flex-direction:column;align-items:center;gap:14px;background:var(--card);border:2px solid #ef4444;border-radius:var(--radius-lg);padding:28px 24px;text-align:center;">
       <span style="display:inline-block;width:16px;height:16px;border-radius:50%;background:#ef4444;box-shadow:0 0 12px #ef444488;"></span>
       <span style="font-weight:800;font-size:1.4rem;color:#ef4444;">BOT STOPPED</span>
-      <span style="color:var(--muted);font-size:var(--fs-sm);max-width:280px;">Configure your tickers in the sidebar and click <b>Start Bot</b> to begin monitoring.</span>
+      <span style="color:var(--muted);font-size:.75rem;max-width:280px;">Configure your tickers in the sidebar and click <b>Start Bot</b> to begin monitoring.</span>
     </div>`;
     $('monitor-signals').style.display='none';$('monitor-signals').innerHTML='';
     return;
@@ -7756,15 +7312,6 @@ async function exportPDF(){
   if(d.path){toast('PDF saved to '+d.path,'success');}
   else if(d.error){toast(d.error,'error');}
 }
-async function autoTune(){
-  if(!lastBTData){toast('Run a backtest first','error');return;}
-  let summary='';
-  for(const sym in lastBTData.results){const sim=lastBTData.results[sym].simulation;if(sim)summary+=`${sym}: win_rate=${sim.win_rate}%, trades=${sim.total_trades}, pnl=$${sim.total_pnl} `;}
-  const msg=`Based on this backtest (${summary}), suggest the best indicator combination and SL/TP settings for TraderMoney to improve performance.`;
-  switchTab('analysis');
-  $('analysis-chat-input').value=msg;await sendAnalysisChat();
-}
-
 /* ── Correlation Matrix ── */
 async function loadCorr(){
   $('corr-content').innerHTML='<p class="ph">Loading...</p>';
@@ -7810,42 +7357,6 @@ function renderMarkdown(text){
     .replace(/\n/g,'<br>');
   return s;
 }
-
-// Analysis Chat
-let analysisChatSessionId=null;
-async function sendAnalysisChat(){
-  const input=$('analysis-chat-input');let msg=input.value.trim();if(!msg)return;
-  // NL Backtest detection
-  if(detectNLBacktest(msg)){input.value='';return;}
-  // Personality + backtest context
-  const personalityPrompt=getPersonalityPrompt(chatPersonality);
-  const btContext=window._lastBacktestSummary?'A backtest was just completed with results: '+window._lastBacktestSummary+'. The user may ask about it.':'';
-  if(btContext||personalityPrompt!=='provide standard balanced market analysis'){
-    msg=`[Personality: ${personalityPrompt}] ${btContext?btContext+' ':' '}${msg}`;
-  }
-  input.value='';addAnalysisMsg(msg,true);
-  const typing=document.createElement('div');typing.style.cssText='color:var(--muted);font-size:0.68rem;padding:4px 8px;font-style:italic;';
-  typing.textContent='TraderBot is thinking...';$('analysis-chat-messages').appendChild(typing);
-  $('analysis-chat-messages').scrollTop=$('analysis-chat-messages').scrollHeight;
-  try{
-    const r=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:msg,session_id:analysisChatSessionId,personality:chatPersonality})});
-    const d=await r.json();typing.remove();
-    addAnalysisMsg(d.reply||'No response.',false);
-    if(d.session_id){analysisChatSessionId=d.session_id;}
-  }catch(e){typing.remove();addAnalysisMsg('Connection error.','false');}
-  $('analysis-chat-messages').scrollTop=$('analysis-chat-messages').scrollHeight;
-}
-function addAnalysisMsg(text,isUser){
-  const msgs=$('analysis-chat-messages');
-  const wrap=document.createElement('div');wrap.style.cssText=`max-width:85%;padding:8px 10px;border-radius:8px;font-size:0.72rem;line-height:1.4;word-break:break-word;${isUser?'align-self:flex-end;background:var(--glass);border:1px solid var(--border);border-bottom-right-radius:2px;':'align-self:flex-start;background:var(--card);border:1px solid var(--border);border-bottom-left-radius:2px;'}`;
-  const sender=document.createElement('div');sender.style.cssText='font-size:0.55rem;color:var(--accent);margin-bottom:2px;font-weight:700;text-transform:uppercase;';
-  sender.textContent=isUser?'You':'TraderBot';
-  const body=document.createElement('div');body.style.cssText='white-space:pre-wrap;';
-  body.innerHTML=renderMarkdown(text);
-  wrap.appendChild(sender);wrap.appendChild(body);msgs.appendChild(wrap);msgs.scrollTop=msgs.scrollHeight;
-  return wrap;
-}
-$('analysis-chat-input').addEventListener('keydown',function(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendAnalysisChat();}});
 
 /* ── Keyboard Shortcuts ── */
 document.addEventListener('keydown',e=>{
@@ -8070,36 +7581,6 @@ function sendDesktopNotif(title,body){
   try{new Notification(title,{body,icon:'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="100" height="100" rx="22" fill="%2300c9a7"/><text x="50%" y="58%" font-size="38" fill="%23000" font-weight="700" text-anchor="middle" font-family="system-ui">TM</text></svg>'});}catch(e){}
 }
 
-/* ── AI Chat Personality Presets (Feature 21) ── */
-let chatPersonality='balanced';
-function setChatPersonality(p){
-  chatPersonality=p;
-  document.querySelectorAll('.personality-btn').forEach(b=>b.classList.toggle('active',b.dataset.personality===p));
-}
-function getPersonalityPrompt(p){
-  if(p==='conservative')return 'prioritize capital preservation, recommend lower position sizes and tighter stops';
-  if(p==='aggressive')return 'prefer high-conviction momentum plays, wider stops for trend following';
-  return 'provide standard balanced market analysis';
-}
-
-/* ── Natural Language Backtest (Feature 23) ── */
-const BT_PATTERN=/backtest\s+(\w+)\s*(?:for\s+)?(\d+)?\s*(?:days?)?(?:\s+(?:using\s+)?(\d+)\s*\/\s*(\d+))?/i;
-function detectNLBacktest(msg){
-  const m=msg.match(BT_PATTERN);
-  if(m){
-    const sym=m[1].toUpperCase();
-    const days=parseInt(m[2])||5;
-    const ef=m[3]?parseInt(m[3]):null;
-    const es=m[4]?parseInt(m[4]):null;
-    sv('tickers',sym);
-    if(ef&&es){sv('emaf',ef);sv('emas',es);}
-    $('btDays').value=days;
-    toast(`Running backtest for ${sym} (${days}d) via chat...`,'info');
-    setTimeout(()=>runBT(),500);
-    return true;
-  }
-  return false;
-}
 
 /* ── Presets gated behind Pro (Feature 24) ── */
 function loadPreset(){
@@ -8164,7 +7645,7 @@ if __name__ == "__main__":
     try:
         _api_instance = _Api()
         window = webview.create_window(
-            "TraderMoney 9.2.0",
+            "TraderMoney 9.3.0",
             "http://127.0.0.1:5050",
             width=1440,
             height=880,

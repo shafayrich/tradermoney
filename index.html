@@ -547,10 +547,10 @@
         .check { color: var(--accent); }
         .cross { color: var(--danger); opacity: 0.5; }
 
-        /* ── Docs ── */
+        /* ── Docs / Help ── */
         .help-section {
             width: 100%;
-            max-width: 720px;
+            max-width: 800px;
             margin-bottom: 70px;
         }
         .help-card {
@@ -563,9 +563,20 @@
         }
         .help-card:hover { border-color: var(--border2); }
         .help-card h3 { color: var(--accent); margin-bottom: 12px; font-size: 1.05rem; }
+        .help-card h4 { color: var(--text2); margin: 12px 0 6px; font-size: 0.9rem; }
         .help-card p, .help-card li { color: var(--muted2); font-size: 0.85rem; line-height: 1.65; }
         .help-card ul, .help-card ol { padding-left: 20px; margin: 8px 0; }
         .help-card code { background: rgba(255,255,255,0.04); padding: 2px 7px; border-radius: 4px; font-size: 0.82rem; color: var(--text); border: 1px solid rgba(255,255,255,0.04); }
+        .help-card table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 0.82rem; margin: 8px 0; }
+        .help-card table th, .help-card table td { padding: 10px 14px; text-align: left; border-bottom: 1px solid var(--border); color: var(--muted2); }
+        .help-card table th { background: var(--surface); color: var(--accent); font-weight: 600; font-size: 0.85rem; }
+        .help-card table tr:last-child td { border-bottom: none; }
+        .help-card table td:first-child { font-weight: 500; color: var(--text2); }
+        .help-card details { margin: 8px 0; }
+        .help-card details summary { cursor: pointer; color: var(--accent); font-size: 0.85rem; font-weight: 500; padding: 6px 0; }
+        .help-card details summary:hover { opacity: 0.85; }
+        .help-card details p { margin-top: 6px; padding-left: 4px; }
+        .help-card ol li, .help-card details li { margin-bottom: 4px; }
 
         /* ── Risk Disclaimer ── */
         .disclaimer {
@@ -655,7 +666,7 @@
             </p>
             <div class="version-pill fade-in delay-2">
                 <span class="dot"></span>
-                <span>Latest <strong id="version-number">v9.2.0</strong></span>
+                <span>Latest <strong id="version-number">v9.3.0</strong></span>
             </div>
             <div class="dl-section fade-in delay-3">
                 <div class="dl-group">
@@ -840,12 +851,15 @@
 
             <div class="changelog-card">
                 <span class="tag" style="background:var(--accent);color:#000;font-weight:700;">Latest</span>
-                <h3>v9.2.0 — Max Spend Per Trade, Removed TV Login, Bigger UI</h3>
-                <div class="date">July 10, 2026</div>
+                <h3>v9.3.0 — Max Total Buying Power, AI Chatbot Removed, Light/Dark Fixes</h3>
+                <div class="date">July 16, 2026</div>
                 <ul>
-                    <li><strong>Max Spend Per Trade:</strong> Added a dollar-based position sizing limit in Connection settings. Set a max dollar amount per trade (e.g. $200) and the bot caps the share count accordingly. Set to 0 for unlimited. Works with all brokers.</li>
-                    <li><strong>Removed TradingView Login:</strong> TV login was fundamentally broken in desktop WKWebView (Google/Apple OAuth blocked, third-party cookies blocked by ITP). Removed the entire TV login feature — it will be reapproached later.</li>
-                    <li><strong>Bigger UI:</strong> Base font size increased from 12.5px to 14px for better readability across the app.</li>
+                    <li><strong>Max Total Buying Power:</strong> Replaced the per-trade dollar cap with a total portfolio limit. Set a max total exposure (e.g. $10,000) and the bot tracks deployed capital across all open positions. Available for new trades = <code>max_spend - total_deployed</code>. Set to 0 for unlimited.</li>
+                    <li><strong>Removed AI Chatbot:</strong> The in-app AI chatbot has been removed and replaced with an improved FAQ help bot on the TraderMoney website.</li>
+                    <li><strong>Light/Dark Mode Fix:</strong> Manual Trade tab's TradingView chart now correctly switches theme when toggling light/dark mode.</li>
+                    <li><strong>Help Section Overhaul:</strong> In-app "What's New" sections updated with full version history (v5 through v9.3). Website help section restyled with consistent cards, responsive tables, and detailed legal/terms documentation.</li>
+                    <li><strong>Bigger UI:</strong> Base font size increased from 12.5px to 14px for better readability.</li>
+                    <li><strong>Correlation Tab:</strong> New dedicated Correlation tab replaces the old Analysis tab that bundled the chatbot.</li>
                 </ul>
             </div>
 
@@ -1196,210 +1210,197 @@
                 </ul>
             </div>
         </div>
+
+        <!-- Help & Documentation -->
+        <div class="help-section" id="help">
+            <h2 class="section-title">Help & Documentation</h2>
+            <p class="section-sub">Everything you need to know about TraderMoney.</p>
+
+            <div class="help-card">
+                <h3>Getting Started</h3>
+                <ol>
+                    <li><strong>Download & Run:</strong> Download the latest release for your platform and run the app. No installers needed &mdash; just open the app and it starts.</li>
+                    <li><strong>License:</strong> TraderMoney works in Free mode with all features. An optional Pro license from <a href="https://tradermoney.gumroad.com/l/ykaoov" target="_blank">Gumroad</a> removes the nag screen and supports development.</li>
+                    <li><strong>Choose a Broker:</strong> Pick Alpaca (works free, paper trading available) or any supported broker. Enter your API key + secret in the Connection sidebar.</li>
+                    <li><strong>Set Tickers:</strong> Enter comma-separated ticker symbols (e.g. <code>AAPL, TSLA, BTC/USD</code>). Supports stocks, crypto, forex, futures.</li>
+                    <li><strong>Choose Timeframe:</strong> 1m/5m/15m/30m/1h/1d. Shorter timeframes = more signals but more noise.</li>
+                    <li><strong>Enable Indicators:</strong> RSI, MACD, EMA Crossover, Bollinger Bands, ADX, VWAP, Volume, SuperTrend, Stochastic, ATR. More indicators = higher signal confidence.</li>
+                    <li><strong>News Sentiment (Pro):</strong> Get a free API key at <a href="https://newsapi.org/register" target="_blank">newsapi.org/register</a>, add <code>NEWS_API_KEY=your_key</code> to a <code>.env</code> file next to the app. Live news headlines are analyzed by AI to boost BUY/SELL confidence.</li>
+                    <li><strong>Save & Start:</strong> Click Save Config, then Start Bot. Signals appear in the Signals tab, live charts in the Charts tab.</li>
+                </ol>
+            </div>
+
+            <div class="help-card">
+                <h3>Position Sizing</h3>
+                <p>Two complementary ways to control trade size. Both can be used together.</p>
+                <h4>1. Share/Contract Quantity</h4>
+                <p>Set a fixed number of shares per trade in the Default Qty field. Per-ticker overrides: enter <code>AAPL:10</code> in the tickers field to trade 10 shares of AAPL regardless of other tickers.</p>
+                <h4>2. Max Spend Per Trade ($)</h4>
+                <p>Set a dollar cap in the Connection sidebar under "Max Spend Per Trade (0 = unlimited)". The bot calculates <code>shares = floor(max_spend / current_price)</code> and never exceeds this amount. <strong>Example:</strong> max_spend = $200, AAPL at $150 &rarr; buys 1 share. AAPL at $50 &rarr; buys 4 shares. Set to 0 to disable (use fixed quantity only). Works with all brokers.</p>
+            </div>
+
+            <div class="help-card">
+                <h3>Indicators Reference</h3>
+                <p>All indicators are fully customizable via the Thesis Builder (Pro). Default parameters shown.</p>
+                <div style="overflow-x:auto;">
+                    <table class="bttbl">
+                        <tr><th>Indicator</th><th>What It Does</th><th>Default Parameters</th></tr>
+                        <tr><td><strong>EMA Crossover</strong></td><td>Buy when fast EMA crosses above slow EMA. Sell when fast crosses below slow. Best for trend identification.</td><td>Fast: 9, Slow: 50</td></tr>
+                        <tr><td><strong>RSI</strong></td><td>Measures momentum 0-100. Below oversold = buy opportunity. Above overbought = sell opportunity.</td><td>Period: 14, Oversold: 30, Overbought: 70</td></tr>
+                        <tr><td><strong>MACD</strong></td><td>Shows relationship between two EMAs. Signal when MACD line crosses signal line. Trend direction + momentum confirmation.</td><td>Fast: 12, Slow: 26, Signal: 9</td></tr>
+                        <tr><td><strong>Bollinger Bands</strong></td><td>Volatility bands around SMA. Price touching lower band = oversold (buy). Touching upper band = overbought (sell).</td><td>Period: 20, StdDev: 2</td></tr>
+                        <tr><td><strong>ADX</strong></td><td>Measures trend strength (not direction). ADX &ge; 25 = strong trend. Filter: only trade when trend is strong.</td><td>Period: 14, Threshold: 25</td></tr>
+                        <tr><td><strong>VWAP</strong></td><td>Volume-weighted average price. Above VWAP = bullish bias. Below VWAP = bearish bias. Best for intraday.</td><td>Period: 14</td></tr>
+                        <tr><td><strong>Volume</strong></td><td>Confirms price moves. Strong moves on high volume are more reliable. Volume &ge; 1.5x average = confirmation.</td><td>Multiplier: 1.5x</td></tr>
+                        <tr><td><strong>SuperTrend</strong></td><td>Trend-following indicator plotted as line above/below price. Changes color on trend reversal. Reduces false signals.</td><td>ATR Period: 10, Multiplier: 3</td></tr>
+                        <tr><td><strong>Stochastic</strong></td><td>Compares close price to price range over period. %K crossing above %D = buy. Below 20 = oversold. Above 80 = overbought.</td><td>K: 14, D: 3, Smooth: 3</td></tr>
+                        <tr><td><strong>ATR (Average True Range)</strong></td><td>Measures market volatility. Used for stop-loss placement (e.g. 2x ATR below entry). Higher ATR = wider stops.</td><td>Period: 14</td></tr>
+                    </table>
+                </div>
+            </div>
+
+            <div class="help-card">
+                <h3>AI & Signals</h3>
+                <p>TraderMoney uses a multi-factor signal engine combined with optional AI analysis.</p>
+                <h4>Signal Generation</h4>
+                <p>Each indicator votes BUY, SELL, or NEUTRAL. Votes are weighted and summed. If total confidence exceeds the threshold (default 60%), a signal fires.</p>
+                <h4>AI Enhancement</h4>
+                <p>When enabled, market data + indicator readings + news headlines are sent to an AI model (via OpenRouter) for final analysis. The AI can override, confirm, or refine the signal. Uses free models by default &mdash; no API key needed. Pro users can configure custom model endpoints.</p>
+                <h4>Signal Types</h4>
+                <ul>
+                    <li><strong>BUY:</strong> Go long. Entry price, quantity, stop-loss, and take-profit calculated automatically.</li>
+                    <li><strong>SELL:</strong> Go short (if supported by broker) or exit long position.</li>
+                    <li><strong>EXIT:</strong> Close all open positions for this ticker.</li>
+                </ul>
+            </div>
+
+            <div class="help-card">
+                <h3>Broker Setup</h3>
+                <div style="overflow-x:auto;">
+                    <table class="bttbl">
+                        <tr><th>Broker</th><th>Key Fields</th><th>Notes</th></tr>
+                        <tr><td><strong>Alpaca</strong></td><td>API Key ID, Secret Key</td><td>Free tier available. Paper trading URL: <code>https://paper-api.alpaca.markets</code>. Live URL: <code>https://api.alpaca.markets</code></td></tr>
+                        <tr><td><strong>Interactive Brokers</strong></td><td>Account ID, Port</td><td>Requires IB Gateway or TWS running locally. Port defaults to 7497 (TWS) or 4002 (Gateway).</td></tr>
+                        <tr><td><strong>Oanda</strong></td><td>Account ID, Token</td><td>Forex-focused. Get account ID and bearer token from Oanda Developer Portal.</td></tr>
+                        <tr><td><strong>Polygon</strong></td><td>API Key</td><td>Data-only provider. Use with another broker for execution.</td></tr>
+                    </table>
+                </div>
+            </div>
+
+            <div class="help-card">
+                <h3>Keyboard Shortcuts</h3>
+                <div style="overflow-x:auto;">
+                    <table class="bttbl">
+                        <tr><th>Shortcut</th><th>Action</th></tr>
+                        <tr><td><code>Cmd/Ctrl + B</code></td><td>Toggle sidebar</td></tr>
+                        <tr><td><code>Cmd/Ctrl + F</code></td><td>Search help</td></tr>
+                        <tr><td><code>Cmd/Ctrl + S</code></td><td>Save config</td></tr>
+                        <tr><td><code>Esc</code></td><td>Close modal / Stop bot</td></tr>
+                    </table>
+                </div>
+            </div>
+
+            <div class="help-card">
+                <h3>Troubleshooting</h3>
+                <details>
+                    <summary>Bot starts but no signals appear</summary>
+                    <p>Check that tickers are valid and the timeframe is set. Ensure at least one indicator is enabled. If using AI, check the AI tab for error messages. Try disabling AI to see if signals fire without it.</p>
+                </details>
+                <details>
+                    <summary>"Invalid API Key" error</summary>
+                    <p>Verify your broker API key and secret are correct. For Alpaca, ensure you're using the right URL (paper vs live). Keys are stored locally and never sent anywhere except your broker.</p>
+                </details>
+                <details>
+                    <summary>Charts not loading</summary>
+                    <p>TradingView widgets require internet. If blank, check your connection. If you see "TradingView" but no chart, try reloading from the Charts tab. TV login is not required for chart rendering.</p>
+                </details>
+                <details>
+                    <summary>Trades not executing</summary>
+                    <p>Ensure mode is set to "Auto Trade". Check broker account has sufficient buying power. Verify the broker URL is correct. Check the Status tab for error messages.</p>
+                </details>
+                <details>
+                    <summary>News not showing</summary>
+                    <p>News requires a free NewsAPI key. Create a <code>.env</code> file next to the app with <code>NEWS_API_KEY=your_key</code>. Get a key at <a href="https://newsapi.org/register" target="_blank">newsapi.org/register</a>. Free tier allows 100 requests/day.</p>
+                </details>
+                <details>
+                    <summary>App won't open / "damaged" warning on macOS</summary>
+                    <p>Go to System Settings &rarr; Privacy & Security and click "Open Anyway". Or run <code>xattr -dr com.apple.quarantine /Applications/TraderMoney.app</code> in terminal.</p>
+                </details>
+            </div>
+
+            <div class="help-card">
+                <h3>FAQ</h3>
+                <details>
+                    <summary>Do I need coding experience?</summary>
+                    <p>No. TraderMoney is a fully graphical app. Everything is configured through the UI.</p>
+                </details>
+                <details>
+                    <summary>Can I use it with a demo/paper account?</summary>
+                    <p>Yes. Alpaca offers free paper trading. Use the paper API URL and your paper API key. All signals and trades work identically to a live account.</p>
+                </details>
+                <details>
+                    <summary>Is it safe? Will it lose my money?</summary>
+                    <p>TraderMoney is a tool you control. You configure the indicators, thresholds, and position sizing. The bot only trades what you tell it to trade. Start with paper trading to validate your strategy. Past performance does not guarantee future results.</p>
+                </details>
+                <details>
+                    <summary>Can I run it 24/7?</summary>
+                    <p>Yes. The bot runs continuously until you stop it. It handles market hours automatically &mdash; crypto markets run 24/7, stock markets only during trading hours.</p>
+                </details>
+                <details>
+                    <summary>What data sources does it use?</summary>
+                    <p>Real-time market data comes from your broker's API. Charts use TradingView widgets. News comes from NewsAPI, Yahoo Finance, CNBC, MarketWatch, and Reuters. AI analysis uses OpenRouter free models.</p>
+                </details>
+                <details>
+                    <summary>How do I update?</summary>
+                    <p>Download the latest release and replace your app file. All settings are saved in <code>config.json</code> next to the app &mdash; they persist across updates.</p>
+                </details>
+                <details>
+                    <summary>How do I get Pro?</summary>
+                    <p>Purchase a license at <a href="https://tradermoney.gumroad.com/l/ykaoov" target="_blank">tradermoney.gumroad.com</a>. Enter the license key in the app. Pro removes the free mode limits and supports ongoing development.</p>
+                </details>
+            </div>
+
+            <!-- Terms of Service -->
+            <div class="help-card" id="terms">
+                <h3>Terms of Service</h3>
+                <details>
+                    <summary>Risk Disclaimer</summary>
+                    <p>Trading financial markets involves substantial risk of loss. TraderMoney is a tool for generating technical signals — it does not guarantee profits. Past performance in backtesting does not predict future results. Never trade money you cannot afford to lose. All trading decisions are your own responsibility.</p>
+                </details>
+                <details>
+                    <summary>Software Provided "As Is"</summary>
+                    <p>TraderMoney is provided "as is" without warranty of any kind, express or implied. The authors make no representations or warranties regarding the accuracy, reliability, or completeness of the software or its output. Use of the software is entirely at your own risk.</p>
+                </details>
+                <details>
+                    <summary>No Financial Advice</summary>
+                    <p>TraderMoney does not provide financial advice, investment recommendations, or solicitation to buy or sell securities. The signals generated by the software are based on technical indicators and should not be construed as financial advice. You should consult with a qualified financial advisor before making any trading decisions.</p>
+                </details>
+                <details>
+                    <summary>User Responsibility</summary>
+                    <p>You are solely responsible for your trading decisions and outcomes. You acknowledge that you have read and understand the risks associated with trading. You agree not to hold the developers, contributors, or distributors of TraderMoney liable for any losses, damages, or claims arising from your use of the software.</p>
+                </details>
+                <details>
+                    <summary>License Terms</summary>
+                    <p>TraderMoney is licensed under a proprietary license. See the <a href="EULA.md">EULA</a> and <a href="PRIVACY.md">Privacy Policy</a> for complete terms. Unauthorized distribution, modification, or reverse engineering is prohibited.</p>
+                </details>
+            </div>
+        </div>
     </div>
 
     <footer>
-        <div class="footer-links">
-            <a href="https://www.tiktok.com/@tradermoneyofficial" target="_blank" rel="noopener" class="social-link">
-                <svg viewBox="0 0 24 24"><path d="M12.525.02c1.31-.02 2.61-.01 3.91-.02.08 1.53.63 3.09 1.75 4.17 1.12 1.11 2.7 1.62 4.24 1.79v4.03c-1.44-.05-2.89-.35-4.2-.97-.57-.26-1.1-.59-1.62-.93-.01 2.92.01 5.84-.02 8.75-.08 1.4-.54 2.79-1.35 3.94-1.31 1.92-3.58 3.17-5.91 3.21-1.43.08-2.86-.31-4.08-1.03-2.02-1.19-3.44-3.37-3.65-5.71-.02-.5-.03-1-.01-1.49.18-1.9 1.12-3.72 2.58-4.96 1.66-1.44 3.98-2.13 6.15-1.72.02 1.48-.04 2.96-.04 4.44-.99-.32-2.15-.23-3.02.37-.63.41-1.11 1.04-1.36 1.75-.21.51-.15 1.07-.14 1.61.24 1.64 1.82 3.02 3.5 2.87 1.12-.01 2.19-.66 2.77-1.61.19-.33.4-.67.41-1.06.1-1.79.06-3.57.07-5.36.01-4.03-.01-8.05.02-12.07z"/></svg>
-                @tradermoneyofficial
-            </a>
-            <a href="https://tradermoney.gumroad.com/l/ykaoov" target="_blank" rel="noopener">Get Pro</a>
-        </div>
         <span>&copy; 2026 TraderMoney</span>
+        <div class="footer-links">
+            <a href="PRIVACY.md">Terms of Service</a>
+            <a href="EULA.md">Privacy Policy</a>
+            <a href="#terms">EULA</a>
+        </div>
     </footer>
 
-    <!-- Help Section -->
-    <div class="changelog" id="help">
-        <h2 class="section-title">Help & Documentation</h2>
-        <p class="section-sub">Everything you need to know about TraderMoney.</p>
-
-        <div class="changelog-card">
-            <h3>Getting Started</h3>
-            <ol style="font-size:.82rem;line-height:1.8;">
-                <li><strong>Download & Run:</strong> Download the latest release for your platform and run the app. No installers needed — just open the app and it starts.</li>
-                <li><strong>License:</strong> TraderMoney works in Free mode with all features. An optional Pro license from <a href="https://tradermoney.gumroad.com/l/ykaoov" target="_blank">Gumroad</a> removes the nag screen and supports development.</li>
-                <li><strong>Choose a Broker:</strong> Pick Alpaca (works free, paper trading available) or any supported broker. Enter your API key + secret in the Connection sidebar.</li>
-                <li><strong>Set Tickers:</strong> Enter comma-separated ticker symbols (e.g. <code>AAPL, TSLA, BTC/USD</code>). Supports stocks, crypto, forex, futures.</li>
-                <li><strong>Choose Timeframe:</strong> 1m/5m/15m/30m/1h/1d. Shorter timeframes = more signals but more noise.</li>
-                <li><strong>Enable Indicators:</strong> RSI, MACD, EMA Crossover, Bollinger Bands, ADX, VWAP, Volume, SuperTrend, Stochastic, ATR. More indicators = higher signal confidence.</li>
-                <li><strong>News Sentiment (Pro):</strong> Get a free API key at <a href="https://newsapi.org/register" target="_blank">newsapi.org/register</a>, add <code>NEWS_API_KEY=your_key</code> to a <code>.env</code> file next to the app. Live news headlines are analyzed by AI to boost BUY/SELL confidence.</li>
-                <li><strong>Save & Start:</strong> Click Save Config, then Start Bot. Signals appear in the Signals tab, live charts in the Charts tab.</li>
-            </ol>
-        </div>
-
-        <div class="changelog-card">
-            <h3>Position Sizing</h3>
-            <p>Two complementary ways to control trade size. Both can be used together.</p>
-            <h4>1. Share/Contract Quantity</h4>
-            <p>Set a fixed number of shares per trade in the Default Qty field. Per-ticker overrides: enter <code>AAPL:10</code> in the tickers field to trade 10 shares of AAPL regardless of other tickers.</p>
-            <h4>2. Max Spend Per Trade ($)</h4>
-            <p>Set a dollar cap in the Connection sidebar under "Max Spend Per Trade (0 = unlimited)". The bot calculates <code>shares = floor(max_spend / current_price)</code> and never exceeds this amount. <strong>Example:</strong> max_spend = $200, AAPL at $150 → buys 1 share. AAPL at $50 → buys 4 shares. Set to 0 to disable (use fixed quantity only). Works with all brokers.</p>
-        </div>
-
-        <div class="changelog-card">
-            <h3>Indicators Reference</h3>
-            <p>All indicators are fully customizable via the Thesis Builder (Pro). Default parameters shown.</p>
-            <table class="bttbl">
-                <tr><th>Indicator</th><th>What It Does</th><th>Default Parameters</th></tr>
-                <tr>
-                    <td><strong>EMA Crossover</strong></td>
-                    <td>Buy when fast EMA crosses above slow EMA. Sell when fast crosses below slow. Best for trend identification.</td>
-                    <td>Fast: 9, Slow: 50</td>
-                </tr>
-                <tr>
-                    <td><strong>RSI</strong></td>
-                    <td>Measures momentum 0-100. Below oversold = buy opportunity. Above overbought = sell opportunity.</td>
-                    <td>Period: 14, Oversold: 30, Overbought: 70</td>
-                </tr>
-                <tr>
-                    <td><strong>MACD</strong></td>
-                    <td>Shows relationship between two EMAs. Signal when MACD line crosses signal line. Trend direction + momentum confirmation.</td>
-                    <td>Fast: 12, Slow: 26, Signal: 9</td>
-                </tr>
-                <tr>
-                    <td><strong>Bollinger Bands</strong></td>
-                    <td>Volatility bands around SMA. Price touching lower band = oversold (buy). Touching upper band = overbought (sell).</td>
-                    <td>Period: 20, StdDev: 2</td>
-                </tr>
-                <tr>
-                    <td><strong>ADX</strong></td>
-                    <td>Measures trend strength (not direction). ADX &ge; 25 = strong trend. Filter: only trade when trend is strong.</td>
-                    <td>Period: 14, Threshold: 25</td>
-                </tr>
-                <tr>
-                    <td><strong>VWAP</strong></td>
-                    <td>Volume-weighted average price. Above VWAP = bullish bias. Below VWAP = bearish bias. Best for intraday.</td>
-                    <td>Period: 14</td>
-                </tr>
-                <tr>
-                    <td><strong>Volume</strong></td>
-                    <td>Confirms price moves. Strong moves on high volume are more reliable. Volume &ge; 1.5x average = confirmation.</td>
-                    <td>Multiplier: 1.5x</td>
-                </tr>
-                <tr>
-                    <td><strong>SuperTrend</strong></td>
-                    <td>Trend-following indicator plotted as line above/below price. Changes color on trend reversal. Reduces false signals.</td>
-                    <td>ATR Period: 10, Multiplier: 3</td>
-                </tr>
-                <tr>
-                    <td><strong>Stochastic</strong></td>
-                    <td>Compares close price to price range over period. %K crossing above %D = buy. Below 20 = oversold. Above 80 = overbought.</td>
-                    <td>K: 14, D: 3, Smooth: 3</td>
-                </tr>
-                <tr>
-                    <td><strong>ATR (Average True Range)</strong></td>
-                    <td>Measures market volatility. Used for stop-loss placement (e.g. 2x ATR below entry). Higher ATR = wider stops.</td>
-                    <td>Period: 14</td>
-                </tr>
-            </table>
-        </div>
-
-        <div class="changelog-card">
-            <h3>AI & Signals</h3>
-            <p>TraderMoney uses a multi-factor signal engine combined with optional AI analysis.</p>
-            <h4>Signal Generation</h4>
-            <p>Each indicator votes BUY, SELL, or NEUTRAL. Votes are weighted and summed. If total confidence exceeds the threshold (default 60%), a signal fires.</p>
-            <h4>AI Enhancement</h4>
-            <p>When enabled, market data + indicator readings + news headlines are sent to an AI model (via OpenRouter) for final analysis. The AI can override, confirm, or refine the signal. Uses free models by default — no API key needed. Pro users can configure custom model endpoints.</p>
-            <h4>Signal Types</h4>
-            <ul>
-                <li><strong>BUY:</strong> Go long. Entry price, quantity, stop-loss, and take-profit calculated automatically.</li>
-                <li><strong>SELL:</strong> Go short (if supported by broker) or exit long position.</li>
-                <li><strong>EXIT:</strong> Close all open positions for this ticker.</li>
-            </ul>
-        </div>
-
-        <div class="changelog-card">
-            <h3>Broker Setup</h3>
-            <table class="bttbl">
-                <tr><th>Broker</th><th>Key Fields</th><th>Notes</th></tr>
-                <tr><td><strong>Alpaca</strong></td><td>API Key ID, Secret Key</td><td>Free tier available. Paper trading URL: <code>https://paper-api.alpaca.markets</code>. Live URL: <code>https://api.alpaca.markets</code></td></tr>
-                <tr><td><strong>Interactive Brokers</strong></td><td>Account ID, Port</td><td>Requires IB Gateway or TWS running locally. Port defaults to 7497 (TWS) or 4002 (Gateway).</td></tr>
-                <tr><td><strong>Oanda</strong></td><td>Account ID, Token</td><td>Forex-focused. Get account ID and bearer token from Oanda Developer Portal.</td></tr>
-                <tr><td><strong>Polygon</strong></td><td>API Key</td><td>Data-only provider. Use with another broker for execution.</td></tr>
-            </table>
-        </div>
-
-        <div class="changelog-card">
-            <h3>Keyboard Shortcuts</h3>
-            <table class="bttbl">
-                <tr><th>Shortcut</th><th>Action</th></tr>
-                <tr><td><code>Cmd/Ctrl + B</code></td><td>Toggle sidebar</td></tr>
-                <tr><td><code>Cmd/Ctrl + F</code></td><td>Search help</td></tr>
-                <tr><td><code>Cmd/Ctrl + S</code></td><td>Save config</td></tr>
-                <tr><td><code>Esc</code></td><td>Close modal / Stop bot</td></tr>
-            </table>
-        </div>
-
-        <div class="changelog-card">
-            <h3>Troubleshooting</h3>
-            <details>
-                <summary style="cursor:pointer;color:var(--accent);">Bot starts but no signals appear</summary>
-                <p>Check that tickers are valid and the timeframe is set. Ensure at least one indicator is enabled. If using AI, check the AI tab for error messages. Try disabling AI to see if signals fire without it.</p>
-            </details>
-            <details>
-                <summary style="cursor:pointer;color:var(--accent);">"Invalid API Key" error</summary>
-                <p>Verify your broker API key and secret are correct. For Alpaca, ensure you're using the right URL (paper vs live). Keys are stored locally and never sent anywhere except your broker.</p>
-            </details>
-            <details>
-                <summary style="cursor:pointer;color:var(--accent);">Charts not loading</summary>
-                <p>TradingView widgets require internet. If blank, check your connection. If you see "TradingView" but no chart, try reloading from the Charts tab. TV login is not required for chart rendering.</p>
-            </details>
-            <details>
-                <summary style="cursor:pointer;color:var(--accent);">Trades not executing</summary>
-                <p>Ensure mode is set to "Auto Trade". Check broker account has sufficient buying power. Verify the broker URL is correct. Check the Status tab for error messages.</p>
-            </details>
-            <details>
-                <summary style="cursor:pointer;color:var(--accent);">News not showing</summary>
-                <p>News requires a free NewsAPI key. Create a <code>.env</code> file next to the app with <code>NEWS_API_KEY=your_key</code>. Get a key at <a href="https://newsapi.org/register" target="_blank">newsapi.org/register</a>. Free tier allows 100 requests/day.</p>
-            </details>
-            <details>
-                <summary style="cursor:pointer;color:var(--accent);">App won't open / "damaged" warning on macOS</summary>
-                <p>Go to System Settings &rarr; Privacy & Security and click "Open Anyway". Or run <code>xattr -dr com.apple.quarantine /Applications/TraderMoney.app</code> in terminal.</p>
-            </details>
-        </div>
-
-        <div class="changelog-card">
-            <h3>FAQ</h3>
-            <details>
-                <summary style="cursor:pointer;color:var(--accent);">Do I need coding experience?</summary>
-                <p>No. TraderMoney is a fully graphical app. Everything is configured through the UI.</p>
-            </details>
-            <details>
-                <summary style="cursor:pointer;color:var(--accent);">Can I use it with a demo/paper account?</summary>
-                <p>Yes. Alpaca offers free paper trading. Use the paper API URL and your paper API key. All signals and trades work identically to a live account.</p>
-            </details>
-            <details>
-                <summary style="cursor:pointer;color:var(--accent);">Is it safe? Will it lose my money?</summary>
-                <p>TraderMoney is a tool you control. You configure the indicators, thresholds, and position sizing. The bot only trades what you tell it to trade. Start with paper trading to validate your strategy. Past performance does not guarantee future results.</p>
-            </details>
-            <details>
-                <summary style="cursor:pointer;color:var(--accent);">Can I run it 24/7?</summary>
-                <p>Yes. The bot runs continuously until you stop it. It handles market hours automatically — crypto markets run 24/7, stock markets only during trading hours.</p>
-            </details>
-            <details>
-                <summary style="cursor:pointer;color:var(--accent);">What data sources does it use?</summary>
-                <p>Real-time market data comes from your broker's API. Charts use TradingView widgets. News comes from NewsAPI, Yahoo Finance, CNBC, MarketWatch, and Reuters. AI analysis uses OpenRouter free models.</p>
-            </details>
-            <details>
-                <summary style="cursor:pointer;color:var(--accent);">How do I update?</summary>
-                <p>Download the latest release and replace your app file. All settings are saved in <code>config.json</code> next to the app — they persist across updates.</p>
-            </details>
-            <details>
-                <summary style="cursor:pointer;color:var(--accent);">How do I get Pro?</summary>
-                <p>Purchase a license at <a href="https://tradermoney.gumroad.com/l/ykaoov" target="_blank">tradermoney.gumroad.com</a>. Enter the license key in the app. Pro removes the free mode limits and supports ongoing development.</p>
-            </details>
-        </div>
-    </div>
-
     <script>
-        // Auto-update version number
         fetch('https://raw.githubusercontent.com/shafayrich/tradermoney/main/version.json?t=' + Date.now())
             .then(r => r.json())
             .then(data => { document.getElementById('version-number').textContent = 'v' + data.latest_version; })
             .catch(() => { document.getElementById('version-number').textContent = 'v8.0.0'; });
-        // Platform-aware download buttons
         (function(){
             var isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
             var groups = document.querySelectorAll('.dl-group');
@@ -1417,6 +1418,146 @@
                         break;
                     }
                 }
+            });
+        })();
+    </script>
+
+    <!-- Help Bot Floating Chat Widget -->
+    <div id="help-bot">
+        <div id="chat-bubble">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/><path d="M8 10h.01M12 10h.01M16 10h.01"/></svg>
+        </div>
+        <div id="chat-popup">
+            <div id="chat-header">
+                <span>TraderBot Help</span>
+                <button id="chat-close">&times;</button>
+            </div>
+            <div id="chat-messages">
+                <div class="chat-msg bot">Hi! I'm TraderBot. Ask me about getting started, pricing, brokers, position sizing, and more.</div>
+            </div>
+            <div id="chat-questions">
+                <button class="chat-q-btn" data-q="How do I get started?">How do I get started?</button>
+                <button class="chat-q-btn" data-q="What are the pricing options?">What are the pricing options?</button>
+                <button class="chat-q-btn" data-q="How do I set up a broker?">How do I set up a broker?</button>
+                <button class="chat-q-btn" data-q="How does position sizing work?">How does position sizing work?</button>
+                <button class="chat-q-btn" data-q="What indicators are available?">What indicators are available?</button>
+                <button class="chat-q-btn" data-q="Can I backtest strategies?">Can I backtest strategies?</button>
+            </div>
+        </div>
+    </div>
+
+    <style>
+        #help-bot { position: fixed; bottom: 24px; right: 24px; z-index: 9999; font-family: 'Inter', system-ui, sans-serif; }
+        #chat-bubble {
+            width: 56px; height: 56px; border-radius: 50%;
+            background: var(--accent); color: #000;
+            display: flex; align-items: center; justify-content: center;
+            cursor: pointer; box-shadow: 0 4px 20px rgba(0,201,167,0.35);
+            transition: transform 0.2s, box-shadow 0.2s;
+            margin-left: auto;
+        }
+        #chat-bubble:hover { transform: scale(1.08); box-shadow: 0 6px 28px rgba(0,201,167,0.45); }
+        #chat-bubble svg { width: 26px; height: 26px; }
+        #chat-popup {
+            display: none;
+            position: absolute; bottom: 68px; right: 0;
+            width: 360px; max-width: calc(100vw - 48px);
+            background: var(--surface3); border: 1px solid var(--border3);
+            border-radius: 16px; overflow: hidden;
+            box-shadow: 0 16px 48px rgba(0,0,0,0.6);
+            flex-direction: column;
+        }
+        #chat-popup.open { display: flex; }
+        #chat-header {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 14px 18px; background: var(--surface);
+            border-bottom: 1px solid var(--border);
+            font-size: 0.9rem; font-weight: 600; color: #fff;
+        }
+        #chat-close {
+            background: none; border: none; color: var(--muted);
+            font-size: 1.4rem; cursor: pointer; padding: 0 4px; line-height: 1;
+        }
+        #chat-close:hover { color: var(--text); }
+        #chat-messages {
+            padding: 14px 16px; max-height: 260px; overflow-y: auto;
+            display: flex; flex-direction: column; gap: 10px;
+        }
+        .chat-msg {
+            padding: 10px 14px; border-radius: 12px;
+            font-size: 0.82rem; line-height: 1.5; max-width: 85%;
+        }
+        .chat-msg.bot {
+            background: var(--surface2); color: var(--text2);
+            border: 1px solid var(--border); align-self: flex-start;
+        }
+        .chat-msg.user {
+            background: var(--accent-dim2); color: var(--accent);
+            border: 1px solid rgba(0,201,167,0.15); align-self: flex-end;
+        }
+        #chat-questions {
+            padding: 8px 14px 14px;
+            display: flex; flex-wrap: wrap; gap: 6px;
+            border-top: 1px solid var(--border);
+        }
+        .chat-q-btn {
+            background: var(--surface); border: 1px solid var(--border2);
+            color: var(--text2); padding: 6px 12px; border-radius: 100px;
+            font-size: 0.72rem; cursor: pointer; transition: all 0.2s;
+            font-family: inherit;
+        }
+        .chat-q-btn:hover { background: var(--accent-dim2); border-color: rgba(0,201,167,0.2); color: var(--accent); }
+
+        @media (max-width: 480px) {
+            #chat-popup { width: calc(100vw - 32px); right: -8px; }
+            #help-bot { bottom: 16px; right: 16px; }
+        }
+    </style>
+
+    <script>
+        (function(){
+            var bubble = document.getElementById('chat-bubble');
+            var popup = document.getElementById('chat-popup');
+            var closeBtn = document.getElementById('chat-close');
+            var messages = document.getElementById('chat-messages');
+            var qBtns = document.querySelectorAll('.chat-q-btn');
+
+            var answers = {
+                'How do I get started?': 'Download the app for your platform, launch it, and connect an Alpaca paper trading account. Enter your tickers, enable indicators, and click Start Bot. See the <a href="#help" style="color:var(--accent);">Getting Started</a> guide for details.',
+                'What are the pricing options?': 'TraderMoney has a <strong>Free</strong> tier (1 ticker, Alpaca paper only, 4 indicators) and <strong>Pro</strong> at $25/month (unlimited tickers, all 6 brokers, all 9 indicators, auto trading, backtesting, and more). See the <a href="#pricing" style="color:var(--accent);">Pricing</a> section for full comparison.',
+                'How do I set up a broker?': 'Go to the Connection sidebar in the app. Select your broker and enter the required API credentials. Alpaca is the easiest to start with &mdash; get free API keys from alpaca.markets. For IBKR, ensure TWS/IB Gateway is running. See the <a href="#docs" style="color:var(--accent);">Broker Setup</a> guide.',
+                'How does position sizing work?': 'You can set a fixed quantity per ticker (e.g. <code>AAPL:10</code>) or use the Max Spend Per Trade feature. Max Spend caps your dollar exposure per trade &mdash; the bot calculates shares as <code>floor(max_spend / price)</code>. Set to 0 for unlimited. Both methods can be used together.',
+                'What indicators are available?': 'Nine indicators: EMA Crossover, RSI, MACD, Bollinger Bands, ADX, VWAP, Volume, SuperTrend, and Stochastic. The first 4 are available in Free tier; all 9 in Pro. Each is configurable via the Thesis Builder.',
+                'Can I backtest strategies?': 'Yes! The Backtesting tab lets you test any strategy against historical data. Set your tickers, indicators, and date range. Results include win rate, Sharpe ratio, profit factor, max drawdown, and ROI. Batch mode handles 100+ tickers.'
+            };
+
+            function addMessage(text, type) {
+                var div = document.createElement('div');
+                div.className = 'chat-msg ' + type;
+                div.innerHTML = text;
+                messages.appendChild(div);
+                messages.scrollTop = messages.scrollHeight;
+            }
+
+            function handleQuestion(q) {
+                addMessage(q, 'user');
+                var answer = answers[q] || 'Sorry, I don\'t have an answer for that. Try one of the suggested questions above.';
+                setTimeout(function(){ addMessage(answer, 'bot'); }, 400);
+            }
+
+            bubble.addEventListener('click', function(){
+                popup.classList.toggle('open');
+            });
+
+            closeBtn.addEventListener('click', function(){
+                popup.classList.remove('open');
+            });
+
+            qBtns.forEach(function(btn){
+                btn.addEventListener('click', function(){
+                    var q = btn.getAttribute('data-q');
+                    handleQuestion(q);
+                });
             });
         })();
     </script>
