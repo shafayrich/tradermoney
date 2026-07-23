@@ -666,7 +666,7 @@
             </p>
             <div class="version-pill fade-in delay-2">
                 <span class="dot"></span>
-                <span>Latest <strong id="version-number">v9.4.0</strong></span>
+                <span>Latest <strong id="version-number">v9.5.0</strong></span>
             </div>
             <div class="dl-section fade-in delay-3">
                 <div class="dl-group">
@@ -851,15 +851,25 @@
 
             <div class="changelog-card">
                 <span class="tag" style="background:var(--accent);color:#000;font-weight:700;">Latest</span>
+                <h3>v9.5.0 — History Tab Leak Fix, Order History Scroll, Chart Reload Fix</h3>
+                <div class="date">July 23, 2026</div>
+                <ul>
+                    <li><strong>Fixed History Tab Leaking:</strong> History tab content (earnings + order history) was visible on every tab due to an inline <code>display:flex</code> overriding the tab hide CSS. Now only appears on History tab.</li>
+                    <li><strong>Order History Scrolling:</strong> Order history is capped at 240px with internal scrolling so it doesn't take over the whole screen.</li>
+                    <li><strong>Chart Reload Fix:</strong> The reload button no longer wipes the ticker bar. It just refreshes the TradingView chart for the current ticker.</li>
+                </ul>
+            </div>
+
+            <div class="changelog-card">
                 <h3>v9.4.0 — Earnings Tracking, Correlation Help, Website Chat Bot</h3>
                 <div class="date">July 16, 2026</div>
                 <ul>
                     <li><strong>Max Total Buying Power:</strong> Replaced the per-trade dollar cap with a total portfolio limit. Set a max total exposure (e.g. $10,000) and the bot tracks deployed capital across all open positions. Available for new trades = <code>max_spend - total_deployed</code>. Set to 0 for unlimited.</li>
                     <li><strong>Removed AI Chatbot:</strong> The in-app AI chatbot has been removed and replaced with an improved FAQ help bot on the TraderMoney website.</li>
                     <li><strong>Light/Dark Mode Fix:</strong> Manual Trade tab's TradingView chart now correctly switches theme when toggling light/dark mode.</li>
-                    <li><strong>Help Section Overhaul:</strong> In-app "What's New" sections updated with full version history (v5 through v9.3). Website help section restyled with consistent cards, responsive tables, and detailed legal/terms documentation.</li>
-                    <li><strong>Bigger UI:</strong> Base font size increased from 12.5px to 14px for better readability.</li>
-                    <li><strong>Correlation Tab:</strong> New dedicated Correlation tab replaces the old Analysis tab that bundled the chatbot.</li>
+                    <li><strong>Correlation Tab + Help:</strong> The Correlation tab now has a full explanation of how to read the matrix and use it to reduce portfolio risk.</li>
+                    <li><strong>Website Help Bot:</strong> The Tradermoney website now has a floating chat widget that answers questions about getting started, pricing, brokers, and more.</li>
+                    <li><strong>Version History:</strong> Full changelog from v5 through v9 documented in the in-app help guide.</li>
                 </ul>
             </div>
 
