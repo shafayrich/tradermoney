@@ -5669,7 +5669,7 @@ button.ghost:hover { box-shadow: none; }
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
         Order History
       </div>
-      <div id="histlist" style="font-size:.65rem;color:var(--muted);min-height:30px;"></div>
+      <div id="histlist" style="font-size:.65rem;color:var(--muted);max-height:240px;overflow-y:auto;min-height:30px;"></div>
       <div id="hstempty" style="display:none;text-align:center;padding:8px 0;">No orders yet.</div>
     </div>
   </div>
@@ -6637,13 +6637,16 @@ function loadTradingViewChart(symbol){
 })();
 
 function reloadChart(){
-  refreshTickers();
-  const syms=allTickers.length?allTickers:(gv('tickers','AAPL').split(',').map(s=>s.trim()).filter(s=>s));
-  syms.forEach(sym=>{
-    const clean=sym.split(':')[0].trim();
-    if(clean)loadTradingViewChart(clean);
-  });
-  toast('Charts reloaded for '+syms.length+' ticker(s)','success');
+  if(curSym&&curSym!==lastTvSymbol){
+    loadTradingViewChart(curSym);
+    toast('Chart reloaded for '+curSym,'success');
+  } else if(lastTvSymbol){
+    loadTradingViewChart(lastTvSymbol);
+    toast('Chart reloaded for '+lastTvSymbol,'success');
+  } else {
+    const syms=gv('tickers','AAPL').split(',').map(s=>s.trim()).filter(s=>s);
+    if(syms.length){loadTradingViewChart(cs(syms[0]));toast('Chart reloaded','success');}
+  }
 }
 /* ── Ticker bar ── */
 function setTickers(list){
