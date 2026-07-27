@@ -1932,7 +1932,11 @@ class IndicatorCalculator:
         hh = np.array([np.max(high[max(0, i - stoch_k + 1):i + 1]) for i in range(len(close))])
         stk_val = np.where(hh - ll != 0, 100 * (close - ll) / (hh - ll + 1e-14), 50.0)
         df["Stoch_K"] = stk_val
-        df["Stoch_D"] = np.convolve(stk_val, np.ones(stoch_d) / stoch_d, mode="same")
+        conv = np.convolve(stk_val, np.ones(stoch_d) / stoch_d, mode="same")
+        if len(conv) == len(stk_val):
+            df["Stoch_D"] = conv
+        else:
+            df["Stoch_D"] = stk_val
         return df
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -3193,6 +3197,8 @@ def _normalize_yf_symbol(symbol: str) -> str:
     s = symbol.upper()
     if "/USD" in s:
         return s.replace("/USD", "-USD")
+    if s.find(".") >= 0:
+        return s.replace(".", "-")
     return s
 
 def _safe_yf_download(symbol: str, period: str = "1d", interval: str = "1m", yf_module=None, retries: int = 3, **kwargs) -> "pd.DataFrame | None":
