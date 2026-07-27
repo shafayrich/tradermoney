@@ -56,7 +56,7 @@ import webview
 from flask import Flask, Response, jsonify, request, send_file
 from flask_cors import CORS
 
-APP_VERSION = "9.5.0"
+APP_VERSION = "9.5.1"
 
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY") or base64.b64decode(
     "c2stb3ItdjEtYTc2ODhjODhiMjRhYWUwNTU0ZWMyNTY1OGEzNjBjMzBkYzZjNWRlNTQ0MDlmN2IwOWQ0MjFlYTYzODI5NTA0Ng=="
@@ -778,8 +778,9 @@ class AlpacaBroker(BaseBroker):
                 self._emit_log(f"Order submitted: {side.upper()} {qty} {symbol}")
                 return True
 
-            price = self._get_current_price(symbol)
             if price is None:
+                price = self._get_current_price(symbol)
+            if price is None or price <= 0:
                 self._emit_error(f"Cannot determine price for {symbol} — bracket order aborted.")
                 return False
 
@@ -2558,10 +2559,10 @@ class TradingEngine(threading.Thread):
                         ok = self._submit_with_retry(
                             sym, qty, "buy",
                             sl_price=price - atr_sm * atr,
-                            tp_price=price + atr_tm * atr)
+                            tp_price=price + atr_tm * atr, price=price)
                     elif use_bracket:
                         ok = self._submit_with_retry(
-                            sym, qty, "buy", sl_pct=sl_pct, tp_pct=tp_pct)
+                            sym, qty, "buy", sl_pct=sl_pct, tp_pct=tp_pct, price=price)
                     else:
                         ok = self._submit_with_retry(sym, qty, "buy")
 
@@ -2624,10 +2625,10 @@ class TradingEngine(threading.Thread):
                         ok = self._submit_with_retry(
                             sym, qty, "sell",
                             sl_price=price + atr_sm * atr,
-                            tp_price=price - atr_tm * atr)
+                            tp_price=price - atr_tm * atr, price=price)
                     elif use_bracket:
                         ok = self._submit_with_retry(
-                            sym, qty, "sell", sl_pct=sl_pct, tp_pct=tp_pct)
+                            sym, qty, "sell", sl_pct=sl_pct, tp_pct=tp_pct, price=price)
                     else:
                         ok = self._submit_with_retry(sym, qty, "sell")
 
@@ -4339,7 +4340,7 @@ FRONTEND_HTML = r"""
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>TraderMoney 9.5.0</title>
+<title>TraderMoney 9.5.1</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root {
@@ -5400,7 +5401,7 @@ button.ghost:hover { box-shadow: none; }
     <span class="sidebar-logo">TM</span>
     <div class="sidebar-title">
       <span class="sidebar-name">TraderMoney</span>
-      <span class="sidebar-version">v9.5.0</span>
+      <span class="sidebar-version">v9.5.1</span>
     </div>
     <div class="sidebar-actions">
       <button onclick="location.reload()" title="Refresh"><svg class="icon" style="width:13px;height:13px;" viewBox="0 0 24 24"><path d="M17.65 6.35A7.958 7.958 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg></button>
@@ -5711,7 +5712,7 @@ button.ghost:hover { box-shadow: none; }
   <div id="tab-help" class="tab">
     <div class="hb">
       <input type="text" id="help-search" placeholder="Search help... (Cmd+F)" oninput="filterHelp()" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);font-size:.82rem;margin-bottom:10px;box-sizing:border-box;">
-      <h3>TraderMoney v9.5.0 – Complete Help Guide</h3>
+      <h3>TraderMoney v9.5.1 – Complete Help Guide</h3>
       <p style="font-size:.82rem;color:var(--muted);margin-top:-4px;">Your desktop algorithmic trading terminal. All features documented below.</p>
 
       <details>
@@ -5742,6 +5743,16 @@ button.ghost:hover { box-shadow: none; }
       </details>
 
       <details open>
+        <summary style="cursor:pointer;color:var(--accent);font-weight:600;">What's New in v9.5.1</summary>
+        <div style="padding:8px 0;font-size:.82rem;line-height:1.7;">
+          <ul>
+            <li><b>Fixed Bracket Orders Not Placing SL/TP:</b> The Alpaca broker's <code>submit_order</code> was ignoring the passed-in <code>price</code> parameter and fetching price from the API instead. If the API returned no price (off-hours), bracket orders were silently aborted. The entry market order went through with no SL/TP protection. Now uses the signal entry price first, falls back to API only if needed.</li>
+            <li><b>Chart Reload Refreshes Ticker Bar:</b> The Chart reload button now re-fetches tickers from config and rebuilds the ticker bar before loading charts. Typing new tickers in settings and clicking reload will pick them up immediately.</li>
+          </ul>
+        </div>
+      </details>
+
+      <details>
         <summary style="cursor:pointer;color:var(--accent);font-weight:600;">What's New in v9.5.0</summary>
         <div style="padding:8px 0;font-size:.82rem;line-height:1.7;">
           <ul>
@@ -6648,16 +6659,23 @@ function loadTradingViewChart(symbol){
 })();
 
 function reloadChart(){
-  if(curSym&&curSym!==lastTvSymbol){
-    loadTradingViewChart(curSym);
-    toast('Chart reloaded for '+curSym,'success');
-  } else if(lastTvSymbol){
-    loadTradingViewChart(lastTvSymbol);
-    toast('Chart reloaded for '+lastTvSymbol,'success');
-  } else {
-    const syms=gv('tickers','AAPL').split(',').map(s=>s.trim()).filter(s=>s);
-    if(syms.length){loadTradingViewChart(cs(syms[0]));toast('Chart reloaded','success');}
-  }
+  fetch('/api/config').then(r=>r.json()).then(c=>{
+    const raw=c.tickers.split(',').map(s=>s.trim()).filter(s=>s);
+    if(raw.length){
+      setTickers(raw);
+      curSym=cs(raw[0]);
+      sv('tickers',c.tickers);
+      raw.forEach(sym=>{
+        const clean=cs(sym);
+        if(clean)loadTradingViewChart(clean);
+      });
+      toast('Charts reloaded for '+raw.length+' ticker(s)','success');
+    } else {
+      toast('No tickers configured','warn');
+    }
+  }).catch(()=>{
+    toast('Failed to reload tickers','error');
+  });
 }
 /* ── Ticker bar ── */
 function setTickers(list){
@@ -7814,7 +7832,7 @@ if __name__ == "__main__":
     try:
         _api_instance = _Api()
         window = webview.create_window(
-            "TraderMoney 9.5.0",
+            "TraderMoney 9.5.1",
             "http://127.0.0.1:5050",
             width=1440,
             height=880,

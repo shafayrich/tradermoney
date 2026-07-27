@@ -666,7 +666,7 @@
             </p>
             <div class="version-pill fade-in delay-2">
                 <span class="dot"></span>
-                <span>Latest <strong id="version-number">v9.5.0</strong></span>
+                <span>Latest <strong id="version-number">v9.5.1</strong></span>
             </div>
             <div class="dl-section fade-in delay-3">
                 <div class="dl-group">
@@ -851,6 +851,15 @@
 
             <div class="changelog-card">
                 <span class="tag" style="background:var(--accent);color:#000;font-weight:700;">Latest</span>
+                <h3>v9.5.1 — Bracket SL/TP Fix, Chart Reload Refreshes Tickers</h3>
+                <div class="date">July 28, 2026</div>
+                <ul>
+                    <li><strong>Fixed Bracket Orders Not Placing SL/TP:</strong> The Alpaca broker's <code>submit_order</code> ignored the entry price and fetched price from the API instead. If the API returned no price (off-hours), bracket orders were silently aborted — entry went through with no protection. Now uses the signal price first, falls back to API only if needed.</li>
+                    <li><strong>Chart Reload Refreshes Ticker Bar:</strong> Clicking Chart reload now re-fetches tickers from config and rebuilds the ticker bar. New tickers typed in settings are picked up immediately.</li>
+                </ul>
+            </div>
+
+            <div class="changelog-card">
                 <h3>v9.5.0 — History Tab Leak Fix, Order History Scroll, Chart Reload Fix</h3>
                 <div class="date">July 23, 2026</div>
                 <ul>
