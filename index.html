@@ -666,7 +666,7 @@
             </p>
             <div class="version-pill fade-in delay-2">
                 <span class="dot"></span>
-                <span>Latest <strong id="version-number">v9.5.1</strong></span>
+                <span>Latest <strong id="version-number">v9.5.2</strong></span>
             </div>
             <div class="dl-section fade-in delay-3">
                 <div class="dl-group">
@@ -848,6 +848,18 @@
         <div class="changelog" id="updates">
             <h2 class="section-title">What's New</h2>
             <p class="section-sub">The latest updates to TraderMoney.</p>
+
+            <div class="changelog-card">
+                <span class="tag" style="background:var(--accent);color:#000;font-weight:700;">Latest</span>
+                <h3>v9.5.2 — Chart Reload Fix, yFinance Symbol Fix, Stoch_D Crash Fix</h3>
+                <div class="date">July 29, 2026</div>
+                <ul>
+                    <li><strong>Fixed Chart Reload Overwriting Ticker Bar:</strong> The reload button was calling <code>loadTradingViewChart</code> for every ticker in a loop, but each call replaces the single chart widget — so only the last ticker's chart survived. Now only the first ticker's chart is loaded; the ticker bar is rebuilt with all tickers from config.</li>
+                    <li><strong>Fixed yFinance Symbol Normalization:</strong> Tickers with dots like <code>BRK.B</code> or <code>BF.B</code> were not converted to <code>BRK-B</code> / <code>BF-B</code>, causing yfinance downloads to fail. Now handled correctly.</li>
+                    <li><strong>Fixed Stoch_D Crash:</strong> The Stochastic D indicator no longer crashes when there are fewer data points than the Stoch_D period.</li>
+                    <li><strong>117 Comprehensive Tests:</strong> New test suite covering max spend, database CRUD, broker SL/TP math, trading engine, signals, indicators, API endpoints, and helpers. All pass.</li>
+                </ul>
+            </div>
 
             <div class="changelog-card">
                 <span class="tag" style="background:var(--accent);color:#000;font-weight:700;">Latest</span>
