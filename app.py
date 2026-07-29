@@ -56,7 +56,7 @@ import webview
 from flask import Flask, Response, jsonify, request, send_file
 from flask_cors import CORS
 
-APP_VERSION = "9.5.2"
+APP_VERSION = "9.5.3"
 
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY") or base64.b64decode(
     "c2stb3ItdjEtYTc2ODhjODhiMjRhYWUwNTU0ZWMyNTY1OGEzNjBjMzBkYzZjNWRlNTQ0MDlmN2IwOWQ0MjFlYTYzODI5NTA0Ng=="
@@ -4346,7 +4346,7 @@ FRONTEND_HTML = r"""
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>TraderMoney 9.5.2</title>
+<title>TraderMoney 9.5.3</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root {
@@ -5407,7 +5407,7 @@ button.ghost:hover { box-shadow: none; }
     <span class="sidebar-logo">TM</span>
     <div class="sidebar-title">
       <span class="sidebar-name">TraderMoney</span>
-      <span class="sidebar-version">v9.5.2</span>
+      <span class="sidebar-version">v9.5.3</span>
     </div>
     <div class="sidebar-actions">
       <button onclick="location.reload()" title="Refresh"><svg class="icon" style="width:13px;height:13px;" viewBox="0 0 24 24"><path d="M17.65 6.35A7.958 7.958 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg></button>
@@ -5718,7 +5718,7 @@ button.ghost:hover { box-shadow: none; }
   <div id="tab-help" class="tab">
     <div class="hb">
       <input type="text" id="help-search" placeholder="Search help... (Cmd+F)" oninput="filterHelp()" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);font-size:.82rem;margin-bottom:10px;box-sizing:border-box;">
-      <h3>TraderMoney v9.5.2 – Complete Help Guide</h3>
+      <h3>TraderMoney v9.5.3 – Complete Help Guide</h3>
       <p style="font-size:.82rem;color:var(--muted);margin-top:-4px;">Your desktop algorithmic trading terminal. All features documented below.</p>
 
       <details>
@@ -5749,6 +5749,15 @@ button.ghost:hover { box-shadow: none; }
       </details>
 
       <details open>
+        <summary style="cursor:pointer;color:var(--accent);font-weight:600;">What's New in v9.5.3</summary>
+        <div style="padding:8px 0;font-size:.82rem;line-height:1.7;">
+          <ul>
+            <li><b>Fixed Backtest Not Running:</b> The backtest function referenced <code>$('tune-btn')</code> which doesn't exist in the HTML. <code>null.disabled = true</code> threw a TypeError outside the try block, silently aborting every backtest before it reached the API call. Removed the broken reference.</li>
+            <li><b>Fixed ReloadChart Resetting Ticker:</b> Clicking Chart reload no longer jumps back to the first ticker (AAPL). The current ticker is preserved as long as it's still in the config. Only falls back to the first ticker if the current one was removed from settings.</li>
+          </ul>
+        </div>
+      </details>
+      <details>
         <summary style="cursor:pointer;color:var(--accent);font-weight:600;">What's New in v9.5.2</summary>
         <div style="padding:8px 0;font-size:.82rem;line-height:1.7;">
           <ul>
@@ -6679,8 +6688,9 @@ function reloadChart(){
   fetch('/api/config').then(r=>r.json()).then(c=>{
     const raw=c.tickers.split(',').map(s=>s.trim()).filter(s=>s);
     if(raw.length){
+      const syms=raw.map(cs);
+      if(!syms.includes(curSym))curSym=syms[0];
       setTickers(raw);
-      curSym=cs(raw[0]);
       sv('tickers',c.tickers);
       if(curSym)loadTradingViewChart(curSym);
       toast('Charts reloaded for '+raw.length+' ticker(s)','success');
@@ -7409,7 +7419,7 @@ async function runBT(){
   toast('Running backtest...','info');
   startBTGame();
   switchTab('backtest');
-  $('mc-btn').disabled=true;$('csv-btn').disabled=true;$('pdf-btn').disabled=true;$('tune-btn').disabled=true;
+  $('mc-btn').disabled=true;$('csv-btn').disabled=true;$('pdf-btn').disabled=true;
   try{
     const r=await fetch('/api/backtest',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({config:buildCfg(),days,portfolio:true})});
     const data=await r.json();lastBTData=data;
@@ -7480,7 +7490,7 @@ async function runBT(){
     if(data.portfolio){const p=data.portfolio;btSummary+=`ROI=${p.roi}%, WinRate=${p.win_rate}%, Trades=${p.total_trades}, PF=${p.profit_factor}, Sharpe=${p.sharpe_ratio}, MaxDD=${p.max_drawdown_pct}%`;}
     window._lastBacktestSummary=btSummary;
     $('btres').innerHTML=html||'<p class="ph">No results.</p>';
-    $('mc-btn').disabled=false;$('csv-btn').disabled=false;$('pdf-btn').disabled=false;$('tune-btn').disabled=false;$('png-btn').disabled=false;
+    $('mc-btn').disabled=false;$('csv-btn').disabled=false;$('pdf-btn').disabled=false;$('png-btn').disabled=false;
     loadLeaderboard();
   }catch(e){stopBTGame();toast('Backtest failed: '+e,'error');}
 }
@@ -7846,7 +7856,7 @@ if __name__ == "__main__":
     try:
         _api_instance = _Api()
         window = webview.create_window(
-            "TraderMoney 9.5.2",
+            "TraderMoney 9.5.3",
             "http://127.0.0.1:5050",
             width=1440,
             height=880,

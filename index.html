@@ -666,7 +666,7 @@
             </p>
             <div class="version-pill fade-in delay-2">
                 <span class="dot"></span>
-                <span>Latest <strong id="version-number">v9.5.2</strong></span>
+                <span>Latest <strong id="version-number">v9.5.3</strong></span>
             </div>
             <div class="dl-section fade-in delay-3">
                 <div class="dl-group">
@@ -848,6 +848,16 @@
         <div class="changelog" id="updates">
             <h2 class="section-title">What's New</h2>
             <p class="section-sub">The latest updates to TraderMoney.</p>
+
+            <div class="changelog-card">
+                <span class="tag" style="background:var(--accent);color:#000;font-weight:700;">Latest</span>
+                <h3>v9.5.3 — Backtest Not Running Fix, ReloadChart Preserves Current Ticker</h3>
+                <div class="date">July 29, 2026</div>
+                <ul>
+                    <li><strong>Fixed Backtest Not Running:</strong> A reference to a non-existent <code>tune-btn</code> element caused a JavaScript TypeError that silently aborted every backtest before it reached the API. The market watch animation started but results never loaded.</li>
+                    <li><strong>Fixed ReloadChart Resetting Ticker:</strong> Clicking Chart reload no longer jumps back to the first ticker. The current ticker is preserved unless it was removed from settings.</li>
+                </ul>
+            </div>
 
             <div class="changelog-card">
                 <span class="tag" style="background:var(--accent);color:#000;font-weight:700;">Latest</span>
