@@ -666,7 +666,7 @@
             </p>
             <div class="version-pill fade-in delay-2">
                 <span class="dot"></span>
-                <span>Latest <strong id="version-number">v9.5.5</strong></span>
+                <span>Latest <strong id="version-number">v9.5.6</strong></span>
             </div>
             <div class="dl-section fade-in delay-3">
                 <div class="dl-group">
@@ -848,6 +848,17 @@
         <div class="changelog" id="updates">
             <h2 class="section-title">What's New</h2>
             <p class="section-sub">The latest updates to TraderMoney.</p>
+
+            <div class="changelog-card">
+                <span class="tag" style="background:var(--accent);color:#000;font-weight:700;">Latest</span>
+                <h3>v9.5.6 — Correlation Matrix Crypto Fix, Backtest P&L Display Fix, Many-Ticker Warning</h3>
+                <div class="date">July 30, 2026</div>
+                <ul>
+                    <li><strong>Correlation Matrix Crypto Fix:</strong> Crypto symbols like ADA/USD are now normalized to ADA-USD before fetching from yfinance. Previously they were silently skipped.</li>
+                    <li><strong>Backtest P&L Display Fix:</strong> Trade P&L values were missing the dollar sign when positive due to an operator precedence bug.</li>
+                    <li><strong>Backtest Many-Ticker Warning:</strong> When 30+ tickers are configured, a banner warns the backtest may take longer. No cap — all tickers run.</li>
+                </ul>
+            </div>
 
             <div class="changelog-card">
                 <span class="tag" style="background:var(--accent);color:#000;font-weight:700;">Latest</span>
