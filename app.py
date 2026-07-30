@@ -5591,6 +5591,7 @@ button.ghost:hover { box-shadow: none; }
   <div style="display:flex;gap:6px;align-items:center;padding:2px 0 6px;font-size:.68rem;color:var(--muted);">
     <span>Days:</span>
     <input type="number" id="btDays" value="5" min="1" max="365" class="bt-days-input">
+    <span id="bt-ticker-count" style="margin-left:auto;"></span>
   </div>
   <details class="sb-section" style="margin-top:4px;">
     <summary style="font-size:.7rem;padding:2px 0;color:var(--muted);cursor:pointer;">Backtest Settings</summary>
@@ -7855,9 +7856,17 @@ function addPLBadges(monitorHtml){
 }
 
 /* ── Boot ── */
-updateBrokerOptions();updateCreds();loadConfig();loadSavedTheses();loadSettings();
-initAdvancedControls();loadTabOrder();initDraggableTabs();initSidebarResize();initNotifications();startWatchlistPolling();startNewsPoller();_renderNews();
-setTimeout(refreshLifetimeStats,3000);
+  updateBrokerOptions();updateCreds();loadConfig();loadSavedTheses();loadSettings();
+  initAdvancedControls();loadTabOrder();initDraggableTabs();initSidebarResize();initNotifications();startWatchlistPolling();
+  setTimeout(refreshLifetimeStats,3000);
+  function updateBTC(){
+    const raw=gv('tickers','').split(',').map(s=>s.trim()).filter(s=>s);
+    const el=$('bt-ticker-count');
+    if(el)el.textContent=raw.length+' ticker'+(raw.length!==1?'s':'');
+  }
+  $('tickers').addEventListener('input',updateBTC);
+  $('tickers').addEventListener('change',updateBTC);
+  updateBTC();
 </script>
 </body>
 </html>
