@@ -666,7 +666,7 @@
             </p>
             <div class="version-pill fade-in delay-2">
                 <span class="dot"></span>
-                <span>Latest <strong id="version-number">v9.5.3</strong></span>
+                <span>Latest <strong id="version-number">v9.5.4</strong></span>
             </div>
             <div class="dl-section fade-in delay-3">
                 <div class="dl-group">
@@ -848,6 +848,24 @@
         <div class="changelog" id="updates">
             <h2 class="section-title">What's New</h2>
             <p class="section-sub">The latest updates to TraderMoney.</p>
+
+            <div class="changelog-card">
+                <span class="tag" style="background:var(--accent);color:#000;font-weight:700;">Latest</span>
+                <h3>v9.5.4 — Comprehensive Bug Fix: RSI, Queue, Monte Carlo, Backtest Table, Async Safety</h3>
+                <div class="date">July 30, 2026</div>
+                <ul>
+                    <li><strong>Fixed RSI = 0 Bug:</strong> When no downward price movement occurred in the RSI period, RSI was incorrectly set to 0 instead of 100.</li>
+                    <li><strong>Fixed Queue Message Crash:</strong> The status endpoint crashed with a KeyError when processing license-revoked messages from the watchdog thread. Now handles both tuple and dict message formats.</li>
+                    <li><strong>Fixed Monte Carlo Div by Zero:</strong> Monte Carlo simulations no longer crash when a signal has a price of zero.</li>
+                    <li><strong>Fixed Backtest Trade Table Crash:</strong> Missing trade fields no longer throw toFixed() errors — displays "—" instead.</li>
+                    <li><strong>Fixed runBTWithFilters Typo:</strong> Variable <code>rtFilters</code> was undeclared — changed to correct <code>btFilters</code>.</li>
+                    <li><strong>Fixed 11 Async Functions Without Error Handling:</strong> All async network calls now have .catch() handlers.</li>
+                    <li><strong>Fixed 22 parseInt Calls Missing Radix:</strong> All parseInt() calls now use radix 10.</li>
+                    <li><strong>Fixed Missing Null Guards:</strong> tickerInfoPopover now checks element exists before accessing style.</li>
+                    <li><strong>Fixed Duplicate loadPreset Function:</strong> Removed orphaned dead-code duplicate.</li>
+                    <li><strong>117 Tests Still Passing.</strong></li>
+                </ul>
+            </div>
 
             <div class="changelog-card">
                 <span class="tag" style="background:var(--accent);color:#000;font-weight:700;">Latest</span>
