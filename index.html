@@ -666,7 +666,7 @@
             </p>
             <div class="version-pill fade-in delay-2">
                 <span class="dot"></span>
-                <span>Latest <strong id="version-number">v9.5.4</strong></span>
+                <span>Latest <strong id="version-number">v9.5.5</strong></span>
             </div>
             <div class="dl-section fade-in delay-3">
                 <div class="dl-group">
@@ -851,6 +851,16 @@
 
             <div class="changelog-card">
                 <span class="tag" style="background:var(--accent);color:#000;font-weight:700;">Latest</span>
+                <h3>v9.5.5 — Critical Fix: App Not Loading, Broken .catch() on Network Calls</h3>
+                <div class="date">July 30, 2026</div>
+                <ul>
+                    <li><strong>Fixed App Not Loading:</strong> Orphaned <code>sc()</code>/<code>sv()</code> calls after removing duplicate <code>loadPreset</code> caused <code>ReferenceError</code> at page load. No buttons worked, nothing loaded. Now removed.</li>
+                    <li><strong>Fixed Broken .catch() on Network Calls:</strong> v9.5.4's audit added <code>.catch(()=>{})</code> to async functions using <code>r.json()</code>, causing TypeError on network errors. Replaced with proper try/catch.</li>
+                </ul>
+            </div>
+
+            <div class="changelog-card">
+                <span class="tag" style="background:var(--accent);color:#000;font-weight:700;">Latest</span>
                 <h3>v9.5.4 — Comprehensive Bug Fix: RSI, Queue, Monte Carlo, Backtest Table, Async Safety</h3>
                 <div class="date">July 30, 2026</div>
                 <ul>
@@ -859,10 +869,8 @@
                     <li><strong>Fixed Monte Carlo Div by Zero:</strong> Monte Carlo simulations no longer crash when a signal has a price of zero.</li>
                     <li><strong>Fixed Backtest Trade Table Crash:</strong> Missing trade fields no longer throw toFixed() errors — displays "—" instead.</li>
                     <li><strong>Fixed runBTWithFilters Typo:</strong> Variable <code>rtFilters</code> was undeclared — changed to correct <code>btFilters</code>.</li>
-                    <li><strong>Fixed 11 Async Functions Without Error Handling:</strong> All async network calls now have .catch() handlers.</li>
                     <li><strong>Fixed 22 parseInt Calls Missing Radix:</strong> All parseInt() calls now use radix 10.</li>
                     <li><strong>Fixed Missing Null Guards:</strong> tickerInfoPopover now checks element exists before accessing style.</li>
-                    <li><strong>Fixed Duplicate loadPreset Function:</strong> Removed orphaned dead-code duplicate.</li>
                     <li><strong>117 Tests Still Passing.</strong></li>
                 </ul>
             </div>

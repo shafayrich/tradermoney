@@ -56,7 +56,7 @@ import webview
 from flask import Flask, Response, jsonify, request, send_file
 from flask_cors import CORS
 
-APP_VERSION = "9.5.4"
+APP_VERSION = "9.5.5"
 
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY") or base64.b64decode(
     "c2stb3ItdjEtYTc2ODhjODhiMjRhYWUwNTU0ZWMyNTY1OGEzNjBjMzBkYzZjNWRlNTQ0MDlmN2IwOWQ0MjFlYTYzODI5NTA0Ng=="
@@ -4350,7 +4350,7 @@ FRONTEND_HTML = r"""
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>TraderMoney 9.5.4</title>
+<title>TraderMoney 9.5.5</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root {
@@ -5411,7 +5411,7 @@ button.ghost:hover { box-shadow: none; }
     <span class="sidebar-logo">TM</span>
     <div class="sidebar-title">
       <span class="sidebar-name">TraderMoney</span>
-      <span class="sidebar-version">v9.5.4</span>
+      <span class="sidebar-version">v9.5.5</span>
     </div>
     <div class="sidebar-actions">
       <button onclick="location.reload()" title="Refresh"><svg class="icon" style="width:13px;height:13px;" viewBox="0 0 24 24"><path d="M17.65 6.35A7.958 7.958 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg></button>
@@ -5722,7 +5722,7 @@ button.ghost:hover { box-shadow: none; }
   <div id="tab-help" class="tab">
     <div class="hb">
       <input type="text" id="help-search" placeholder="Search help... (Cmd+F)" oninput="filterHelp()" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);font-size:.82rem;margin-bottom:10px;box-sizing:border-box;">
-      <h3>TraderMoney v9.5.4 – Complete Help Guide</h3>
+      <h3>TraderMoney v9.5.5 – Complete Help Guide</h3>
       <p style="font-size:.82rem;color:var(--muted);margin-top:-4px;">Your desktop algorithmic trading terminal. All features documented below.</p>
 
       <details>
@@ -5753,6 +5753,15 @@ button.ghost:hover { box-shadow: none; }
       </details>
 
       <details open>
+        <summary style="cursor:pointer;color:var(--accent);font-weight:600;">What's New in v9.5.5</summary>
+        <div style="padding:8px 0;font-size:.82rem;line-height:1.7;">
+          <ul>
+            <li><b>Fixed App Not Loading (Critical):</b> Duplicate <code>loadPreset</code> removal left orphaned <code>sc()</code> and <code>sv()</code> calls referencing <code>p</code> at the top level, causing <code>ReferenceError: p is not defined</code> at page load — no buttons worked, nothing loaded. Removed orphaned lines.</li>
+            <li><b>Fixed Broken .catch() on Network Calls:</b> The v9.5.4 audit added <code>.catch(()=&gt;{})</code> to async functions that used <code>r.json()</code>, but <code>.catch()</code> returns <code>undefined</code>, so <code>r.json()</code> threw TypeError on any network error. Replaced with proper try/catch in 8 functions.</li>
+          </ul>
+        </div>
+      </details>
+      <details>
         <summary style="cursor:pointer;color:var(--accent);font-weight:600;">What's New in v9.5.4</summary>
         <div style="padding:8px 0;font-size:.82rem;line-height:1.7;">
           <ul>
@@ -6820,7 +6829,7 @@ function resetDef(){cfg=JSON.parse(JSON.stringify(DEF));licValid=false;applyFree
 async function saveThesis(){
   const name=$('thesis-name').value.trim();if(!name){toast('Enter a thesis name','error');return;}
   const params=collectIndicatorParams();
-  const r=await fetch('/api/thesis/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,params})}).catch(()=>{});
+  let r;try{r=await fetch('/api/thesis/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,params})});}catch(e){toast('Save failed: network error','error');return;}
   const d=await r.json();if(d.ok){toast('Thesis saved: '+name,'success');loadSavedTheses();}else toast(d.error||'Save failed','error');
 }
 async function applyThesis(){
@@ -6828,7 +6837,7 @@ async function applyThesis(){
   const name=sel?sel.value:null;const manual=$('thesis-name').value.trim();
   let params=collectIndicatorParams();
   if(name&&!manual){
-    const r=await fetch('/api/thesis/apply',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})}).catch(()=>{});
+    let r;try{r=await fetch('/api/thesis/apply',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});}catch(e){toast('Apply failed: network error','error');return;}
     const d=await r.json();if(d.ok&&d.params){params=d.params;$('thesis-name').value=name;}else{toast(d.error||'Apply failed','error');return;}
   }
   sv('tp-ema-fast',params.ema_fast||9);sv('tp-ema-slow',params.ema_slow||50);
@@ -6872,7 +6881,7 @@ async function startBot(){
   const btn=$('startBtn');btn.textContent='Starting...';btn.disabled=true;
   cfg=buildCfg();
   if(!licValid){cfg.broker='Alpaca';cfg.mode='signal';cfg.direction='both';if(cfg.alpaca)cfg.alpaca.paper=true;['use_supertrend','use_stochastic','use_adx','use_vol_confirm','use_atr_stops','use_bracket'].forEach(k=>cfg[k]=false);cfg.tickers=cfg.tickers.split(',')[0].trim();}
-  const r=await fetch('/api/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg)}).catch(()=>{});
+  let r;try{r=await fetch('/api/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg)});}catch(e){btn.textContent='▶ Start Bot';btn.disabled=false;toast('Start failed: network error','error');return;}
   const d=await r.json();
   btn.textContent='\u25B6 Start Bot';btn.disabled=false;
   toast(d.message,d.status==='ok'?'success':'error');
@@ -6891,7 +6900,7 @@ async function killSwitch(){await fetch('/api/kill',{method:'POST'});botRunning=
 
 async function validateLicense(silent=false){
    const key=gv('lickey').trim();if(!key){if(!silent)toast('Enter a license key','error');return;}
-   const r=await fetch('/api/validate_license',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({license_key:key})}).catch(()=>{});
+   let r;try{r=await fetch('/api/validate_license',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({license_key:key})});}catch(e){if(!silent)toast('License validation failed: network error','error');return;}
    const d=await r.json();
    if(d.valid){
      licValid=true;applyProUI();
@@ -7355,13 +7364,6 @@ const PRESETS={
   swing:{timeframe:'15m',emas:[20,50],rsi:true,macd:true,vwap:true,bollinger:true,adx:true,volume:false,supertrend:false,stochastic:false,bracket:true,sl:3,tp:5,atr:false,direction:'both'},
   breakout:{timeframe:'5m',emas:[9,50],rsi:false,macd:false,vwap:false,bollinger:false,adx:false,volume:true,supertrend:true,stochastic:false,bracket:false,atr:true,direction:'both'},
 };
-  sc('ursi',!!p.rsi);sc('umacd',!!p.macd);sc('uvwap',!!p.vwap);sc('uboll',!!p.bollinger);
-  sc('uadx',!!p.adx);sc('uvol',!!p.volume);sc('ust',!!p.supertrend);sc('ustoch',!!p.stochastic);
-  sc('ubracket',!!p.bracket);sc('uatr',!!p.atr);
-  if(p.sl)sv('slp',p.sl);if(p.tp)sv('tpp',p.tp);
-  if(licValid&&p.direction)sv('dir',p.direction);
-  toast('Preset loaded – click Save to persist','success');
-}
 
 /* ── Market Ticker ── */
 let _btTickerTimer=null;
@@ -7523,7 +7525,7 @@ async function runBT(){
 
 async function runMC(){
   toast('Running Monte Carlo (1000 sims)...','info');
-  const r=await fetch('/api/backtest/montecarlo',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({config:buildCfg(),days:parseInt($('btDays').value,10)||5})}).catch(()=>{});
+  let r;try{r=await fetch('/api/backtest/montecarlo',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({config:buildCfg(),days:parseInt($('btDays').value,10)||5})});}catch(e){toast('Monte Carlo failed: network error','error');return;}
   const d=await r.json();
   if(d.error){toast(d.error,'error');return;}
   $('btres').innerHTML+=`<div class="card section"><b style="color:var(--accent)">Monte Carlo (1000 runs)</b><br><span style="font-size:var(--fs-md);">Prob. Profit: <b>${d.prob_profit}%</b> | Best: +$${d.best} | Avg: $${d.average} | Worst: $${d.worst}</span></div>`;
@@ -7537,14 +7539,14 @@ function getAllExitTrades(){
 }
 async function exportCSV(){
   const trades=getAllExitTrades();if(!trades.length){toast('No trades to export','error');return;}
-  const r=await fetch('/api/export/backtest/csv/file',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({trades})}).catch(()=>{});
+  let r;try{r=await fetch('/api/export/backtest/csv/file',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({trades})});}catch(e){toast('CSV export failed: network error','error');return;}
   const d=await r.json();
   if(d.path){toast('CSV saved to '+d.path,'success');}
   else if(d.error){toast(d.error,'error');}
 }
 async function exportPDF(){
   const trades=getAllExitTrades();if(!trades.length){toast('No trades to export','error');return;}
-  const r=await fetch('/api/export/backtest/pdf/file',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({trades})}).catch(()=>{});
+  let r;try{r=await fetch('/api/export/backtest/pdf/file',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({trades})});}catch(e){toast('PDF export failed: network error','error');return;}
   const d=await r.json();
   if(d.path){toast('PDF saved to '+d.path,'success');}
   else if(d.error){toast(d.error,'error');}
@@ -7552,7 +7554,7 @@ async function exportPDF(){
 /* ── Correlation Matrix ── */
 async function loadCorr(){
   $('corr-content').innerHTML='<p class="ph">Loading...</p>';
-  const d=await(await fetch('/api/correlation').catch(()=>{})).json();
+  let d;try{d=await(await fetch('/api/correlation')).json();}catch(e){$('corr-content').innerHTML='<p class="ph">No data</p>';return;}
   $('corr-content').innerHTML=d.html||'<p class="ph">No data</p>';
 }
 
@@ -7882,7 +7884,7 @@ if __name__ == "__main__":
     try:
         _api_instance = _Api()
         window = webview.create_window(
-            "TraderMoney 9.5.4",
+            "TraderMoney 9.5.5",
             "http://127.0.0.1:5050",
             width=1440,
             height=880,
