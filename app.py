@@ -3244,6 +3244,9 @@ def api_backtest():
         import yfinance as yf
         from concurrent.futures import ThreadPoolExecutor, as_completed
         raw_list = [s.strip() for s in config.get("tickers", "AAPL").split(",") if s.strip()]
+        capped = len(raw_list) > 20
+        if capped:
+            raw_list = raw_list[:20]
         symbols = list(dict.fromkeys(clean_symbol(e) for e in raw_list))
         default_qty = config.get("quantity", 1)
         per_ticker_qty: dict = {}
@@ -3631,6 +3634,7 @@ def api_backtest():
                 "sharpe_ratio": round(sharpe, 2),
             }
         state.last_bt_data = resp
+        resp["capped"] = capped
         db.insert_backtest(json.dumps({"config": config, "results": results}))
         return jsonify(resp)
     except Exception as e:
@@ -4018,7 +4022,8 @@ def correlation_matrix():
         data_dict: Dict[str, pd.Series] = {}
         for sym in all_syms:
             try:
-                df = yf.download(sym, period="30d", interval="1d",
+                ns = _normalize_yf_symbol(sym)
+                df = yf.download(ns, period="30d", interval="1d",
                                   progress=False, auto_adjust=True)["Close"]
                 data_dict[sym] = df.pct_change().dropna()
             except Exception:
@@ -7449,6 +7454,7 @@ async function runBT(){
     const data=await r.json();lastBTData=data;
     stopBTGame();
     if(data.error){toast('Backtest error: '+data.error,'error');$('btres').innerHTML=`<p class="ph" style="color:var(--danger)">${data.error}</p>`;return;}
+    if(data.capped)html+=`<div class="card section" style="border-color:var(--warn);"><span style="color:var(--warn);font-size:.7rem;">First 20 tickers only — too many tickers for backtest. Reduce to 20 or fewer for full results.</span></div>`;
     const sf=(v,dec=2)=>{if(v===undefined||v===null||v===Infinity||v===-Infinity||isNaN(v))return'—';return Number(v).toFixed(dec);};
     const sm=(v)=>{if(v===undefined||v===null||isNaN(v))return'—';return'$'+Number(v).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});};
     const ss=(v)=>{if(v===undefined||v===null||isNaN(v))return'—';return v;};
@@ -7501,7 +7507,7 @@ async function runBT(){
             const ep=t.entry_price!==undefined&&t.entry_price!==null?t.entry_price.toFixed(2):'—';
             const xp=t.exit_price!==undefined&&t.exit_price!==null?t.exit_price.toFixed(2):'—';
             const pnl=t.pnl!==undefined&&t.pnl!==null?t.pnl:0;
-            const pnlStr=pnl>=0?'+':''+'$'+pnl.toFixed(2);
+            const pnlStr=(pnl>=0?'+':'')+'$'+pnl.toFixed(2);
             html+=`<tr><td>${(t.entry_time||'').toString().slice(0,12)}</td><td>${(t.exit_time||'').toString().slice(0,12)}</td><td style="color:${t.side==='LONG'?'var(--accent)':'var(--danger)'}">${t.side||''}</td><td>${t.shares!==undefined?t.shares.toFixed(2):''}</td><td>$${ep}</td><td>$${xp}</td><td style="color:${pnl>=0?'var(--accent)':'var(--danger)'}">${pnlStr}</td><td>${t.days_held!==undefined?t.days_held:''}</td></tr>`;
             });
           html+=`</table></div></details>`;
