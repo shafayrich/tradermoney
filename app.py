@@ -3244,9 +3244,7 @@ def api_backtest():
         import yfinance as yf
         from concurrent.futures import ThreadPoolExecutor, as_completed
         raw_list = [s.strip() for s in config.get("tickers", "AAPL").split(",") if s.strip()]
-        capped = len(raw_list) > 20
-        if capped:
-            raw_list = raw_list[:20]
+        many = len(raw_list) if len(raw_list) > 30 else 0
         symbols = list(dict.fromkeys(clean_symbol(e) for e in raw_list))
         default_qty = config.get("quantity", 1)
         per_ticker_qty: dict = {}
@@ -3634,7 +3632,7 @@ def api_backtest():
                 "sharpe_ratio": round(sharpe, 2),
             }
         state.last_bt_data = resp
-        resp["capped"] = capped
+        resp["many"] = many
         db.insert_backtest(json.dumps({"config": config, "results": results}))
         return jsonify(resp)
     except Exception as e:
@@ -7454,7 +7452,7 @@ async function runBT(){
     const data=await r.json();lastBTData=data;
     stopBTGame();
     if(data.error){toast('Backtest error: '+data.error,'error');$('btres').innerHTML=`<p class="ph" style="color:var(--danger)">${data.error}</p>`;return;}
-    if(data.capped)html+=`<div class="card section" style="border-color:var(--warn);"><span style="color:var(--warn);font-size:.7rem;">First 20 tickers only — too many tickers for backtest. Reduce to 20 or fewer for full results.</span></div>`;
+    if(data.many)html+=`<div class="card section" style="border-color:var(--warn);"><span style="color:var(--warn);font-size:.7rem;">${data.many} tickers — backtest may take a minute or more.</span></div>`;
     const sf=(v,dec=2)=>{if(v===undefined||v===null||v===Infinity||v===-Infinity||isNaN(v))return'—';return Number(v).toFixed(dec);};
     const sm=(v)=>{if(v===undefined||v===null||isNaN(v))return'—';return'$'+Number(v).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});};
     const ss=(v)=>{if(v===undefined||v===null||isNaN(v))return'—';return v;};
