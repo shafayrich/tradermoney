@@ -56,7 +56,7 @@ import webview
 from flask import Flask, Response, jsonify, request, send_file
 from flask_cors import CORS
 
-APP_VERSION = "9.5.6"
+APP_VERSION = "9.6.0"
 
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY") or base64.b64decode(
     "c2stb3ItdjEtYTc2ODhjODhiMjRhYWUwNTU0ZWMyNTY1OGEzNjBjMzBkYzZjNWRlNTQ0MDlmN2IwOWQ0MjFlYTYzODI5NTA0Ng=="
@@ -202,16 +202,29 @@ class DatabaseManager:
             self.conn.execute(sql, params)
             self.conn.commit()
 
+    def _query(self, sql: str, params: tuple = ()):
+        """Thread-safe SELECT. Returns list of rows."""
+        with self._lock:
+            cur = self.conn.execute(sql, params)
+            rows = cur.fetchall()
+        return rows
+
+    def _query_one(self, sql: str, params: tuple = ()):
+        with self._lock:
+            cur = self.conn.execute(sql, params)
+            row = cur.fetchone()
+        return row
+
     def insert_trade(self, ts, sym, action, qty, price):
         self._exec(
             "INSERT INTO trades(timestamp,symbol,action,quantity,price)VALUES(?,?,?,?,?)",
             (ts, sym, action, qty, price))
 
     def get_recent_trades(self, limit=50):
-        cur = self.conn.execute(
+        rows = self._query(
             "SELECT timestamp,symbol,action,quantity,price FROM trades ORDER BY id DESC LIMIT ?",
             (limit,))
-        return [{"time": r[0], "symbol": r[1], "action": r[2], "qty": r[3], "price": r[4]} for r in cur]
+        return [{"time": r[0], "symbol": r[1], "action": r[2], "qty": r[3], "price": r[4]} for r in rows]
 
     def record_earnings(self, ts, sym, side, entry_px, exit_px, qty, pnl, roi, reason="SL/TP"):
         self._exec(
@@ -220,22 +233,21 @@ class DatabaseManager:
             (ts, sym, side, entry_px, exit_px, qty, round(pnl, 2), round(roi, 2), reason))
 
     def get_earnings(self, limit=100):
-        cur = self.conn.execute(
+        rows = self._query(
             "SELECT timestamp,symbol,side,entry_price,exit_price,quantity,pnl,roi,close_reason "
             "FROM earnings ORDER BY id DESC LIMIT ?", (limit,))
         return [{"time": r[0], "symbol": r[1], "side": r[2],
                  "entry": r[3], "exit": r[4], "qty": r[5],
-                 "pnl": r[6], "roi": r[7], "reason": r[8]} for r in cur]
+                 "pnl": r[6], "roi": r[7], "reason": r[8]} for r in rows]
 
     def get_earnings_summary(self):
-        cur = self.conn.execute(
+        r = self._query_one(
             "SELECT COUNT(*) as total, SUM(pnl) as total_pnl, "
             "SUM(CASE WHEN pnl>0 THEN 1 ELSE 0 END) as wins, "
             "SUM(CASE WHEN pnl<0 THEN 1 ELSE 0 END) as losses, "
             "MAX(pnl) as best, MIN(pnl) as worst, "
             "AVG(pnl) as avg_pnl, AVG(roi) as avg_roi "
             "FROM earnings")
-        r = cur.fetchone()
         if not r or r[0] == 0:
             return {"total": 0}
         return {"total": r[0], "total_pnl": round(r[1] or 0, 2),
@@ -249,29 +261,27 @@ class DatabaseManager:
             (ts, sym, sig, price, rationale))
 
     def get_recent_signals(self, limit=50):
-        cur = self.conn.execute(
+        rows = self._query(
             "SELECT timestamp,symbol,signal,price,rationale FROM signals ORDER BY id DESC LIMIT ?",
             (limit,))
-        return [{"time": r[0], "symbol": r[1], "signal": r[2], "price": r[3], "rationale": r[4]} for r in cur]
+        return [{"time": r[0], "symbol": r[1], "signal": r[2], "price": r[3], "rationale": r[4]} for r in rows]
 
     def insert_log(self, msg: str):
         self._exec("INSERT INTO logs(timestamp,message)VALUES(?,?)",
                    (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), msg))
 
     def get_recent_logs(self, limit=50):
-        cur = self.conn.execute("SELECT timestamp,message FROM logs ORDER BY id DESC LIMIT ?", (limit,))
-        return [f"{r[0]}  {r[1]}" for r in cur]
+        rows = self._query("SELECT timestamp,message FROM logs ORDER BY id DESC LIMIT ?", (limit,))
+        return [f"{r[0]}  {r[1]}" for r in rows]
 
     def insert_backtest(self, config_json: str):
         self._exec("INSERT INTO backtests(timestamp,config_json)VALUES(?,?)",
                    (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), config_json))
 
     def get_cached_candle(self, symbol: str, interval: str, max_age_seconds: int = 300):
-        with self._lock:
-            cur = self.conn.execute(
-                "SELECT timestamp,data_json FROM candle_cache WHERE symbol=? AND interval=?",
-                (symbol, interval))
-            row = cur.fetchone()
+        row = self._query_one(
+            "SELECT timestamp,data_json FROM candle_cache WHERE symbol=? AND interval=?",
+            (symbol, interval))
         if row:
             ts = datetime.strptime(row[0], "%Y-%m-%d %H:%M:%S")
             if (datetime.now() - ts).total_seconds() < max_age_seconds:
@@ -296,11 +306,11 @@ class DatabaseManager:
             title = f"Chat {datetime.now().strftime('%Y-%m-%d %H:%M')}"
         self._exec("INSERT INTO chat_sessions(title,created)VALUES(?,?)",
                    (title, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
-        return self.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        return self._query_one("SELECT last_insert_rowid()")[0]
 
     def get_chat_sessions(self) -> List[dict]:
-        cur = self.conn.execute("SELECT id,title,created FROM chat_sessions ORDER BY id DESC")
-        return [{"id": r[0], "title": r[1], "created": r[2]} for r in cur]
+        rows = self._query("SELECT id,title,created FROM chat_sessions ORDER BY id DESC")
+        return [{"id": r[0], "title": r[1], "created": r[2]} for r in rows]
 
     def insert_chat_message(self, session_id: int, role: str, content: str):
         self._exec(
@@ -308,20 +318,20 @@ class DatabaseManager:
             (session_id, role, content, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
 
     def get_chat_history(self, session_id: int, limit: int = 200) -> List[dict]:
-        cur = self.conn.execute(
+        rows = self._query(
             "SELECT role,content FROM(SELECT*FROM chat_history WHERE session_id=? "
             "ORDER BY id DESC LIMIT ?)ORDER BY id ASC",
             (session_id, limit))
-        return [{"role": r[0], "content": r[1]} for r in cur]
+        return [{"role": r[0], "content": r[1]} for r in rows]
 
     def update_leaderboard(self, user_id: str, win_rate: float, total_signals: int):
         self._exec("INSERT OR REPLACE INTO leaderboard VALUES(?,?,?,?)",
                    (user_id, win_rate, total_signals, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
 
     def get_leaderboard(self) -> List[dict]:
-        cur = self.conn.execute(
+        rows = self._query(
             "SELECT user_id,win_rate,total_signals,last_backtest FROM leaderboard ORDER BY win_rate DESC")
-        return [{"user_id": r[0][:6], "win_rate": r[1], "total_signals": r[2], "last_backtest": r[3]} for r in cur]
+        return [{"user_id": r[0][:6], "win_rate": r[1], "total_signals": r[2], "last_backtest": r[3]} for r in rows]
 
     def rename_chat_session(self, session_id: int, title: str):
         self._exec("UPDATE chat_sessions SET title=? WHERE id=?", (title, session_id))
@@ -334,6 +344,42 @@ class DatabaseManager:
 
 
 db = DatabaseManager()
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PERSISTENT UI SETTINGS (survives app restarts - webview localStorage is unreliable)
+# ═══════════════════════════════════════════════════════════════════════════════
+UI_SETTINGS_FILE = os.path.expanduser("~/.tradermoney_ui.json")
+_ui_settings_lock = threading.Lock()
+
+def _load_ui_settings() -> dict:
+    with _ui_settings_lock:
+        try:
+            if os.path.exists(UI_SETTINGS_FILE):
+                with open(UI_SETTINGS_FILE, "r") as f:
+                    data = json.load(f)
+                    if isinstance(data, dict):
+                        return data
+        except Exception:
+            pass
+        return {}
+
+def _save_ui_settings(data: dict):
+    with _ui_settings_lock:
+        try:
+            tmp = UI_SETTINGS_FILE + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump(data, f)
+            os.replace(tmp, UI_SETTINGS_FILE)
+        except Exception:
+            pass
+
+def _get_ui_setting(key: str, default=None):
+    return _load_ui_settings().get(key, default)
+
+def _set_ui_setting(key: str, value):
+    data = _load_ui_settings()
+    data[key] = value
+    _save_ui_settings(data)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # ENCRYPTED CONFIG
@@ -484,10 +530,14 @@ class AppState:
         self.engine: Optional["TradingEngine"] = None
         self.broker_instance: Optional["BaseBroker"] = None
         self.running: bool = False
+        self.stopped_by: Optional[str] = None
         self.internet_status: bool = True
+        self.last_hourly_report: str = ""
+        self.report_baseline: dict = {"signals": 0, "orders": 0, "start": time.time()}
         self.dashboard: dict = {"equity": 0, "pl": 0, "buying_power": 0, "open_positions": 0}
         self.last_bt_data: dict = {}
         self.signal_history: List[dict] = []
+        self.signal_history_lock = threading.Lock()
         self.monitor_cache: dict = {}
         self.telegram_log: List[dict] = []
         self.session_id: str = str(uuid.uuid4())
@@ -2420,9 +2470,10 @@ class TradingEngine(threading.Thread):
                                 self.ui_queue.put(("signal", (s, sig, price, rationale)))
                                 db.insert_signal(_ts(), s, sig, price, rationale)
                                 try:
-                                    state.signal_history.append({"time": _ts(), "symbol": s, "signal": sig, "price": price, "rationale": rationale, "confidence": conf})
-                                    if len(state.signal_history) > 500:
-                                        state.signal_history = state.signal_history[-500:]
+                                    with state.signal_history_lock:
+                                        state.signal_history.append({"time": _ts(), "symbol": s, "signal": sig, "price": price, "rationale": rationale, "confidence": conf})
+                                        if len(state.signal_history) > 500:
+                                            state.signal_history = state.signal_history[-500:]
                                 except Exception:
                                     pass
                                 self._telegram(f"<b>Signal</b> {sig} {s} @ ${price:.2f} (conf: {conf:.2f}){news_label}")
@@ -2866,7 +2917,13 @@ def api_start():
     state.engine = TradingEngine(state.ui_queue, state.config, state.broker_instance)
     state.engine.running = True
     state.engine.start()
+    state.stopped_by = None
     state.running = True
+    try:
+        state.report_baseline = {"signals": len(state.signal_history), "orders": len(db.get_recent_trades(10000)), "start": time.time()}
+    except Exception:
+        state.report_baseline = {"signals": 0, "orders": 0, "start": time.time()}
+    state.last_hourly_report = ""
     return jsonify({"status": "ok", "message": f"Bot started ({broker_choice}).{mode_warn}", "mode": actual_mode})
 
 @app.route("/api/stop", methods=["POST"])
@@ -2875,6 +2932,7 @@ def api_stop():
         state.engine.stop()
     if state.broker_instance:
         state.broker_instance.stop_stream()
+    state.stopped_by = "user"
     state.running = False
     return jsonify({"status": "ok", "message": "Bot stopped"})
 
@@ -2884,6 +2942,7 @@ def api_kill():
         threading.Thread(target=state.broker_instance.close_all_positions, daemon=True).start()
     if state.engine:
         state.engine.stop()
+    state.stopped_by = "user"
     state.running = False
     return jsonify({"status": "ok", "message": "Kill switch activated"})
 
@@ -3001,8 +3060,18 @@ def api_status():
     except Exception:
         pass
 
+    deployed = 0.0
+    if state.engine:
+        try:
+            deployed = state.engine._get_total_deployed()
+        except Exception:
+            deployed = 0.0
+
     return jsonify({
         "running": state.running,
+        "stopped_by": getattr(state, "stopped_by", None),
+        "max_spend": float(state.config.get("max_spend", 0) or 0),
+        "deployed": round(deployed, 2),
         "equity": state.dashboard["equity"],
         "pl": state.dashboard["pl"],
         "buying_power": state.dashboard["buying_power"],
@@ -3018,11 +3087,38 @@ def api_status():
         "market_status": state.broker_instance.get_market_status() if state.broker_instance else None,
         "broker_connected": state.broker_instance.is_connected() if state.broker_instance else False,
         "broker_error": getattr(state, '_broker_error', None),
+        "hourly_report": getattr(state, 'last_hourly_report', ""),
     })
 
 @app.route("/api/broker_status")
 def api_broker_status():
     return jsonify({"message": state.config.get("last_broker_message", "")})
+
+@app.route("/api/terms/status", methods=["GET"])
+def api_terms_status():
+    current = "2.0"
+    return jsonify({
+        "accepted": _get_ui_setting("terms_accepted", False),
+        "accepted_version": _get_ui_setting("terms_accepted_version", ""),
+        "dismissed": _get_ui_setting("terms_dismissed", False),
+        "current_version": current,
+    })
+
+@app.route("/api/terms/accept", methods=["POST"])
+def api_terms_accept():
+    data = request.json or {}
+    _set_ui_setting("terms_accepted", True)
+    _set_ui_setting("terms_accepted_version", data.get("version", "2.0"))
+    if data.get("dismissed"):
+        _set_ui_setting("terms_dismissed", True)
+    return jsonify({"status": "ok"})
+
+@app.route("/api/ui-settings", methods=["POST"])
+def api_ui_settings_save():
+    data = request.json or {}
+    for k, v in data.items():
+        _set_ui_setting(k, v)
+    return jsonify({"status": "ok", "settings": _load_ui_settings()})
 
 @app.route("/api/candles", methods=["GET"])
 def api_candles():
@@ -3154,6 +3250,79 @@ def _check_news_api_health() -> bool:
     except Exception:
         return False
 
+def _bot_watchdog():
+    """Detect unexpected bot stops (engine thread died / crash) and notify the UI."""
+    while True:
+        try:
+            if (state.running and state.engine
+                    and getattr(state.engine, "is_active", False)
+                    and not state.engine.is_alive()):
+                state.stopped_by = "unexpected"
+                state.running = False
+                db.insert_log("Engine thread died unexpectedly - bot stopped")
+                try:
+                    state.engine._telegram("<b>TraderMoney Stopped Unexpectedly</b>\nThe engine thread crashed. Restart required.")
+                except Exception:
+                    pass
+                state.ui_queue.put(("error", "Engine crashed - bot stopped unexpectedly"))
+                state.ui_queue.put(("status", "Bot stopped unexpectedly (engine crashed)"))
+        except Exception:
+            pass
+        time.sleep(2)
+
+def _build_hourly_report(dash, config, deployed, new_signals, new_orders, elapsed_h):
+    """Pure, testable report-text builder."""
+    max_spend = float(config.get("max_spend", 0) or 0)
+    spend_txt = (f"Deployed: ${deployed:,.2f} / ${max_spend:,.2f}" if max_spend > 0
+                 else f"Deployed: ${deployed:,.2f} (unlimited)")
+    pl = float(dash.get("pl", 0) or 0)
+    eq = float(dash.get("equity", 0) or 0)
+    pct = (pl / eq * 100) if eq and eq != 0 else 0.0
+    return (f"\u2605 Hourly Progress Report \u2014 running {elapsed_h:.1f}h\n"
+            f"Equity: ${eq:,.2f}  |  P/L: ${pl:,.2f} ({pct:+.2f}%)\n"
+            f"Buying power: ${float(dash.get('buying_power', 0) or 0):,.2f}  |  {spend_txt}\n"
+            f"Open positions: {dash.get('open_positions', 0)}  |  New signals: {new_signals}  |  New orders: {new_orders}\n"
+            f"Broker: {config.get('broker', 'Alpaca')}  |  Mode: {config.get('mode', 'signal')}")
+
+def _hourly_reporter():
+    """Publishes an hourly progress report while the bot is running."""
+    while True:
+        time.sleep(3600)
+        try:
+            if not state.running or not state.engine or not state.engine.is_alive():
+                continue
+            base = state.report_baseline
+            try:
+                with state.signal_history_lock:
+                    n_sigs = len(state.signal_history)
+            except Exception:
+                n_sigs = 0
+            new_signals = max(n_sigs - base.get("signals", 0), 0)
+            new_orders = 0
+            try:
+                recs = db.get_recent_trades(10000)
+                new_orders = max(len(recs) - base.get("orders", 0), 0)
+            except Exception:
+                pass
+            dash = state.dashboard
+            elapsed_h = max((time.time() - base.get("start", time.time())) / 3600, 0.016)
+            deployed = 0.0
+            try:
+                deployed = state.engine._get_total_deployed()
+            except Exception:
+                pass
+            report = _build_hourly_report(dash, state.config, deployed,
+                                          new_signals, new_orders, elapsed_h)
+            state.last_hourly_report = report
+            db.insert_log(report)
+            state.ui_queue.put(("status", report))
+            try:
+                state.engine._telegram("<b>TraderMoney Hourly Report</b>\n" + report)
+            except Exception:
+                pass
+        except Exception:
+            pass
+
 def _periodic_checks():
     while True:
         try:
@@ -3164,6 +3333,7 @@ def _periodic_checks():
                 state.config["license_valid"] = valid
                 if prev_valid and not valid and state.engine and state.engine.running:
                     state.engine.running = False
+                    state.stopped_by = "user"
                     state.running = False
                     db.insert_log("License invalidated - bot stopped")
                     state.ui_queue.put({"type": "license_revoked", "message": msg})
@@ -3953,7 +4123,8 @@ def api_monitor():
                 elif pos < 0:
                     pos_label = "short"
                     pos_qty = abs(pos)
-                sig_history = [s for s in state.signal_history if s["symbol"] == sym][-20:]
+                with state.signal_history_lock:
+                    sig_history = [s for s in state.signal_history if s["symbol"] == sym][-20:]
                 ef_val = float(SignalAnalyzer._sf(last_row.get("EMA_fast", 0)))
                 es_val = float(SignalAnalyzer._sf(last_row.get("EMA_slow", 0)))
                 rsi_val = round(float(SignalAnalyzer._sf(last_row.get("RSI", 50))), 1)
@@ -4353,7 +4524,7 @@ FRONTEND_HTML = r"""
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>TraderMoney 9.5.6</title>
+<title>TraderMoney 9.6.0</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root {
@@ -5355,7 +5526,7 @@ button.ghost:hover { box-shadow: none; }
         <li>Violating these terms may result in termination of your license.</li>
       </ul>
       
-      <p style="margin-top: 14px; color: var(--muted); font-size: var(--fs-xs);"><strong>Full terms:</strong> See LICENSE and EULA.md files included with this software.</p>
+      <p style="margin-top: 14px; color: var(--muted); font-size: var(--fs-xs);"><strong>Terms version 2.0 — updated August 10, 2026.</strong> Full terms: See LICENSE and EULA.md files included with this software. Your acceptance is remembered on this device, so you won't be asked again unless the terms change.</p>
     </div>
     <div id="terms-footer">
       <label id="terms-agree">
@@ -5404,6 +5575,15 @@ button.ghost:hover { box-shadow: none; }
     <div id="bs-tickers" style="margin-bottom:10px;"><span style="color:var(--muted);font-size:.7rem;">Tickers:</span> <span id="bs-ticker-list" style="font-weight:600;"></span></div>
     <div id="bs-broker" style="margin-bottom:10px;"><span style="color:var(--muted);font-size:.7rem;">Broker:</span> <span id="bs-broker-name" style="font-weight:600;"></span></div>
     <div id="bs-mode" style="margin-bottom:14px;"><span style="color:var(--muted);font-size:.7rem;">Mode:</span> <span id="bs-mode-name" style="font-weight:600;"></span></div>
+    <div id="bs-account" style="display:none;margin-bottom:14px;border:1px solid var(--border);border-radius:var(--radius);padding:10px 12px;">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 14px;font-size:.72rem;">
+        <div><span style="color:var(--muted);">Equity</span><br><span id="bs-equity" style="font-weight:700;">--</span></div>
+        <div><span style="color:var(--muted);">Buying Power</span><br><span id="bs-bp" style="font-weight:700;">--</span></div>
+        <div><span style="color:var(--muted);">Spend Cap</span><br><span id="bs-spend" style="font-weight:700;">--</span></div>
+        <div><span style="color:var(--muted);">Open Positions</span><br><span id="bs-pos" style="font-weight:700;">--</span></div>
+        <div style="grid-column:1/-1;"><span style="color:var(--muted);">P/L</span><br><span id="bs-pl" style="font-weight:700;">--</span></div>
+      </div>
+    </div>
     <button onclick="dismissBotStarted();switchTab('monitor');" style="width:100%;"><svg class="icon"><use href="#i-chart"/></svg> View Dashboard</button>
   </div>
 </div>
@@ -5414,7 +5594,7 @@ button.ghost:hover { box-shadow: none; }
     <span class="sidebar-logo">TM</span>
     <div class="sidebar-title">
       <span class="sidebar-name">TraderMoney</span>
-      <span class="sidebar-version">v9.5.6</span>
+      <span class="sidebar-version">v9.6.0</span>
     </div>
     <div class="sidebar-actions">
       <button onclick="location.reload()" title="Refresh"><svg class="icon" style="width:13px;height:13px;" viewBox="0 0 24 24"><path d="M17.65 6.35A7.958 7.958 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg></button>
@@ -5441,6 +5621,7 @@ button.ghost:hover { box-shadow: none; }
       <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border2);">
         <label>Max Total Buying Power <span style="color:var(--muted);font-weight:400;">(0 = unlimited)</span></label>
         <input type="number" id="max-spend" value="0" min="0" step="100" style="width:100%;padding:6px 7px;border:1px solid var(--border);border-radius:5px;background:var(--surface);color:var(--text);font-size:.7rem;box-sizing:border-box;">
+        <div id="bs-deployed-line" style="display:none;font-size:.6rem;margin-top:4px;color:var(--muted);line-height:1.4;">Deployed: <b style="color:var(--accent);">--</b> <span id="bs-deployed-cap"></span></div>
         <div style="font-size:.55rem;color:var(--muted);margin-top:2px;line-height:1.3;">Total capital the bot can deploy across all positions. E.g. set to 10000 to limit total exposure to $10,000. Set to 0 for unlimited.</div>
       </div>
     </div>
@@ -5586,26 +5767,8 @@ button.ghost:hover { box-shadow: none; }
 
   <div class="sidebar-footer-actions">
     <button class="ghost" onclick="checkUpdate()" style="flex:1"><svg class="icon"><use href="#i-update"/></svg> Updates</button>
-    <button class="ghost" onclick="runBT()" style="flex:1"><svg class="icon"><use href="#i-backtest"/></svg> Backtest</button>
+    <button class="ghost" onclick="switchTab('backtest')" style="flex:1"><svg class="icon"><use href="#i-backtest"/></svg> Backtest</button>
   </div>
-  <div style="display:flex;gap:6px;align-items:center;padding:2px 0 6px;font-size:.68rem;color:var(--muted);">
-    <span>Days:</span>
-    <input type="number" id="btDays" value="5" min="1" max="365" class="bt-days-input">
-    <span id="bt-ticker-count" style="margin-left:auto;"></span>
-  </div>
-  <details class="sb-section" style="margin-top:4px;">
-    <summary style="font-size:.7rem;padding:2px 0;color:var(--muted);cursor:pointer;">Backtest Settings</summary>
-    <div class="sb-section-body" style="gap:2px;">
-      <label style="font-size:.6rem;">Starting Capital ($)</label>
-      <input type="number" id="btCapital" value="100000" min="1" style="height:26px;font-size:.7rem;padding:0 6px;">
-      <label style="font-size:.6rem;">Broker Fee %</label>
-      <input type="number" id="btFee" value="0.08" step="0.01" min="0" style="height:26px;font-size:.7rem;padding:0 6px;">
-      <label style="font-size:.6rem;">Slippage %</label>
-      <input type="number" id="btSlippage" value="0.05" step="0.01" min="0" style="height:26px;font-size:.7rem;padding:0 6px;">
-      <label style="font-size:.6rem;">Spread %</label>
-      <input type="number" id="btSpread" value="0.02" step="0.01" min="0" style="height:26px;font-size:.7rem;padding:0 6px;">
-    </div>
-  </details>
 </div>
 
 <!-- ════ SIDEBAR TOGGLE ═══════════════════════════════════════════ -->
@@ -5699,6 +5862,11 @@ button.ghost:hover { box-shadow: none; }
         <button class="ghost" id="pdf-btn" onclick="exportPDF()" disabled>Download Trade Report (PDF)</button>
 
         <button class="ghost" id="png-btn" onclick="exportPNG()" disabled>PNG</button>
+        <span style="display:flex;gap:6px;align-items:center;padding-left:8px;border-left:1px solid var(--border);font-size:.65rem;color:var(--muted);">
+          <span>Days:</span>
+          <input type="number" id="btDays" value="5" min="1" max="365" class="bt-days-input">
+          <span id="bt-ticker-count"></span>
+        </span>
         <span style="flex:1;"></span>
         <span style="display:flex;gap:3px;align-items:center;flex-wrap:wrap;">
           <input type="text" id="bt-sector" placeholder="Sector" style="width:70px;height:26px;font-size:0.6rem;padding:0 6px;">
@@ -5706,6 +5874,15 @@ button.ghost:hover { box-shadow: none; }
           <input type="text" id="bt-max-cap" placeholder="Max Cap" style="width:60px;height:26px;font-size:0.6rem;padding:0 6px;">
         </span>
       </div>
+      <details style="margin:8px 0 0;">
+        <summary style="font-size:.68rem;padding:2px 0;color:var(--muted);cursor:pointer;">Backtest Settings</summary>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;padding:6px 0;align-items:center;">
+          <label style="font-size:.65rem;color:var(--muted);display:flex;align-items:center;gap:4px;">Starting Capital ($)<input type="number" id="btCapital" value="100000" min="1" style="width:90px;height:26px;font-size:.7rem;padding:0 6px;"></label>
+          <label style="font-size:.65rem;color:var(--muted);display:flex;align-items:center;gap:4px;">Broker Fee %<input type="number" id="btFee" value="0.08" step="0.01" min="0" style="width:70px;height:26px;font-size:.7rem;padding:0 6px;"></label>
+          <label style="font-size:.65rem;color:var(--muted);display:flex;align-items:center;gap:4px;">Slippage %<input type="number" id="btSlippage" value="0.05" step="0.01" min="0" style="width:70px;height:26px;font-size:.7rem;padding:0 6px;"></label>
+          <label style="font-size:.65rem;color:var(--muted);display:flex;align-items:center;gap:4px;">Spread %<input type="number" id="btSpread" value="0.02" step="0.01" min="0" style="width:70px;height:26px;font-size:.7rem;padding:0 6px;"></label>
+        </div>
+      </details>
       <div id="btres" class="btr"><p class="ph">Click <b>Run Backtest</b> to begin.</p></div>
     </div>
   </div>
@@ -5726,7 +5903,7 @@ button.ghost:hover { box-shadow: none; }
   <div id="tab-help" class="tab">
     <div class="hb">
       <input type="text" id="help-search" placeholder="Search help... (Cmd+F)" oninput="filterHelp()" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);font-size:.82rem;margin-bottom:10px;box-sizing:border-box;">
-      <h3>TraderMoney v9.5.6 – Complete Help Guide</h3>
+      <h3>TraderMoney v9.6.0 – Complete Help Guide</h3>
       <p style="font-size:.82rem;color:var(--muted);margin-top:-4px;">Your desktop algorithmic trading terminal. All features documented below.</p>
 
       <details>
@@ -5757,6 +5934,19 @@ button.ghost:hover { box-shadow: none; }
       </details>
 
       <details open>
+        <summary style="cursor:pointer;color:var(--accent);font-weight:600;">What's New in v9.6.0</summary>
+        <div style="padding:8px 0;font-size:.82rem;line-height:1.7;">
+          <ul>
+            <li><b>Persistent Memory (Big Fix):</b> Your "Don't show again" for Terms, theme, layout, sound, sidebar width, and tab order now survive app restarts. Settings are stored on disk instead of the webview cache, which was cleared on every close.</li>
+            <li><b>Reliability Overhaul:</b> Flask server is now multi-threaded, all database access is thread-safe (locked), and a watchdog watches the bot engine — if it dies unexpectedly you get a clear red alert instead of silent stalls.</li>
+            <li><b>Hourly Progress Reports:</b> Receive a Telegram/desktop report of equity, open positions, profit/loss and signals every hour the bot runs.</li>
+            <li><b>Live Spend Cap Readout:</b> Monitor shows how much of your Max Buying Power budget is deployed in real time.</li>
+            <li><b>Backtest Options Moved:</b> Days, capital, fees, slippage and spread settings now live in the Backtest tab;
+            charts and news now refresh when you return to their tabs.</li>
+          </ul>
+        </div>
+      </details>
+      <details>
         <summary style="cursor:pointer;color:var(--accent);font-weight:600;">What's New in v9.5.6</summary>
         <div style="padding:8px 0;font-size:.82rem;line-height:1.7;">
           <ul>
@@ -6385,7 +6575,7 @@ button.ghost:hover { box-shadow: none; }
 'use strict';
  const $=id=>document.getElementById(id);
  let cfg={},licValid=false,curSym='',allTickers=[],tvWidget=null,lastTvSymbol='';
- let botRunning=false,lastBTData=null,_newsActive=false;
+ let botRunning=false,lastBTData=null,_newsActive=false,_botPending=null;
 
 /* ── Terms Modal Management ── */
 function showTermsModal(){
@@ -6400,13 +6590,21 @@ function acceptTerms(){
   const dontShow=$('terms-dont-show')&&$('terms-dont-show').checked;
   localStorage.setItem('tradermoney_terms_accepted','true');
   if(dontShow)localStorage.setItem('tradermoney_terms_dismissed','true');
+  fetch('/api/terms/accept',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({dismissed:dontShow,version:'2.0'})}).catch(()=>{});
   hideTermsModal();
 }
-function checkTermsAccepted(){
-  if(localStorage.getItem('tradermoney_terms_dismissed'))return;
-  if(!localStorage.getItem('tradermoney_terms_accepted')){
-    showTermsModal();
+async function checkTermsAccepted(){
+  // Server-side persistence wins; localStorage is a fast fallback
+  let accepted=false,dismissed=false;
+  try{
+    const d=await(await fetch('/api/terms/status')).json();
+    accepted=!!d.accepted&&!(d.accepted_version&&d.accepted_version!==d.current_version);
+    dismissed=!!d.dismissed&&!(d.accepted_version&&d.accepted_version!==d.current_version);
+  }catch(e){
+    accepted=!!localStorage.getItem('tradermoney_terms_accepted');
+    dismissed=!!localStorage.getItem('tradermoney_terms_dismissed');
   }
+  if(!dismissed&&!accepted)showTermsModal();
 }
 // Setup terms checkbox listener
 document.addEventListener('DOMContentLoaded',function(){
@@ -6534,6 +6732,11 @@ function toggleTickerHelp(e){
   document.addEventListener('click',function h(ev){if(!p.contains(ev.target)){p.style.display='none';document.removeEventListener('click',h);}},{once:true});
 }
 
+/* ── Server-backed UI settings (survive app restarts) ── */
+function uiSet(obj){
+  fetch('/api/ui-settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(obj)}).catch(()=>{});
+}
+
 /* ── Theme / Layout Controls ── */
 let _botStartedTimer=null;
 function showBotStarted(data){
@@ -6543,10 +6746,20 @@ function showBotStarted(data){
   $('bs-ticker-list').textContent=tickers;
   $('bs-broker-name').textContent=broker;
   $('bs-mode-name').textContent=mode;
+  $('bs-account').style.display='';
+  $('bs-equity').textContent='--';$('bs-bp').textContent='--';$('bs-spend').textContent='--';$('bs-pos').textContent='--';$('bs-pl').textContent='--';
+  fetch('/api/status').then(r=>r.json()).then(s=>{
+    $('bs-equity').textContent='$'+fmt(s.equity);
+    $('bs-bp').textContent='$'+fmt(s.buying_power);
+    $('bs-spend').textContent=s.max_spend>0?('$'+fmt(s.deployed)+' / $'+fmt(s.max_spend)):('$'+fmt(s.deployed)+' (unlimited)');
+    $('bs-pos').textContent=s.open_positions;
+    const pct=s.equity?((s.pl/s.equity)*100):0;
+    $('bs-pl').innerHTML=(s.pl>=0?'+':'')+'$'+fmt(s.pl)+` <span style="color:${pct>=0?'var(--accent)':'var(--danger)'};font-weight:500;">(${pct>=0?'+':''}${pct.toFixed(2)}%)</span>`;
+  }).catch(()=>{});
   $('bot-started-overlay').classList.add('show');
   $('bot-started-modal').classList.add('show');
   if(_botStartedTimer)clearTimeout(_botStartedTimer);
-  _botStartedTimer=setTimeout(dismissBotStarted,5000);
+  _botStartedTimer=setTimeout(dismissBotStarted,8000);
 }
 function dismissBotStarted(){
   $('bot-started-overlay').classList.remove('show');
@@ -6560,6 +6773,7 @@ function toggleTheme(){
   $('theme-label').textContent=light?'Light':'Dark';
   const saved=JSON.parse(localStorage.getItem('tm_settings')||'{}');
   saved.light=light;localStorage.setItem('tm_settings',JSON.stringify(saved));
+  uiSet({light:light});
   if(tvWidget&&lastTvSymbol)loadTradingViewChart(lastTvSymbol);
   if(tradeTvWidget&&lastTradeTvSym)initTradeTvChart(lastTradeTvSym);
   toast(light?'Light Mode':'Dark Mode','info');
@@ -6568,6 +6782,7 @@ function applyLayout(){
   const layout=$('layout-select').value;
   const saved=JSON.parse(localStorage.getItem('tm_settings')||'{}');
   saved.layout=layout;localStorage.setItem('tm_settings',JSON.stringify(saved));
+  uiSet({layout:layout});
   if(layout==='compact'){$('sb').style.setProperty('--sw','270px');}
   else{$('sb').style.setProperty('--sw','310px');}
 }
@@ -6577,15 +6792,19 @@ function toggleDebugConsole(){
   if(lb)lb.style.display=show?'block':'none';
   const saved=JSON.parse(localStorage.getItem('tm_settings')||'{}');
   saved.debug=show;localStorage.setItem('tm_settings',JSON.stringify(saved));
+  uiSet({debug:show});
 }
 function loadSettings(){
   try{
-    const saved=JSON.parse(localStorage.getItem('tm_settings')||'{}');
-    if(saved.light){sc('theme-toggle',true);document.body.classList.add('light');$('theme-label').textContent='Light';}
-    else{sc('theme-toggle',false);document.body.classList.remove('light');$('theme-label').textContent='Dark';}
-    if(saved.layout){$('layout-select').value=saved.layout;applyLayout();}
-    if(saved.debug!==undefined){sc('debug-toggle',saved.debug);toggleDebugConsole();}
-    else{sc('debug-toggle',false);toggleDebugConsole();}
+    fetch('/api/ui-settings').then(r=>r.json()).then(s=>{
+      const saved=Object.assign({},JSON.parse(localStorage.getItem('tm_settings')||'{}'),s);
+      localStorage.setItem('tm_settings',JSON.stringify(saved));
+      if(saved.light){sc('theme-toggle',true);document.body.classList.add('light');$('theme-label').textContent='Light';}
+      else{sc('theme-toggle',false);document.body.classList.remove('light');$('theme-label').textContent='Dark';}
+      if(saved.layout){$('layout-select').value=saved.layout;applyLayout();}
+      if(saved.debug!==undefined){sc('debug-toggle',saved.debug);toggleDebugConsole();}
+      else{sc('debug-toggle',false);toggleDebugConsole();}
+    }).catch(()=>{});
   }catch(e){}
 }
 
@@ -6892,25 +7111,42 @@ async function deleteThesis(){
 
 /* ── Bot controls ── */
 async function startBot(){
-  const btn=$('startBtn');btn.textContent='Starting...';btn.disabled=true;
+  if(_botPending)return;
+  const btn=$('startBtn');if(!btn)return;
+  btn.textContent='Starting...';btn.disabled=true;_botPending='starting';
   cfg=buildCfg();
   if(!licValid){cfg.broker='Alpaca';cfg.mode='signal';cfg.direction='both';if(cfg.alpaca)cfg.alpaca.paper=true;['use_supertrend','use_stochastic','use_adx','use_vol_confirm','use_atr_stops','use_bracket'].forEach(k=>cfg[k]=false);cfg.tickers=cfg.tickers.split(',')[0].trim();}
-  let r;try{r=await fetch('/api/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg)});}catch(e){btn.textContent='▶ Start Bot';btn.disabled=false;toast('Start failed: network error','error');return;}
+  let r;try{r=await fetch('/api/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg)});}catch(e){btn.textContent='\u25B6 Start Bot';btn.disabled=false;_botPending=null;toast('Start failed: network error','error');return;}
   const d=await r.json();
+  if(d.status!=='ok'){
+    btn.textContent='\u25B6 Start Bot';btn.disabled=false;_botPending=null;
+    $('bstatus').textContent=d.message;$('bstatus').className='err';toast(d.message,'error');
+    return;
+  }
+  botRunning=true;_botPending=null;_spendToastShown=false;
+  if(d.mode&&d.mode!==cfg.mode){sv('mode',d.mode);cfg.mode=d.mode;}
   btn.textContent='\u25B6 Start Bot';btn.disabled=false;
-  toast(d.message,d.status==='ok'?'success':'error');
-  if(d.status!=='ok'){$('bstatus').textContent=d.message;$('bstatus').className='err';}
-  else{botRunning=true;showBotStarted(d);if(d.mode&&d.mode!==cfg.mode){sv('mode',d.mode);cfg.mode=d.mode;}}
+  toast(d.message,'success');
+  showBotStarted(d);
   refreshMonitor();
 }
 async function stopBot(){
-  const btn=$('stopBtn');btn.textContent='Stopping...';btn.disabled=true;
-  await fetch('/api/stop',{method:'POST'}).catch(()=>{});
+  if(_botPending)return;
+  const btn=$('stopBtn');if(!btn)return;
+  btn.textContent='Stopping...';btn.disabled=true;_botPending='stopping';
+  let r;try{r=await fetch('/api/stop',{method:'POST'});}catch(e){btn.textContent='\u25A0 Stop Bot';btn.disabled=false;_botPending=null;toast('Stop failed: network error','error');return;}
+  const d=await r.json();
+  botRunning=false;_botPending=null;
   btn.textContent='\u25A0 Stop Bot';btn.disabled=false;
-  botRunning=false;toast('Bot stopped','success');
+  toast(d.message||'Bot stopped','success');
   refreshMonitor();
 }
-async function killSwitch(){await fetch('/api/kill',{method:'POST'});botRunning=false;toast('Kill switch activated','error');refreshMonitor();}
+async function killSwitch(){
+  if(_botPending)return;_botPending='stopping';
+  await fetch('/api/kill',{method:'POST'}).catch(()=>{});
+  _botPending=null;botRunning=false;_prevRunning=false;resetSpendToast();
+  toast('Kill switch activated','error');refreshMonitor();
+}
 
 async function validateLicense(silent=false){
    const key=gv('lickey').trim();if(!key){if(!silent)toast('Enter a license key','error');return;}
@@ -6970,20 +7206,57 @@ function renderOrders(ords){
   if(!has)he.style.display='block';
 }
 let _lastSignalCount=0;
+let _lastStopNotified=0;
+let _lastStatusJson='';
+let _spendToastShown=false;
+let _prevRunning=null;
 let _statusPollTimer=0;
+let _lastHourlyShown='';
 async function pollStatus(){
   const now=Date.now();
-  if(now-_statusPollTimer<400){return;}
+  if(now-_statusPollTimer<2000){return;}
   _statusPollTimer=now;
   try{
-    const d=await(await fetch('/api/status')).json();
-    botRunning=d.running;
-    $('v-eq').textContent='$'+fmt(d.equity);$('v-bp').textContent='$'+fmt(d.buying_power);
-    const pct=d.equity?(d.pl/d.equity*100):0;
-    $('v-pl').innerHTML=`<span style="color:${pct>=0?'var(--accent)':'var(--danger)'}">${pct>=0?'+':''}${pct.toFixed(2)}%</span>`;
-    $('v-pos').textContent=d.open_positions;
-    renderSignals(d.signals);renderOrders(d.orders);
-    $('logbar').innerHTML=(d.log||[]).join('<br>');
+    const r=await fetch('/api/status');
+    const d=await r.json();
+    // Track unexpected bot stops and alert user
+    if(d.running!==undefined){
+      if(_prevRunning===true&&!d.running&&d.stopped_by==='unexpected'){
+        const t=Date.now();
+        if(t-_lastStopNotified>15000){
+          _lastStopNotified=t;
+          toast('⚠️ Bot stopped unexpectedly! Check the monitor log.','error');
+          sendDesktopNotif('TraderMoney: Bot Stopped','The bot stopped unexpectedly. Check the monitor log.');
+        }
+      }
+      _prevRunning=d.running;
+      botRunning=d.running;
+    }
+    const nowJson=JSON.stringify({eq:d.equity,bp:d.buying_power,pl:d.pl,pos:d.open_positions,sig:(d.signals||[]).length,ord:(d.orders||[]).length,log:d.log&&d.log.length});
+    if(nowJson!==_lastStatusJson){
+      _lastStatusJson=nowJson;
+      $('v-eq').textContent='$'+fmt(d.equity);$('v-bp').textContent='$'+fmt(d.buying_power);
+      const pct=d.equity?(d.pl/d.equity*100):0;
+      $('v-pl').innerHTML=`<span style="color:${pct>=0?'var(--accent)':'var(--danger)'}">${pct>=0?'+':''}${pct.toFixed(2)}%</span>`;
+      $('v-pos').textContent=d.open_positions;
+      renderSignals(d.signals);renderOrders(d.orders);
+      $('logbar').innerHTML=(d.log||[]).join('<br>');
+      const dln=$('bs-deployed-line');
+      if(dln){
+        const capEl=$('bs-deployed-cap');
+        if(d.max_spend>0){dln.style.display='';capEl.textContent=`/ $${fmt(d.max_spend)} cap (${Math.min(100,Math.round(d.deployed/d.max_spend*100))}% used)`;}
+        else{capEl.textContent='';dln.style.display=d.deployed>0?'':'none';}
+        const val=dln.querySelector('b');
+        if(val)val.textContent='$'+fmt(d.deployed);
+      }
+    }
+    // Notify once when a spend cap becomes restrictive
+    if(d.running&&d.max_spend>0&&_spendToastShown===false){
+      if(d.deployed>=d.max_spend*0.90){
+        _spendToastShown=true;
+        toast(`Spend cap ${Math.round(d.deployed/d.max_spend*100)}% used ($${fmt(d.deployed)} of $${fmt(d.max_spend)})`,'warn');
+      }
+    }
     // Sound + desktop notification for new signals
     if(d.signals&&d.signals.length>_lastSignalCount){
       const newSigs=d.signals.slice(_lastSignalCount>0?d.signals.length-(d.signals.length-_lastSignalCount):0);
@@ -6993,11 +7266,35 @@ async function pollStatus(){
       });
     }
     _lastSignalCount=d.signals?d.signals.length:0;
+    // Hourly progress report -> toast + desktop notification (once per report)
+    if(d.hourly_report&&d.hourly_report!==_lastHourlyShown){
+      _lastHourlyShown=d.hourly_report;
+      const firstLine=(d.hourly_report.split('\n')[0]||'Hourly progress report').replace(/^[^\w]+/,'');
+      toast(firstLine,'info');
+      sendDesktopNotif('TraderMoney Hourly Progress',d.hourly_report);
+    }
   }catch(e){
     if($('logbar')){$('logbar').innerHTML='<div style="color:var(--muted)">Live dashboard temporarily unavailable. Reconnecting…</div>';}
   }
 }
-setInterval(pollStatus,400);
+function resetSpendToast(){_spendToastShown=false;}
+setInterval(pollStatus,2000);
+
+/* Refetch news + refresh charts when the tab becomes visible again */
+document.addEventListener('visibilitychange',function(){
+  if(document.visibilityState==='visible'){
+    _renderNews();
+    if(tvWidget){
+      try{if(tvWidget.chart())tvWidget.chart().refresh();}catch(e){}
+      try{tvWidget.resize();}catch(e){}
+    }
+    if(tradeTvWidget){
+      try{if(tradeTvWidget.chart())tradeTvWidget.chart().refresh();}catch(e){}
+      try{tradeTvWidget.resize();}catch(e){}
+    }
+  }
+});
+startNewsPoller();
 
 /* ── Sidebar toggle ── */
 function toggleSidebar(){
@@ -7006,8 +7303,8 @@ function toggleSidebar(){
 
 /* ── Monitor ── */
 let _monitorTimer=null,_newsTimer=null;
-/* 24/7 news poller - starts on load, never stops - refreshes every 5 minutes */
-function startNewsPoller(){if(!_newsTimer)_newsTimer=setInterval(_renderNews,300000);}
+/* 24/7 news poller - starts on load, never stops - refreshes every 15 minutes */
+function startNewsPoller(){if(!_newsTimer)_newsTimer=setInterval(_renderNews,900000);}
 function _ind(s){return s===0||s==='0'?'—':s;}
 function _trdArrow(dir){return dir==='up'?'↗':dir==='down'?'↘':'→';}
 function _sigColor(sig){return sig==='BUY'?'var(--accent)':sig==='SELL'?'var(--danger)':'var(--muted)';}
@@ -7060,6 +7357,7 @@ async function refreshMonitor(){
           <div><span style="color:var(--muted);">P&L</span><br><span style="font-weight:700;color:${eqCls==='up'?'var(--accent)':'var(--danger)'}">${s.pl>=0?'+':''}${fmt(s.pl)} (${s.pl>=0?'+':''}${pct}%)</span></div>
           <div><span style="color:var(--muted);">Buying Power</span><br><span style="font-weight:700;">$${fmt(s.buying_power)}</span></div>
           <div><span style="color:var(--muted);">Open Pos.</span><br><span style="font-weight:700;">${s.open_positions}</span></div>
+          ${s.max_spend>0?`<div><span style="color:var(--muted);">Spend Cap</span><br><span style="font-weight:700;">$${fmt(s.deployed)} <span style="color:var(--muted);font-weight:400;">/ $${fmt(s.max_spend)}</span></span></div>`:''}
         </div>
         ${indChips?`<div style="display:flex;gap:4px;flex-wrap:wrap;font-size:var(--fs-xs);padding-top:4px;border-top:1px solid var(--border);width:100%;">${indChips}</div>`:''}
       </div>`;
@@ -7102,7 +7400,7 @@ async function _renderNews(){
     nc.id='monitor-news';
     $('monitor-scroll').appendChild(nc);
   }
-  const needsFetch=tickersArr.filter(sym=>!window._newsCache||!window._newsCache[sym]||Date.now()-window._newsCache[sym].ts>300000);
+  const needsFetch=tickersArr.filter(sym=>!window._newsCache||!window._newsCache[sym]||Date.now()-window._newsCache[sym].ts>900000);
 if(needsFetch.length&&!window._newsLoading){
      window._newsLoading=true;
      $('monitor-news').innerHTML=`<div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:14px 18px;">
@@ -7166,7 +7464,14 @@ function switchTab(name){
   document.querySelectorAll('.tbtn').forEach(x=>x.classList.remove('active'));
   const t=$('tab-'+name),b=document.querySelector(`[data-tab="${name}"]`);
   if(t)t.classList.add('active');if(b)b.classList.add('active');
-  if(name==='charts')setTimeout(()=>{if(tvWidget&&tvWidget.resize)tvWidget.resize();},80);
+  if(name==='charts'){
+    setTimeout(()=>{
+      const c=$('chart-c');
+      if(!tvWidget&&c&&c.clientWidth>0&&(lastTvSymbol||curSym))loadTradingViewChart(lastTvSymbol||curSym);
+      else if(tvWidget&&tvWidget.resize)tvWidget.resize();
+      if(tradeTvWidget&&tradeTvWidget.resize)tradeTvWidget.resize();
+    },80);
+  }
   if(name==='monitor'){refreshMonitor();startMonitorPolling();}
   else stopMonitorPolling();
 }
@@ -7647,6 +7952,7 @@ function initDraggableTabs(){
           else{bar.insertBefore(dragged,this);}
           const newOrder=Array.from(bar.querySelectorAll('.tbtn')).map(b=>b.dataset.tab);
           localStorage.setItem('tm_tab_order',JSON.stringify(newOrder));
+          uiSet({tab_order:newOrder});
         }
       }
       dragged=null;
@@ -7655,15 +7961,24 @@ function initDraggableTabs(){
   });
 }
 function loadTabOrder(){
-  try{
-    const order=JSON.parse(localStorage.getItem('tm_tab_order')||'[]');
-    if(order.length){
+  const applyOrder=(order)=>{
+    if(order&&order.length){
       const bar=$('tabbar');
-      order.reverse().forEach(tab=>{
+      order.slice().reverse().forEach(tab=>{
         const btn=bar.querySelector(`[data-tab="${tab}"]`);
         if(btn){bar.insertBefore(btn,bar.firstChild);}
       });
     }
+  };
+  try{
+    const order=JSON.parse(localStorage.getItem('tm_tab_order')||'[]');
+    if(order.length){applyOrder(order);}
+    fetch('/api/ui-settings').then(r=>r.json()).then(s=>{
+      if(s.tab_order&&s.tab_order.length){
+        localStorage.setItem('tm_tab_order',JSON.stringify(s.tab_order));
+        applyOrder(s.tab_order);
+      }
+    }).catch(()=>{});
   }catch(e){}
 }
 
@@ -7679,20 +7994,33 @@ function initSidebarResize(){
     sb.style.setProperty('--sw',w+'px');
     const saved=JSON.parse(localStorage.getItem('tm_settings')||'{}');
     saved.sidebarW=w;localStorage.setItem('tm_settings',JSON.stringify(saved));
+    uiSet({sidebarW:w});
   });
   document.addEventListener('mouseup',function(){if(isResizing){isResizing=false;const h=$('sidebar-resize-handle');if(h)h.classList.remove('active');}});
   try{
     const saved=JSON.parse(localStorage.getItem('tm_settings')||'{}');
     if(saved.sidebarW){sb.style.setProperty('--sw',saved.sidebarW+'px');}
   }catch(e){}
+  fetch('/api/ui-settings').then(r=>r.json()).then(s=>{
+    if(s.sidebarW){sb.style.setProperty('--sw',s.sidebarW+'px');}
+  }).catch(()=>{});
 }
 
 /* ── Sound Alerts (Feature 8) ── */
 let soundEnabled=false;
 try{soundEnabled=JSON.parse(localStorage.getItem('tm_sound')||'false');}catch(e){}
+fetch('/api/ui-settings').then(r=>r.json()).then(s=>{
+  if(s.sound!==undefined){
+    soundEnabled=!!s.sound;
+    localStorage.setItem('tm_sound',JSON.stringify(soundEnabled));
+    const el=$('sound-toggle');
+    if(el)el.classList.toggle('active',soundEnabled);
+  }
+}).catch(()=>{});
 function toggleSound(){
   soundEnabled=!soundEnabled;
   localStorage.setItem('tm_sound',JSON.stringify(soundEnabled));
+  uiSet({sound:soundEnabled});
   const el=$('sound-toggle');
   if(el)el.classList.toggle('active',soundEnabled);
   try{
@@ -7876,7 +8204,7 @@ function addPLBadges(monitorHtml){
 # FLASK BOOT + WEBVIEW
 # ═══════════════════════════════════════════════════════════════════════════════
 def run_flask():
-    app.run(host="0.0.0.0", port=5050, debug=False, use_reloader=False)
+    app.run(host="0.0.0.0", port=5050, debug=False, use_reloader=False, threaded=True)
 
 
 if __name__ == "__main__":
@@ -7896,6 +8224,14 @@ if __name__ == "__main__":
     _hb_thread = threading.Thread(target=_heartbeat_session, daemon=True)
     _hb_thread.start()
 
+    # Start bot crash watchdog thread
+    _bot_watchdog_thread = threading.Thread(target=_bot_watchdog, daemon=True)
+    _bot_watchdog_thread.start()
+
+    # Start hourly progress reporter thread
+    _hourly_thread = threading.Thread(target=_hourly_reporter, daemon=True)
+    _hourly_thread.start()
+
     flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()
     time.sleep(1.2)
@@ -7907,7 +8243,7 @@ if __name__ == "__main__":
     try:
         _api_instance = _Api()
         window = webview.create_window(
-            "TraderMoney 9.5.6",
+            "TraderMoney 9.6.0",
             "http://127.0.0.1:5050",
             width=1440,
             height=880,

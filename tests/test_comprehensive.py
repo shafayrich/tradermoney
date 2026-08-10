@@ -1,4 +1,5 @@
 import unittest
+from unittest import mock
 import queue
 import json
 import time
@@ -142,6 +143,40 @@ class TestDatabaseManager(unittest.TestCase):
 
     def setUp(self):
         self.db = app.DatabaseManager(db_path=":memory:")
+
+    def test_concurrent_reads_and_writes(self):
+        """Threaded server now hammers the same SQLite connection concurrently -
+        all access must be serialized (no 500s / 'locked' errors)."""
+        import threading as th
+        errs = []
+
+        def writer():
+            try:
+                for i in range(25):
+                    self.db.insert_log(f"w{i}")
+                    self.db.insert_trade("t", "AAPL", "BUY", 1, 1.0)
+            except Exception as e:
+                errs.append(e)
+
+        def reader():
+            try:
+                for _ in range(25):
+                    self.db.get_recent_logs(50)
+                    self.db.get_recent_trades(50)
+                    self.db.get_recent_signals(50)
+                    self.db.get_leaderboard()
+                    self.db.get_earnings_summary()
+            except Exception as e:
+                errs.append(e)
+
+        threads = [th.Thread(target=writer), th.Thread(target=reader),
+                   th.Thread(target=reader), th.Thread(target=writer),
+                   th.Thread(target=reader), th.Thread(target=writer)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        self.assertEqual(errs, [])
 
     def test_insert_and_get_trades(self):
         self.db.insert_trade("2026-07-28T10:00:00", "AAPL", "BUY", 10, 150.0)
@@ -700,6 +735,143 @@ class TestTradingEngine(unittest.TestCase):
 
 
 class TestAPIRoutes(unittest.TestCase):
+
+    def setUp(self):
+        self.app = app.app
+        self.client = self.app.test_client()
+
+    def test_api_status_contains_spend_and_report_fields(self):
+        r = self.client.get("/api/status")
+        self.assertEqual(r.status_code, 200)
+        data = r.get_json()
+        self.assertIn("max_spend", data)
+        self.assertIn("deployed", data)
+        self.assertIn("hourly_report", data)
+        self.assertIn("stopped_by", data)
+
+    @unittest.mock.patch("app._load_ui_settings", return_value={})
+    def test_terms_status_empty(self, _m):
+        r = self.client.get("/api/terms/status")
+        self.assertEqual(r.status_code, 200)
+        d = r.get_json()
+        self.assertFalse(d["accepted"])
+        self.assertFalse(d["dismissed"])
+        self.assertEqual(d["current_version"], "2.0")
+
+    @unittest.mock.patch("app._load_ui_settings", return_value={"terms_accepted": True, "terms_accepted_version": "2.0", "terms_dismissed": True})
+    def test_terms_status_accepted(self, _m):
+        d = self.client.get("/api/terms/status").get_json()
+        self.assertTrue(d["accepted"])
+        self.assertTrue(d["dismissed"])
+        self.assertEqual(d["accepted_version"], "2.0")
+
+    @unittest.mock.patch("app._set_ui_setting")
+    def test_terms_accept_stores_dismissed(self, mock_set):
+        r = self.client.post("/api/terms/accept", json={"dismissed": True, "version": "2.0"})
+        self.assertEqual(r.status_code, 200)
+        mock_set.assert_any_call("terms_accepted", True)
+        mock_set.assert_any_call("terms_accepted_version", "2.0")
+        mock_set.assert_any_call("terms_dismissed", True)
+
+    @unittest.mock.patch("app._set_ui_setting")
+    def test_ui_settings_save_merges_keys(self, mock_set):
+        r = self.client.post("/api/ui-settings", json={"light": True, "sidebarW": 300})
+        self.assertEqual(r.status_code, 200)
+        mock_set.assert_any_call("light", True)
+        mock_set.assert_any_call("sidebarW", 300)
+
+    @unittest.mock.patch("app._load_ui_settings", return_value={"light": True, "sound": True})
+    def test_ui_settings_get_listed_in_status_route(self, _m):
+        pass
+
+
+class TestHourlyReport(unittest.TestCase):
+
+    def test_report_includes_account_details(self):
+        dash = {"equity": 1000.0, "pl": 50.0, "buying_power": 500.0, "open_positions": 2}
+        cfg = {"max_spend": 250.0, "broker": "Alpaca", "mode": "auto"}
+        rep = app._build_hourly_report(dash, cfg, deployed=120.0,
+                                       new_signals=3, new_orders=1, elapsed_h=12.0)
+        self.assertIn("Hourly Progress Report", rep)
+        self.assertIn("Equity: $1,000.00", rep)
+        self.assertIn("P/L: $50.00 (+5.00%)", rep)
+        self.assertIn("Buying power: $500.00", rep)
+        self.assertIn("Deployed: $120.00 / $250.00", rep)
+        self.assertIn("Open positions: 2", rep)
+        self.assertIn("New signals: 3", rep)
+        self.assertIn("New orders: 1", rep)
+        self.assertIn("running 12.0h", rep)
+        self.assertIn("Mode: auto", rep)
+
+    def test_report_unlimited_spend_shows_unlimited(self):
+        dash = {"equity": 1000.0, "pl": 0.0, "buying_power": 999.0, "open_positions": 0}
+        cfg = {"max_spend": 0, "broker": "Alpaca", "mode": "signal"}
+        rep = app._build_hourly_report(dash, cfg, deployed=0.0,
+                                       new_signals=0, new_orders=0, elapsed_h=1.0)
+        self.assertIn("(unlimited)", rep)
+
+    def test_report_negative_pl(self):
+        dash = {"equity": 1000.0, "pl": -120.0, "buying_power": 300.0, "open_positions": 1}
+        rep = app._build_hourly_report(dash, {"max_spend": 0, "broker": "Alpaca", "mode": "signal"},
+                                       deployed=400.0, new_signals=2, new_orders=2, elapsed_h=6.0)
+        self.assertIn("P/L: $-120.00 (-12.00%)", rep)
+
+
+class TestSpendPlumbing(unittest.TestCase):
+
+    def test_max_spend_large_does_not_deploy_beyond_cap(self):
+        uq = queue.Queue()
+        cfg = {
+            "broker": "Alpaca", "tickers": "AAPL", "mode": "signal",
+            "quantity": 1000, "max_spend": 250.0, "alpaca": {"paper": True},
+            "use_bracket": False, "sl_percent": 2.0, "tp_percent": 4.0,
+            "use_trailing": False, "trailing_percent": 1.5,
+            "use_scale_out": False, "use_mtf_confirmation": False,
+            "use_news_override": False, "direction": "both",
+            "use_default_qty": True, "license_valid": False,
+            "indicator_params": {}
+        }
+        bot = app.TradingEngine(ui_queue=uq, config=cfg, broker=app.AlpacaBroker(cfg, uq))
+        bot.broker.api = MockAlpacaAPI()
+        bot.is_active = True
+        bot.running = True
+        bot.positions = {"AAPL": 1}
+        bot.position_prices = {"AAPL": 200.0}
+        # 1 share @ $200 in a $250 cap -> almost full; remaining ~$50
+        self.assertEqual(bot._get_total_deployed(), 200.0)
+        avail = 250.0 - bot._get_total_deployed()
+        self.assertGreater(avail, 0)
+        self.assertEqual(avail, 50.0)
+
+    def test_max_spend_blocked_when_deployed_at_cap(self):
+        uq = queue.Queue()
+        cfg = {
+            "broker": "Alpaca", "tickers": "AAPL", "mode": "signal",
+            "quantity": 10, "max_spend": 400.0, "alpaca": {"paper": True},
+            "use_bracket": False, "sl_percent": 2.0, "tp_percent": 4.0,
+            "use_trailing": False, "trailing_percent": 1.5,
+            "use_scale_out": False, "use_mtf_confirmation": False,
+            "use_news_override": False, "direction": "both",
+            "use_default_qty": True, "license_valid": True,
+            "indicator_params": {}
+        }
+        bot = app.TradingEngine(ui_queue=uq, config=cfg, broker=app.AlpacaBroker(cfg, uq))
+        bot.broker.api = MockAlpacaAPI()
+        bot.is_active = True
+        bot.running = True
+        bot.positions = {"AAPL": 2}
+        bot.position_prices = {"AAPL": 200.0}
+        bot.per_ticker_qty = {"AAPL": 10, "TSLA": 10}
+        import pandas as pd
+        latest = pd.Series({"ATR": 2.0})
+        # deployed is $400 = cap -> nothing more allowed
+        self.assertEqual(bot._get_total_deployed(), 400.0)
+        bot._execute("TSLA", "BUY", 100.0, latest,
+                     use_bracket=False, use_atr=False, sl_pct=2.0, tp_pct=4.0, conf=0.8)
+        self.assertNotIn("TSLA", bot.positions)
+
+
+class TestAPIRoutesExtended(unittest.TestCase):
 
     def setUp(self):
         self.app = app.app
