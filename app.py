@@ -7294,7 +7294,6 @@ document.addEventListener('visibilitychange',function(){
     }
   }
 });
-startNewsPoller();
 
 /* ── Sidebar toggle ── */
 function toggleSidebar(){
@@ -7305,6 +7304,7 @@ function toggleSidebar(){
 let _monitorTimer=null,_newsTimer=null;
 /* 24/7 news poller - starts on load, never stops - refreshes every 15 minutes */
 function startNewsPoller(){if(!_newsTimer)_newsTimer=setInterval(_renderNews,900000);}
+startNewsPoller();
 function _ind(s){return s===0||s==='0'?'—':s;}
 function _trdArrow(dir){return dir==='up'?'↗':dir==='down'?'↘':'→';}
 function _sigColor(sig){return sig==='BUY'?'var(--accent)':sig==='SELL'?'var(--danger)':'var(--muted)';}
