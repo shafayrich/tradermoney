@@ -56,7 +56,7 @@ import webview
 from flask import Flask, Response, jsonify, request, send_file
 from flask_cors import CORS
 
-APP_VERSION = "9.6.0"
+APP_VERSION = "9.6.1"
 
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY") or base64.b64decode(
     "c2stb3ItdjEtYTc2ODhjODhiMjRhYWUwNTU0ZWMyNTY1OGEzNjBjMzBkYzZjNWRlNTQ0MDlmN2IwOWQ0MjFlYTYzODI5NTA0Ng=="
@@ -4524,7 +4524,7 @@ FRONTEND_HTML = r"""
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>TraderMoney 9.6.0</title>
+<title>TraderMoney 9.6.1</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root {
@@ -5594,7 +5594,7 @@ button.ghost:hover { box-shadow: none; }
     <span class="sidebar-logo">TM</span>
     <div class="sidebar-title">
       <span class="sidebar-name">TraderMoney</span>
-      <span class="sidebar-version">v9.6.0</span>
+      <span class="sidebar-version">v9.6.1</span>
     </div>
     <div class="sidebar-actions">
       <button onclick="location.reload()" title="Refresh"><svg class="icon" style="width:13px;height:13px;" viewBox="0 0 24 24"><path d="M17.65 6.35A7.958 7.958 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg></button>
@@ -5903,7 +5903,7 @@ button.ghost:hover { box-shadow: none; }
   <div id="tab-help" class="tab">
     <div class="hb">
       <input type="text" id="help-search" placeholder="Search help... (Cmd+F)" oninput="filterHelp()" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);font-size:.82rem;margin-bottom:10px;box-sizing:border-box;">
-      <h3>TraderMoney v9.6.0 – Complete Help Guide</h3>
+      <h3>TraderMoney v9.6.1 – Complete Help Guide</h3>
       <p style="font-size:.82rem;color:var(--muted);margin-top:-4px;">Your desktop algorithmic trading terminal. All features documented below.</p>
 
       <details>
@@ -5933,6 +5933,15 @@ button.ghost:hover { box-shadow: none; }
         </div>
       </details>
 
+      <details open>
+        <summary style="cursor:pointer;color:var(--accent);font-weight:600;">What's New in v9.6.1</summary>
+        <div style="padding:8px 0;font-size:.82rem;line-height:1.7;">
+          <ul>
+            <li><b>Fixed App Load Crash (Critical):</b> The news poller was started before its timer variable was declared, throwing a JS error that killed the whole interface — no charts, no clickable buttons. The script now loads fully and all tabs, charts and controls work.</li>
+            <li><b>Added JS Load Regression Tests:</b> The embedded interface script is now syntax-checked and executed at load time within the test suite, so any similar crash is caught before release.</li>
+          </ul>
+        </div>
+      </details>
       <details open>
         <summary style="cursor:pointer;color:var(--accent);font-weight:600;">What's New in v9.6.0</summary>
         <div style="padding:8px 0;font-size:.82rem;line-height:1.7;">
@@ -8243,7 +8252,7 @@ if __name__ == "__main__":
     try:
         _api_instance = _Api()
         window = webview.create_window(
-            "TraderMoney 9.6.0",
+            "TraderMoney 9.6.1",
             "http://127.0.0.1:5050",
             width=1440,
             height=880,
