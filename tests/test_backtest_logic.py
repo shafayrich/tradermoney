@@ -109,6 +109,37 @@ class TestSymbolSim(unittest.TestCase):
         self.assertLess(stats["total_pnl"], 0)
         self.assertAlmostEqual(stats["final_cash"], 1000.0 + stats["total_pnl"], delta=0.5)
 
+    def test_open_position_marked_to_market_at_window_end(self):
+        # Single BUY, no close signal. MTM must close at the END of the
+        # window (08-10 @ 140), not at the last signal bar (08-03 @ 137.74).
+        s = sigs_from("AAPL", [("2026-08-03 00:00:00", "BUY", 137.74)])
+        trades, stats = app._run_symbol_sim(
+            s, 1, 1000.0, CFG,
+            end_time="2026-08-10 00:00:00", end_price=140.0)
+        exits = [t for t in trades if t["type"] == "exit"]
+        self.assertEqual(len(exits), 1)
+        self.assertEqual(exits[0]["exit_time"], "2026-08-10 00:00:00")
+        self.assertEqual(exits[0]["days_held"], 7)
+        self.assertGreater(exits[0]["pnl"], 1.0)
+
+    def test_open_position_marks_to_market_without_end_params(self):
+        # Backward-compatible: no end params -> closes at last signal bar
+        s = sigs_from("AAPL", [("2026-08-03 00:00:00", "BUY", 100.0)])
+        trades, stats = app._run_symbol_sim(s, 1, 1000.0, CFG)
+        exits = [t for t in trades if t["type"] == "exit"]
+        self.assertEqual(len(exits), 1)
+        self.assertEqual(exits[0]["exit_time"], "2026-08-03 00:00:00")
+
+    def test_open_short_marked_to_market_at_window_end(self):
+        s = sigs_from("AAPL", [("2026-08-03 00:00:00", "SELL", 100.0)])
+        trades, stats = app._run_symbol_sim(
+            s, 1, 1000.0, CFG,
+            end_time="2026-08-10 00:00:00", end_price=95.0)
+        exits = [t for t in trades if t["type"] == "exit"]
+        self.assertEqual(len(exits), 1)
+        self.assertEqual(exits[0]["side"], "SHORT")
+        self.assertGreater(exits[0]["pnl"], 3.0)
+
 
 class TestPortfolioAggregation(unittest.TestCase):
 

@@ -56,7 +56,7 @@ import webview
 from flask import Flask, Response, jsonify, request, send_file
 from flask_cors import CORS
 
-APP_VERSION = "9.6.2"
+APP_VERSION = "9.6.3"
 
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY") or base64.b64decode(
     "c2stb3ItdjEtYTc2ODhjODhiMjRhYWUwNTU0ZWMyNTY1OGEzNjBjMzBkYzZjNWRlNTQ0MDlmN2IwOWQ0MjFlYTYzODI5NTA0Ng=="
@@ -3473,10 +3473,13 @@ def _safe_yf_download(symbol: str, period: str = "1d", interval: str = "1m", yf_
 # BACKTEST SIMULATION CORE (pure, testable - no network)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _run_symbol_sim(sigs: List[dict], qty, initial_cash: float, config: dict):
+def _run_symbol_sim(sigs: List[dict], qty, initial_cash: float, config: dict,
+                    end_time: str = "", end_price: float = 0.0):
     """Simulate trades for one symbol's signals against its own capital pool.
     Position sizing is capped by available cash: buys scale down to affordable
-    shares, shorts require margin <= cash. Returns (trades, stats_dict)."""
+    shares, shorts require margin <= cash. Returns (trades, stats_dict).
+    end_time/end_price = last bar of the backtest window; open positions are
+    marked to market at that bar (not at the last signal bar)."""
     fee_pct = float(config.get("broker_fee_pct", 0.08)) / 100.0
     slippage_pct = float(config.get("slippage_pct", 0.05)) / 100.0
     spread_pct = float(config.get("spread_pct", 0.02)) / 100.0
@@ -3571,6 +3574,10 @@ def _run_symbol_sim(sigs: List[dict], qty, initial_cash: float, config: dict):
 
     if position != 0 and sigs:
         last_price = float(sigs[-1]["price"])
+        last_time = str(sigs[-1]["time"])
+        if end_price > 0:
+            last_price = float(end_price)
+            last_time = str(end_time)
         if position > 0:
             fill_price = last_price * (1 - spread_pct - slippage_pct)
             pnl = (fill_price - entry_price) * position
@@ -3582,14 +3589,14 @@ def _run_symbol_sim(sigs: List[dict], qty, initial_cash: float, config: dict):
             cash -= abs(position) * fill_price
             side_label = "SHORT"
         trades.append({
-            "entry_time": entry_time, "exit_time": sigs[-1]["time"],
+            "entry_time": entry_time, "exit_time": last_time,
             "side": side_label, "symbol": sigs[-1].get("symbol", ""),
             "entry_price": entry_price, "exit_price": last_price,
             "shares": round(abs(position), 4), "pnl": round(pnl, 2), "type": "exit",
             "reason_open": entry_reason,
             "reason_close": "Mark-to-market (end of data)",
             "indicators_at_entry": entry_indicators,
-            "days_held": _calc_days_held(entry_time, sigs[-1]["time"]),
+            "days_held": _calc_days_held(entry_time, last_time),
         })
 
     final_cash = cash
@@ -3896,7 +3903,9 @@ def api_backtest():
                 sym_results["signals"] = sigs
 
                 qty = per_ticker_qty.get(sym, default_qty)
-                trades, stats = _run_symbol_sim(sigs, qty, initial_cash, config)
+                trades, stats = _run_symbol_sim(
+                    sigs, qty, initial_cash, config,
+                    end_time=str(df.index[-1]), end_price=float(df["Close"].iloc[-1]))
                 sym_results["simulation"] = stats
                 all_trades.extend(trades)
 
@@ -4071,7 +4080,7 @@ def _pdf_summary_table(pdf, exits):
     avg_days = 0
     days_count = 0
     for t in exits:
-        if t.get("days_held"):
+        if t.get("days_held") is not None:
             avg_days += t["days_held"]
             days_count += 1
     avg_days = (avg_days / days_count) if days_count else 0
@@ -4085,8 +4094,7 @@ def _pdf_summary_table(pdf, exits):
         ("Total P&L", f"${total_pnl:.2f}"),
         ("Avg Trade", f"${avg_pnl:.2f}"),
     ]
-    if avg_days:
-        summary_data.append(("Avg Days Held", f"{avg_days:.1f}"))
+    summary_data.append(("Avg Days Held", f"{avg_days:.1f}"))
     rows = [summary_data[i:i+3] for i in range(0, len(summary_data), 3)]
     for row in rows:
         for label, value in row:
@@ -4648,7 +4656,7 @@ FRONTEND_HTML = r"""
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>TraderMoney 9.6.2</title>
+<title>TraderMoney 9.6.3</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root {
@@ -5718,7 +5726,7 @@ button.ghost:hover { box-shadow: none; }
     <span class="sidebar-logo">TM</span>
     <div class="sidebar-title">
       <span class="sidebar-name">TraderMoney</span>
-      <span class="sidebar-version">v9.6.2</span>
+      <span class="sidebar-version">v9.6.3</span>
     </div>
     <div class="sidebar-actions">
       <button onclick="location.reload()" title="Refresh"><svg class="icon" style="width:13px;height:13px;" viewBox="0 0 24 24"><path d="M17.65 6.35A7.958 7.958 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg></button>
@@ -6027,7 +6035,7 @@ button.ghost:hover { box-shadow: none; }
   <div id="tab-help" class="tab">
     <div class="hb">
       <input type="text" id="help-search" placeholder="Search help... (Cmd+F)" oninput="filterHelp()" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);font-size:.82rem;margin-bottom:10px;box-sizing:border-box;">
-      <h3>TraderMoney v9.6.2 – Complete Help Guide</h3>
+      <h3>TraderMoney v9.6.3 – Complete Help Guide</h3>
       <p style="font-size:.82rem;color:var(--muted);margin-top:-4px;">Your desktop algorithmic trading terminal. All features documented below.</p>
 
       <details>
@@ -6057,6 +6065,15 @@ button.ghost:hover { box-shadow: none; }
         </div>
       </details>
 
+      <details open>
+        <summary style="cursor:pointer;color:var(--accent);font-weight:600;">What's New in v9.6.3</summary>
+        <div style="padding:8px 0;font-size:.82rem;line-height:1.7;">
+          <ul>
+            <li><b>Backtest Mark-to-Market Fixed:</b> Open positions were being closed at the last signal's bar (same-day phantom exits with tiny losses) instead of the real end of the backtest window. They are now closed at the last bar of data with correct holding days and P&amp;L.</li>
+            <li><b>Report Avg Days Held Fixed:</b> The exported report now averages all trades including same-day closes instead of silently skipping them.</li>
+          </ul>
+        </div>
+      </details>
       <details open>
         <summary style="cursor:pointer;color:var(--accent);font-weight:600;">What's New in v9.6.2</summary>
         <div style="padding:8px 0;font-size:.82rem;line-height:1.7;">
@@ -8389,7 +8406,7 @@ if __name__ == "__main__":
     try:
         _api_instance = _Api()
         window = webview.create_window(
-            "TraderMoney 9.6.2",
+            "TraderMoney 9.6.3",
             "http://127.0.0.1:5050",
             width=1440,
             height=880,
