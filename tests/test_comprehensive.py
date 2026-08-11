@@ -361,8 +361,25 @@ class TestAlpacaBrokerComprehensive(unittest.TestCase):
         self.broker.api = MockAlpacaAPI()
         self.broker.api.get_latest_trade = lambda s: (_ for _ in ()).throw(Exception("fail"))
         self.broker.api.get_latest_bar = lambda s: (_ for _ in ()).throw(Exception("fail"))
-        price = self.broker._get_current_price("AAPL")
+        with mock.patch("yfinance.download", side_effect=Exception("network down")):
+            price = self.broker._get_current_price("AAPL")
         self.assertIsNone(price)
+
+    def test_get_current_price_yfinance_fallback_works(self):
+        # yfinance fallback should return a real price (flat columns), not None
+        self.broker.api = MockAlpacaAPI()
+        self.broker.api.get_latest_trade = lambda s: (_ for _ in ()).throw(Exception("fail"))
+        self.broker.api.get_latest_bar = lambda s: (_ for _ in ()).throw(Exception("fail"))
+        import pandas as pd
+        idx = pd.date_range("2026-08-10", periods=3, freq="min")
+        df = pd.DataFrame({"Open": [100.0, 101.0, 102.0],
+                           "High": [103.0, 104.0, 105.0],
+                           "Low": [99.0, 100.0, 101.0],
+                           "Close": [101.5, 102.5, 103.25],
+                           "Volume": [1000, 1100, 1200]}, index=idx)
+        with mock.patch("yfinance.download", return_value=df):
+            price = self.broker._get_current_price("AAPL")
+        self.assertEqual(price, 103.25)
 
     def test_submit_conditional_order(self):
         order = self.broker._submit_conditional_order("AAPL", 10, "sell", "limit", 105.0)

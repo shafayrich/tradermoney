@@ -56,7 +56,7 @@ import webview
 from flask import Flask, Response, jsonify, request, send_file
 from flask_cors import CORS
 
-APP_VERSION = "9.6.1"
+APP_VERSION = "9.6.2"
 
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY") or base64.b64decode(
     "c2stb3ItdjEtYTc2ODhjODhiMjRhYWUwNTU0ZWMyNTY1OGEzNjBjMzBkYzZjNWRlNTQ0MDlmN2IwOWQ0MjFlYTYzODI5NTA0Ng=="
@@ -751,6 +751,8 @@ class AlpacaBroker(BaseBroker):
             import yfinance as yf
             df = yf.download(symbol, period="1d", interval="1m", progress=False)
             if df is not None and not df.empty:
+                if isinstance(df.columns, pd.MultiIndex):
+                    df.columns = df.columns.get_level_values(0)
                 return float(df["Close"].iloc[-1])
         except Exception:
             pass
@@ -2252,6 +2254,8 @@ class TradingEngine(threading.Thread):
             df = yf.download(symbol, period="5d", interval="1d",
                               progress=False, auto_adjust=True)
         if df is not None and not df.empty:
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = df.columns.get_level_values(0)
             db.cache_candle(symbol, interval, df)
         return df
 
@@ -3375,31 +3379,327 @@ def _normalize_yf_symbol(symbol: str) -> str:
         return s.replace(".", "-")
     return s
 
+_CRYPTO_BARE = {"BTC", "ETH", "SOL", "BNB", "XRP", "ADA", "DOGE", "LINK", "DOT",
+                "MATIC", "LTC", "AVAX", "TRX", "SHIB", "ATOM", "UNI", "NEAR",
+                "SUI", "OP", "ARB", "LUNC", "PEPE", "INJ", "TIA", "SEI"}
+
+_AU_FIRST = {"CBA", "WBC", "NAB", "ANZ", "FMG", "WOW", "TLS", "WDS", "QAN",
+             "ALL", "MQG", "STW", "WTC", "REA", "XRO", "MIN", "ALX"}
+
+# 4/6-digit numeric codes collide across exchanges (e.g. 2330 = TSMC on TWSE
+# but 2330.T also exists on TSE). Prefer the user's intended exchange.
+_EXCHANGE_PREFERRED = {
+    "2330": ".TW", "2317": ".TW", "2454": ".TW", "2308": ".TW", "2382": ".TW",
+    "0700": ".HK", "9988": ".HK", "3690": ".HK", "1810": ".HK", "9618": ".HK",
+    "0939": ".HK", "1398": ".HK", "3988": ".HK", "2318": ".HK", "1211": ".HK",
+    "005930": ".KS", "000660": ".KS", "035420": ".KS", "005380": ".KS", "051910": ".KS",
+}
+
+def _yf_symbol_candidates(symbol: str) -> List[str]:
+    """Return ordered yfinance symbol candidates for a ticker.
+    Handles crypto (BTC/USD -> BTC-USD, bare MATIC -> MATIC-USD), Australian
+    tickers (CBA -> CBA.AX first - the bare symbol can match a wrong
+    instrument), and international exchange suffixes (7203->7203.T,
+    2330->2330.TW, 0700->0700.HK, 005930->005930.KS)."""
+    base = symbol.strip().upper().split(":")[0]
+    if "/" in base:
+        return [base.replace("/", "-")]
+    if base in _CRYPTO_BARE:
+        out = [base, base + "-USD"]
+        if base == "MATIC":
+            out += ["POL", "POL-USD"]
+        return list(dict.fromkeys(out))
+    if base in _AU_FIRST:
+        return list(dict.fromkeys([base + ".AX", base, base.replace(".", "-")]))
+    if base.isdigit():
+        pref = _EXCHANGE_PREFERRED.get(base)
+        if pref:
+            out = [base + pref, base]
+        else:
+            out = [base]
+        if len(base) == 4:
+            for sfx in (".T", ".TW", ".HK", ".KS"):
+                if base + sfx not in out:
+                    out.append(base + sfx)
+        elif len(base) == 6:
+            for sfx in (".KS", ".TW", ".HK", ".T"):
+                if base + sfx not in out:
+                    out.append(base + sfx)
+        elif len(base) == 3:
+            for sfx in (".KS", ".HK"):
+                if base + sfx not in out:
+                    out.append(base + sfx)
+        return out
+    out = [base.replace(".", "-")]
+    out += [base + ".AX"]
+    return list(dict.fromkeys(out))
+
 def _safe_yf_download(symbol: str, period: str = "1d", interval: str = "1m", yf_module=None, retries: int = 3, **kwargs) -> "pd.DataFrame | None":
-    """Wrapper around yf.download that catches 'possibly delisted' warnings, retries on failure, and returns None."""
+    """Wrapper around yf.download that catches 'possibly delisted' warnings, retries on failure, and returns None.
+    Tries international exchange-suffix fallbacks when the plain symbol yields no data.
+    Always returns a FLAT single-level DataFrame (yfinance 1.3.0 returns MultiIndex columns
+    for every download) with trailing NaN rows dropped."""
     import warnings
     import time as _time
     if yf_module is None:
         import yfinance as yf_module
-    symbol = _normalize_yf_symbol(symbol)
-    for attempt in range(retries):
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            try:
-                df = yf_module.download(symbol, period=period, interval=interval, progress=False, **kwargs)
-            except Exception:
-                if attempt < retries - 1:
-                    _time.sleep(1.5 * (attempt + 1))
-                continue
-            for warning in w:
-                msg = str(warning.message).lower()
-                if "possibly delisted" in msg or "no price data" in msg:
-                    return None
-            if df is not None and not df.empty:
-                return df
-        if attempt < retries - 1:
-            _time.sleep(1.5 * (attempt + 1))
+    for cand in _yf_symbol_candidates(symbol):
+        for attempt in range(retries):
+            with warnings.catch_warnings(record=True) as w:
+                warnings.simplefilter("always")
+                try:
+                    df = yf_module.download(cand, period=period, interval=interval, progress=False, **kwargs)
+                except Exception:
+                    if attempt < retries - 1:
+                        _time.sleep(1.5 * (attempt + 1))
+                    continue
+                for warning in w:
+                    msg = str(warning.message).lower()
+                    if "possibly delisted" in msg or "no price data" in msg:
+                        break
+                else:
+                    if df is not None and not df.empty:
+                        if isinstance(df.columns, pd.MultiIndex):
+                            df.columns = df.columns.get_level_values(0)
+                        if "Close" in df.columns:
+                            df = df.dropna(subset=["Close"])
+                        if df is not None and not df.empty:
+                            return df
+            if attempt < retries - 1:
+                _time.sleep(1.5 * (attempt + 1))
     return None
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# BACKTEST SIMULATION CORE (pure, testable - no network)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _run_symbol_sim(sigs: List[dict], qty, initial_cash: float, config: dict):
+    """Simulate trades for one symbol's signals against its own capital pool.
+    Position sizing is capped by available cash: buys scale down to affordable
+    shares, shorts require margin <= cash. Returns (trades, stats_dict)."""
+    fee_pct = float(config.get("broker_fee_pct", 0.08)) / 100.0
+    slippage_pct = float(config.get("slippage_pct", 0.05)) / 100.0
+    spread_pct = float(config.get("spread_pct", 0.02)) / 100.0
+    bt_direction = config.get("direction", "both")
+    cash: float = float(initial_cash)
+    position: float = 0.0
+    entry_price: float = 0.0
+    entry_time: str = ""
+    entry_reason: str = ""
+    entry_indicators: dict = {}
+    trades: List[dict] = []
+
+    for s in sigs:
+        price = float(s["price"])
+        sig = s["signal"]
+        if bt_direction == "long" and sig == "SELL":
+            continue
+        if bt_direction == "short" and sig == "BUY":
+            continue
+        if sig == "BUY" and position <= 0:
+            if position < 0:
+                exit_fill = price * (1 + spread_pct + slippage_pct)
+                pnl = (entry_price - exit_fill) * abs(position)
+                cash -= abs(position) * exit_fill
+                trades.append({
+                    "entry_time": entry_time, "exit_time": s["time"],
+                    "side": "SHORT", "symbol": s.get("symbol", ""),
+                    "entry_price": entry_price, "exit_price": price,
+                    "shares": abs(position), "pnl": round(pnl, 2), "type": "exit",
+                    "reason_open": entry_reason, "reason_close": "BUY signal closed short",
+                    "indicators_at_entry": entry_indicators,
+                    "days_held": _calc_days_held(entry_time, s["time"]),
+                })
+            entry_shares = float(qty)
+            fill_price = price * (1 + spread_pct + slippage_pct)
+            cost = entry_shares * fill_price
+            if cost > cash and position == 0:
+                max_sh = int(cash / fill_price) if fill_price > 0 else 0
+                if max_sh < 1:
+                    continue
+                entry_shares = float(max_sh)
+                cost = entry_shares * fill_price
+            cash -= cost
+            position = entry_shares
+            entry_price = fill_price
+            entry_time = s["time"]
+            entry_reason = s.get("reason", "EMA crossover bullish")
+            entry_indicators = s.get("indicators", {})
+            trades.append({
+                "entry_time": s["time"], "exit_time": "",
+                "side": "LONG", "symbol": s.get("symbol", ""),
+                "entry_price": entry_price, "exit_price": 0,
+                "shares": round(entry_shares, 4), "pnl": 0, "type": "entry",
+                "reason_open": entry_reason, "reason_close": "",
+                "indicators_at_entry": entry_indicators,
+            })
+        elif sig == "SELL" and position >= 0:
+            if position > 0:
+                fill_price = price * (1 - spread_pct - slippage_pct)
+                pnl = (fill_price - entry_price) * position
+                cash += position * fill_price
+                trades.append({
+                    "entry_time": entry_time, "exit_time": s["time"],
+                    "side": "LONG", "symbol": s.get("symbol", ""),
+                    "entry_price": entry_price, "exit_price": price,
+                    "shares": round(position, 4), "pnl": round(pnl, 2), "type": "exit",
+                    "reason_open": entry_reason, "reason_close": s.get("reason", "EMA crossover bearish"),
+                    "indicators_at_entry": entry_indicators,
+                    "days_held": _calc_days_held(entry_time, s["time"]),
+                })
+            entry_shares = float(qty)
+            fill_price = price * (1 - spread_pct - slippage_pct)
+            max_sh = int(cash / fill_price) if fill_price > 0 else 0
+            if entry_shares > max_sh:
+                entry_shares = float(max_sh)
+            if entry_shares < 1:
+                continue
+            cash += entry_shares * fill_price
+            position = -entry_shares
+            entry_price = fill_price
+            entry_time = s["time"]
+            entry_reason = s.get("reason", "EMA crossover bearish")
+            entry_indicators = s.get("indicators", {})
+            trades.append({
+                "entry_time": s["time"], "exit_time": "",
+                "side": "SHORT", "symbol": s.get("symbol", ""),
+                "entry_price": entry_price, "exit_price": 0,
+                "shares": round(entry_shares, 4), "pnl": 0, "type": "entry",
+                "reason_open": entry_reason, "reason_close": "",
+                "indicators_at_entry": entry_indicators,
+            })
+
+    if position != 0 and sigs:
+        last_price = float(sigs[-1]["price"])
+        if position > 0:
+            fill_price = last_price * (1 - spread_pct - slippage_pct)
+            pnl = (fill_price - entry_price) * position
+            cash += position * fill_price
+            side_label = "LONG"
+        else:
+            fill_price = last_price * (1 + spread_pct + slippage_pct)
+            pnl = (entry_price - fill_price) * abs(position)
+            cash -= abs(position) * fill_price
+            side_label = "SHORT"
+        trades.append({
+            "entry_time": entry_time, "exit_time": sigs[-1]["time"],
+            "side": side_label, "symbol": sigs[-1].get("symbol", ""),
+            "entry_price": entry_price, "exit_price": last_price,
+            "shares": round(abs(position), 4), "pnl": round(pnl, 2), "type": "exit",
+            "reason_open": entry_reason,
+            "reason_close": "Mark-to-market (end of data)",
+            "indicators_at_entry": entry_indicators,
+            "days_held": _calc_days_held(entry_time, sigs[-1]["time"]),
+        })
+
+    final_cash = cash
+    exits = [t for t in trades if t["type"] == "exit"]
+    total_pnl = sum(t["pnl"] for t in exits)
+    wins = sum(1 for t in exits if t["pnl"] > 0)
+    losses = sum(1 for t in exits if t["pnl"] < 0)
+    win_rate = (wins / len(exits) * 100) if exits else 0
+    pnl_list = [t["pnl"] for t in exits]
+    avg_trade = float(np.mean(pnl_list)) if pnl_list else 0.0
+    best_trade = max(pnl_list) if pnl_list else 0.0
+    worst_trade = min(pnl_list) if pnl_list else 0.0
+    gross_profit = sum(p for p in pnl_list if p > 0)
+    gross_loss = abs(sum(p for p in pnl_list if p < 0))
+    profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else (float('inf') if gross_profit > 0 else 0.0)
+    avg_win = (gross_profit / wins) if wins > 0 else 0.0
+    avg_loss = (gross_loss / losses) if losses > 0 else 0.0
+    expectancy = avg_trade
+    eq_curve = [{"time": "Start", "equity": float(initial_cash)}]
+    running_eq = float(initial_cash)
+    for t in exits:
+        running_eq += t["pnl"]
+        eq_curve.append({"time": t["exit_time"], "equity": round(running_eq, 2)})
+    peak = float(initial_cash)
+    max_dd = 0.0
+    max_dd_pct = 0.0
+    for pt in eq_curve:
+        if pt["equity"] > peak:
+            peak = pt["equity"]
+        dd = peak - pt["equity"]
+        dd_pct = (dd / peak * 100) if peak > 0 else 0
+        if dd > max_dd:
+            max_dd = dd
+        if dd_pct > max_dd_pct:
+            max_dd_pct = dd_pct
+    if len(pnl_list) >= 2:
+        returns = [p / initial_cash for p in pnl_list]
+        avg_ret = float(np.mean(returns))
+        std_ret = float(np.std(returns, ddof=1))
+        sharpe = (avg_ret / std_ret * math.sqrt(252)) if std_ret > 0 else 0.0
+    else:
+        sharpe = 0.0
+    roi = ((final_cash - initial_cash) / initial_cash * 100) if initial_cash > 0 else 0.0
+
+    stats = {
+        "initial_cash": initial_cash,
+        "final_cash": round(final_cash, 2),
+        "total_pnl": round(total_pnl, 2),
+        "win_rate": round(win_rate, 1),
+        "total_trades": len(exits),
+        "wins": wins, "losses": losses,
+        "avg_trade": round(avg_trade, 2),
+        "best_trade": round(best_trade, 2),
+        "worst_trade": round(worst_trade, 2),
+        "profit_factor": round(profit_factor, 2) if profit_factor != float('inf') else 999.99,
+        "sharpe_ratio": round(sharpe, 2),
+        "max_drawdown": round(max_dd, 2),
+        "max_drawdown_pct": round(max_dd_pct, 1),
+        "roi": round(roi, 2),
+        "avg_win": round(avg_win, 2),
+        "avg_loss": round(avg_loss, 2),
+        "expectancy": round(expectancy, 2),
+        "equity_curve": eq_curve,
+        "trades": trades,
+    }
+    return trades, stats
+
+def _aggregate_portfolio(all_trades: List[dict], initial_cash: float) -> dict:
+    """Aggregate per-symbol trades into a truthful portfolio summary.
+    Final = initial capital + total realized P&L (never capital x ticker count)."""
+    exits_all = [t for t in all_trades if t["type"] == "exit"]
+    pnl_list = [t["pnl"] for t in exits_all]
+    wins = sum(1 for p in pnl_list if p > 0)
+    losses = sum(1 for p in pnl_list if p < 0)
+    win_rate = (wins / len(exits_all) * 100) if exits_all else 0
+    gross_profit = sum(p for p in pnl_list if p > 0)
+    gross_loss = abs(sum(p for p in pnl_list if p < 0))
+    pf = (gross_profit / gross_loss) if gross_loss > 0 else (999.99 if gross_profit > 0 else 0)
+    total_pnl_val = sum(pnl_list)
+    final_cash = float(initial_cash) + total_pnl_val
+    running_eq = float(initial_cash)
+    peak = float(initial_cash)
+    max_dd_pct = 0.0
+    for t in exits_all:
+        running_eq += t["pnl"]
+        if running_eq > peak:
+            peak = running_eq
+        dd_pct = ((peak - running_eq) / peak * 100) if peak > 0 else 0
+        if dd_pct > max_dd_pct:
+            max_dd_pct = dd_pct
+    total_roi = (total_pnl_val / initial_cash * 100) if initial_cash > 0 else 0
+    if len(pnl_list) >= 2 and initial_cash > 0:
+        returns = [p / initial_cash for p in pnl_list]
+        std_ret = float(np.std(returns, ddof=1))
+        sharpe = (float(np.mean(returns)) / std_ret * math.sqrt(252)) if std_ret > 0 else 0
+    else:
+        sharpe = 0
+    committed = sum(t["shares"] * t["entry_price"] for t in all_trades if t["type"] == "entry")
+    return {
+        "initial_cash": initial_cash,
+        "total_deployed": round(committed, 2),
+        "final_cash": round(final_cash, 2),
+        "total_pnl": round(total_pnl_val, 2),
+        "total_trades": len(exits_all),
+        "win_rate": round(win_rate, 1),
+        "profit_factor": round(pf, 2),
+        "max_drawdown_pct": round(max_dd_pct, 1),
+        "roi": round(total_roi, 2),
+        "sharpe_ratio": round(sharpe, 2),
+    }
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # BACKTEST ROUTES  [FIX 1: corrected P&L accounting]
@@ -3507,10 +3807,18 @@ def api_backtest():
             else:
                 bt_workers = 6
             with ThreadPoolExecutor(max_workers=bt_workers) as executor:
+                # Fetch extra history so EMAs/ADX have warmup bars, but only
+                # trade within the user's requested window (cutoff below).
+                warmup_days = min_period + 20
+                if interval == "1m":
+                    fetch_days = min(days + warmup_days, 7)  # yfinance 1m cap
+                else:
+                    fetch_days = days + warmup_days
+
                 def _dl(sym):
-                    df = _safe_yf_download(sym, period=f"{days}d", interval=interval, auto_adjust=True)
+                    df = _safe_yf_download(sym, period=f"{fetch_days}d", interval=interval, auto_adjust=True)
                     if df is None or df.empty:
-                        df = _safe_yf_download(sym, period=f"{days}d", interval="1d", auto_adjust=True)
+                        df = _safe_yf_download(sym, period=f"{fetch_days}d", interval="1d", auto_adjust=True)
                     return df
                 fut_map = {}
                 for sym in symbols:
@@ -3536,8 +3844,18 @@ def api_backtest():
                     df.columns = df.columns.get_level_values(0)
                 df = IndicatorCalculator.compute_all(df, ef, es, indicator_params=ind_params)
                 sigs: List[dict] = []
+                # Adaptive warmup: on short/daily data (e.g. 1 week of daily bars) never
+                # require more bars than exist, or backtests silently produce zero signals.
+                effective_min = min(min_period, max(2, len(df) - 1))
+                # Extra history was fetched for indicator warmup; only trade the
+                # user's requested window (last `days` of bars).
+                cutoff = None
+                if len(df) > 2 and interval != "1m":
+                    cutoff = df.index[-1] - pd.Timedelta(days=days)
                 for i in range(1, len(df)):
-                    if i < min_period:
+                    if i < effective_min:
+                        continue
+                    if cutoff is not None and df.index[i] < cutoff:
                         continue
                     prev = df.iloc[i - 1]
                     curr = df.iloc[i]
@@ -3578,175 +3896,8 @@ def api_backtest():
                 sym_results["signals"] = sigs
 
                 qty = per_ticker_qty.get(sym, default_qty)
-                equity: float = float(initial_cash)
-                cash: float = float(initial_cash)
-                position: float = 0.0
-                entry_price: float = 0.0
-                entry_time: str = ""
-                entry_reason: str = ""
-                entry_indicators: dict = {}
-                entry_shares: float = 0.0
-                trades: List[dict] = []
-
-                fee_pct = float(config.get("broker_fee_pct", 0.08)) / 100.0
-                slippage_pct = float(config.get("slippage_pct", 0.05)) / 100.0
-                spread_pct = float(config.get("spread_pct", 0.02)) / 100.0
-
-                for s in sigs:
-                    price = float(s["price"])
-                    if s["signal"] == "BUY" and position <= 0:
-                        if position < 0:
-                            exit_fill = price * (1 + spread_pct + slippage_pct)
-                            pnl = (entry_price - exit_fill) * abs(position)
-                            cash -= abs(position) * exit_fill
-                            equity = cash
-                            trades.append({
-                                "entry_time": entry_time, "exit_time": s["time"],
-                                "side": "SHORT", "symbol": sym,
-                                "entry_price": entry_price, "exit_price": price,
-                                "shares": abs(position), "pnl": round(pnl, 2), "type": "exit",
-                                "reason_open": entry_reason, "reason_close": "BUY signal closed short",
-                                "indicators_at_entry": entry_indicators,
-                                "days_held": _calc_days_held(entry_time, s["time"]),
-                            })
-                        entry_shares = qty
-                        fill_price = price * (1 + spread_pct + slippage_pct)
-                        cost = qty * fill_price
-                        if cost > cash and position == 0:
-                            continue
-                        cash -= cost
-                        position = qty
-                        entry_price = fill_price
-                        entry_time = s["time"]
-                        entry_reason = s.get("reason", "EMA crossover bullish")
-                        entry_indicators = s.get("indicators", {})
-                        trades.append({
-                            "entry_time": s["time"], "exit_time": "",
-                            "side": "LONG", "symbol": sym,
-                            "entry_price": entry_price, "exit_price": 0,
-                            "shares": round(entry_shares, 4), "pnl": 0, "type": "entry",
-                            "reason_open": entry_reason, "reason_close": "",
-                            "indicators_at_entry": entry_indicators,
-                        })
-                    elif s["signal"] == "SELL" and position >= 0:
-                        if position > 0:
-                            fill_price = price * (1 - spread_pct - slippage_pct)
-                            pnl = (fill_price - entry_price) * position
-                            cash += position * fill_price
-                            equity = cash
-                            trades.append({
-                                "entry_time": entry_time, "exit_time": s["time"],
-                                "side": "LONG", "symbol": sym,
-                                "entry_price": entry_price, "exit_price": price,
-                                "shares": round(position, 4), "pnl": round(pnl, 2), "type": "exit",
-                                "reason_open": entry_reason, "reason_close": s.get("reason", "EMA crossover bearish"),
-                                "indicators_at_entry": entry_indicators,
-                                "days_held": _calc_days_held(entry_time, s["time"]),
-                            })
-                        entry_shares = qty
-                        fill_price = price * (1 - spread_pct - slippage_pct)
-                        cash += qty * fill_price
-                        position = -(qty)
-                        entry_price = fill_price
-                        entry_time = s["time"]
-                        entry_reason = s.get("reason", "EMA crossover bearish")
-                        entry_indicators = s.get("indicators", {})
-                        trades.append({
-                            "entry_time": s["time"], "exit_time": "",
-                            "side": "SHORT", "symbol": sym,
-                            "entry_price": entry_price, "exit_price": 0,
-                            "shares": round(entry_shares, 4), "pnl": 0, "type": "entry",
-                            "reason_open": entry_reason, "reason_close": "",
-                            "indicators_at_entry": entry_indicators,
-                        })
-
-                if position != 0 and sigs:
-                    last_price = float(sigs[-1]["price"])
-                    if position > 0:
-                        fill_price = last_price * (1 - spread_pct - slippage_pct)
-                        pnl = (fill_price - entry_price) * position
-                        cash += position * fill_price
-                        side_label = "LONG"
-                    else:
-                        fill_price = last_price * (1 + spread_pct + slippage_pct)
-                        pnl = (entry_price - fill_price) * abs(position)
-                        cash -= abs(position) * fill_price
-                        side_label = "SHORT"
-                    equity = cash
-                    trades.append({
-                        "entry_time": entry_time, "exit_time": sigs[-1]["time"],
-                        "side": side_label, "symbol": sym,
-                        "entry_price": entry_price, "exit_price": last_price,
-                        "shares": round(abs(position), 4), "pnl": round(pnl, 2), "type": "exit",
-                        "reason_open": entry_reason,
-                        "reason_close": "Mark-to-market (end of data)",
-                        "indicators_at_entry": entry_indicators,
-                        "days_held": _calc_days_held(entry_time, sigs[-1]["time"]),
-                    })
-
-                final_cash = equity
-                exits = [t for t in trades if t["type"] == "exit"]
-                total_pnl = sum(t["pnl"] for t in exits)
-                wins = sum(1 for t in exits if t["pnl"] > 0)
-                losses = sum(1 for t in exits if t["pnl"] < 0)
-                win_rate = (wins / len(exits) * 100) if exits else 0
-                pnl_list = [t["pnl"] for t in exits]
-                avg_trade = float(np.mean(pnl_list)) if pnl_list else 0.0
-                best_trade = max(pnl_list) if pnl_list else 0.0
-                worst_trade = min(pnl_list) if pnl_list else 0.0
-                gross_profit = sum(p for p in pnl_list if p > 0)
-                gross_loss = abs(sum(p for p in pnl_list if p < 0))
-                profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else (float('inf') if gross_profit > 0 else 0.0)
-                avg_win = (gross_profit / wins) if wins > 0 else 0.0
-                avg_loss = (gross_loss / losses) if losses > 0 else 0.0
-                expectancy = avg_trade
-                eq_curve = [{"time": "Start", "equity": float(initial_cash)}]
-                running_eq = float(initial_cash)
-                for t in exits:
-                    running_eq += t["pnl"]
-                    eq_curve.append({"time": t["exit_time"], "equity": round(running_eq, 2)})
-                peak = float(initial_cash)
-                max_dd = 0.0
-                max_dd_pct = 0.0
-                for pt in eq_curve:
-                    if pt["equity"] > peak:
-                        peak = pt["equity"]
-                    dd = peak - pt["equity"]
-                    dd_pct = (dd / peak * 100) if peak > 0 else 0
-                    if dd > max_dd:
-                        max_dd = dd
-                    if dd_pct > max_dd_pct:
-                        max_dd_pct = dd_pct
-                if len(pnl_list) >= 2:
-                    returns = [p / initial_cash for p in pnl_list]
-                    avg_ret = float(np.mean(returns))
-                    std_ret = float(np.std(returns, ddof=1))
-                    sharpe = (avg_ret / std_ret * math.sqrt(252)) if std_ret > 0 else 0.0
-                else:
-                    sharpe = 0.0
-                roi = ((final_cash - initial_cash) / initial_cash * 100) if initial_cash > 0 else 0.0
-
-                sym_results["simulation"] = {
-                    "initial_cash": initial_cash,
-                    "final_cash": round(final_cash, 2),
-                    "total_pnl": round(total_pnl, 2),
-                    "win_rate": round(win_rate, 1),
-                    "total_trades": len(exits),
-                    "wins": wins, "losses": losses,
-                    "avg_trade": round(avg_trade, 2),
-                    "best_trade": round(best_trade, 2),
-                    "worst_trade": round(worst_trade, 2),
-                    "profit_factor": round(profit_factor, 2) if profit_factor != float('inf') else 999.99,
-                    "sharpe_ratio": round(sharpe, 2),
-                    "max_drawdown": round(max_dd, 2),
-                    "max_drawdown_pct": round(max_dd_pct, 1),
-                    "roi": round(roi, 2),
-                    "avg_win": round(avg_win, 2),
-                    "avg_loss": round(avg_loss, 2),
-                    "expectancy": round(expectancy, 2),
-                    "equity_curve": eq_curve,
-                    "trades": trades,
-                }
+                trades, stats = _run_symbol_sim(sigs, qty, initial_cash, config)
+                sym_results["simulation"] = stats
                 all_trades.extend(trades)
 
             except Exception as e:
@@ -3762,45 +3913,7 @@ def api_backtest():
 
         resp = {"results": results}
         if portfolio:
-            exits_all = [t for t in all_trades if t["type"] == "exit"]
-            pnl_list = [t["pnl"] for t in exits_all]
-            wins = sum(1 for p in pnl_list if p > 0)
-            losses = sum(1 for p in pnl_list if p < 0)
-            win_rate = (wins / len(exits_all) * 100) if exits_all else 0
-            gross_profit = sum(p for p in pnl_list if p > 0)
-            gross_loss = abs(sum(p for p in pnl_list if p < 0))
-            pf = (gross_profit / gross_loss) if gross_loss > 0 else (999.99 if gross_profit > 0 else 0)
-            active_count = max(sum(1 for s in symbols if per_ticker_qty.get(s, default_qty) != 0), 1)
-            total_deployed = round(initial_cash * active_count, 2)
-            running_eq = float(total_deployed)
-            peak = float(total_deployed)
-            max_dd_pct = 0.0
-            for t in exits_all:
-                running_eq += t["pnl"]
-                if running_eq > peak:
-                    peak = running_eq
-                dd_pct = ((peak - running_eq) / peak * 100) if peak > 0 else 0
-                if dd_pct > max_dd_pct:
-                    max_dd_pct = dd_pct
-            total_pnl_val = sum(pnl_list)
-            total_roi = (total_pnl_val / total_deployed * 100) if total_deployed > 0 else 0
-            if len(pnl_list) >= 2:
-                returns = [p / total_deployed for p in pnl_list]
-                sharpe = (float(np.mean(returns)) / float(np.std(returns, ddof=1)) * math.sqrt(252)) if float(np.std(returns, ddof=1)) > 0 else 0
-            else:
-                sharpe = 0
-            resp["portfolio"] = {
-                "initial_cash": initial_cash,
-                "total_deployed": total_deployed,
-                "final_cash": round(total_deployed + total_pnl_val, 2),
-                "total_pnl": round(total_pnl_val, 2),
-                "total_trades": len(exits_all),
-                "win_rate": round(win_rate, 1),
-                "profit_factor": round(pf, 2),
-                "max_drawdown_pct": round(max_dd_pct, 1),
-                "roi": round(total_roi, 2),
-                "sharpe_ratio": round(sharpe, 2),
-            }
+            resp["portfolio"] = _aggregate_portfolio(all_trades, initial_cash)
         state.last_bt_data = resp
         resp["many"] = many
         db.insert_backtest(json.dumps({"config": config, "results": results}))
@@ -3820,6 +3933,8 @@ def monte_carlo():
         symbols = list(dict.fromkeys(clean_symbol(e) for e in raw_list))
         pnl_results = []
         bt_direction = config.get("direction", "both")
+        ef, es = config.get("emas", [9, 50])
+        ind_params = config.get("indicator_params", {})
         for _ in range(runs):
             equity = 10_000.0
             cash = 10_000.0
@@ -3828,19 +3943,26 @@ def monte_carlo():
             all_signals: List[Tuple[str, float]] = []
             for sym in symbols:
                 try:
-                    df = yf.download(sym, period=f"{days}d",
-                                      interval=config.get("timeframe", "1m"),
-                                      progress=False, auto_adjust=True)
+                    interval = config.get("timeframe", "1m")
+                    min_period = max(ef, es, 20)
+                    warmup_days = min_period + 20
+                    if interval == "1m":
+                        fetch_days = min(days + warmup_days, 7)
+                    else:
+                        fetch_days = days + warmup_days
+                    df = _safe_yf_download(sym, period=f"{fetch_days}d",
+                                      interval=interval, auto_adjust=True)
                     if df is None or df.empty:
                         continue
-                    if isinstance(df.columns, pd.MultiIndex):
-                        df.columns = df.columns.get_level_values(0)
-                    ef, es = config.get("emas", [9, 50])
-                    ind_params = config.get("indicator_params", {})
                     df = IndicatorCalculator.compute_all(df, ef, es, indicator_params=ind_params)
-                    min_period = max(ef, es, 20)
+                    effective_min = min(min_period, max(2, len(df) - 1))
+                    cutoff = None
+                    if len(df) > 2 and interval != "1m":
+                        cutoff = df.index[-1] - pd.Timedelta(days=days)
                     for i in range(1, len(df)):
-                        if i < min_period:
+                        if i < effective_min:
+                            continue
+                        if cutoff is not None and df.index[i] < cutoff:
                             continue
                         prev = df.iloc[i - 1]
                         curr = df.iloc[i]
@@ -4193,8 +4315,10 @@ def correlation_matrix():
             try:
                 ns = _normalize_yf_symbol(sym)
                 df = yf.download(ns, period="30d", interval="1d",
-                                  progress=False, auto_adjust=True)["Close"]
-                data_dict[sym] = df.pct_change().dropna()
+                                  progress=False, auto_adjust=True)
+                if isinstance(df.columns, pd.MultiIndex):
+                    df.columns = df.columns.get_level_values(0)
+                data_dict[sym] = df["Close"].pct_change().dropna()
             except Exception:
                 continue
         if not data_dict:
@@ -4524,7 +4648,7 @@ FRONTEND_HTML = r"""
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>TraderMoney 9.6.1</title>
+<title>TraderMoney 9.6.2</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root {
@@ -5594,7 +5718,7 @@ button.ghost:hover { box-shadow: none; }
     <span class="sidebar-logo">TM</span>
     <div class="sidebar-title">
       <span class="sidebar-name">TraderMoney</span>
-      <span class="sidebar-version">v9.6.1</span>
+      <span class="sidebar-version">v9.6.2</span>
     </div>
     <div class="sidebar-actions">
       <button onclick="location.reload()" title="Refresh"><svg class="icon" style="width:13px;height:13px;" viewBox="0 0 24 24"><path d="M17.65 6.35A7.958 7.958 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg></button>
@@ -5903,7 +6027,7 @@ button.ghost:hover { box-shadow: none; }
   <div id="tab-help" class="tab">
     <div class="hb">
       <input type="text" id="help-search" placeholder="Search help... (Cmd+F)" oninput="filterHelp()" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);font-size:.82rem;margin-bottom:10px;box-sizing:border-box;">
-      <h3>TraderMoney v9.6.1 – Complete Help Guide</h3>
+      <h3>TraderMoney v9.6.2 – Complete Help Guide</h3>
       <p style="font-size:.82rem;color:var(--muted);margin-top:-4px;">Your desktop algorithmic trading terminal. All features documented below.</p>
 
       <details>
@@ -5933,6 +6057,18 @@ button.ghost:hover { box-shadow: none; }
         </div>
       </details>
 
+      <details open>
+        <summary style="cursor:pointer;color:var(--accent);font-weight:600;">What's New in v9.6.2</summary>
+        <div style="padding:8px 0;font-size:.82rem;line-height:1.7;">
+          <ul>
+            <li><b>Backtest Math Fixed (Big Fix):</b> Final portfolio value is now real — it starts at your capital and adds actual profits/losses. Previously a tiny $8 profit on a $1,000 backtest could show a final portfolio of $4,000 because capital was multiplied by the number of tickers.</li>
+            <li><b>Never Buy More Than You Have:</b> The backtest now caps every buy to affordable shares (e.g. 10 shares @ $300 with $1,000 buys 3, not 10) and shorts require margin within your capital. New "Capital Used" stat on the portfolio card shows how much is actually deployed.</li>
+            <li><b>127 Tickers on Daily Timeframe Now Works:</b> Backtests fetch extra history so indicators (EMA/ADX) have warmup data, but only trade inside your requested window — weekly or monthly daily backtests now produce signals on large watchlists instead of silently returning zero trades.</li>
+            <li><b>International Tickers Fixed:</b> Toyota (7203), TSMC (2330), Tencent (0700), Samsung (005930), CBA/WBC and other ASX tickers now resolve to the correct exchange. Australian tickers (CBA, WBC, FMG...) no longer match wrong instruments.</li>
+            <li><b>yfinance 1.3.0 Compatibility:</b> Data downloads now normalize the new MultiIndex column format and drop incomplete bars, so charts, prices and backtests work with the latest yfinance.</li>
+          </ul>
+        </div>
+      </details>
       <details open>
         <summary style="cursor:pointer;color:var(--accent);font-weight:600;">What's New in v9.6.1</summary>
         <div style="padding:8px 0;font-size:.82rem;line-height:1.7;">
@@ -7796,6 +7932,7 @@ async function runBT(){
           <div class="bt-stat-arrow">→</div>
           <div class="bt-stat"><span class="bt-stat-v">${sm(p.final_cash)}</span><span class="bt-stat-l">End</span></div>
           <div class="bt-stat"><span class="bt-stat-v" style="color:${pnlCls==='up'?'var(--accent)':'var(--danger)'}">${sf(p.roi)}%</span><span class="bt-stat-l">Return</span></div>
+          <div class="bt-stat"><span class="bt-stat-v">${sm(p.total_deployed)}</span><span class="bt-stat-l">Capital Used</span></div>
           <div class="bt-stat"><span class="bt-stat-v">${sf(p.win_rate,0)}%</span><span class="bt-stat-l">Win Rate</span></div>
           <div class="bt-stat"><span class="bt-stat-v">${ss(p.total_trades)}</span><span class="bt-stat-l">Trades</span></div>
           <div class="bt-stat"><span class="bt-stat-v">${sf(p.profit_factor)}</span><span class="bt-stat-l">Profit Factor</span></div>
@@ -8252,7 +8389,7 @@ if __name__ == "__main__":
     try:
         _api_instance = _Api()
         window = webview.create_window(
-            "TraderMoney 9.6.1",
+            "TraderMoney 9.6.2",
             "http://127.0.0.1:5050",
             width=1440,
             height=880,
