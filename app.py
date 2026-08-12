@@ -839,6 +839,24 @@ class AlpacaBroker(BaseBroker):
             stop = round(sl_price, 2) if sl_price else None
             limit = round(tp_price, 2) if tp_price else None
 
+            if stop is not None and limit is not None:
+                # Native Alpaca bracket: entry + SL + TP in ONE atomic order.
+                # No separate conditional orders -> no second entry ever gets
+                # placed, and SL/TP are guaranteed attached to the fill.
+                kwargs = dict(symbol=symbol, qty=qty, side=side,
+                              type="market", time_in_force="day",
+                              order_class="bracket",
+                              take_profit={"limit_price": str(limit)},
+                              stop_loss={"stop_price": str(stop)})
+                entry_order = self.api.submit_order(**kwargs)
+                if not getattr(entry_order, "id", None):
+                    raise RuntimeError("Bracket order was not accepted")
+                self._emit_log(f"Bracket order submitted: {side.upper()} {qty} {symbol} "
+                               f"(SL={stop}, TP={limit})")
+                return True
+
+            # Single-leg protection (e.g. trailing stop): entry + one
+            # conditional order. NEVER re-submit the entry on SL/TP failure.
             entry_order = self.api.submit_order(symbol=symbol, qty=qty, side=side, type="market", time_in_force="day")
             if not getattr(entry_order, "id", None):
                 raise RuntimeError("Entry order was not accepted")
@@ -846,25 +864,31 @@ class AlpacaBroker(BaseBroker):
             tp_side = "sell" if side == "buy" else "buy"
             sl_side = tp_side
             placed = []
+            failed = []
             if limit is not None:
-                tp_order = self._submit_conditional_order(symbol, qty, tp_side, "limit", limit)
-                if getattr(tp_order, "id", None):
-                    placed.append(f"TP={limit}")
+                try:
+                    tp_order = self._submit_conditional_order(symbol, qty, tp_side, "limit", limit)
+                    if getattr(tp_order, "id", None):
+                        placed.append(f"TP={limit}")
+                    else:
+                        failed.append("TP")
+                except Exception as e:
+                    failed.append(f"TP({e})")
             if stop is not None:
-                sl_order = self._submit_conditional_order(symbol, qty, sl_side, "stop", stop)
-                if getattr(sl_order, "id", None):
-                    placed.append(f"SL={stop}")
+                try:
+                    sl_order = self._submit_conditional_order(symbol, qty, sl_side, "stop", stop)
+                    if getattr(sl_order, "id", None):
+                        placed.append(f"SL={stop}")
+                    else:
+                        failed.append("SL")
+                except Exception as e:
+                    failed.append(f"SL({e})")
+            if failed:
+                self._emit_error(f"{symbol}: entry filled but SL/TP NOT placed ({', '.join(failed)})")
             self._emit_log(f"Order submitted: {side.upper()} {qty} {symbol}" + (f" ({', '.join(placed)})" if placed else ""))
             return True
         except Exception as e:
             self._emit_error(f"Order failed ({symbol} {side}): {e}")
-            if has_sl or has_tp:
-                try:
-                    self.api.submit_order(symbol=symbol, qty=qty, side=side, type="market", time_in_force="day")
-                    self._emit_log(f"Fallback order submitted: {side.upper()} {qty} {symbol} (without SL/TP)")
-                    return True
-                except Exception as e2:
-                    self._emit_error(f"Fallback order also failed ({symbol} {side}): {e2}")
             return False
 
     def close_all_positions(self):
@@ -2625,8 +2649,21 @@ class TradingEngine(threading.Thread):
                         ok = self._submit_with_retry(sym, qty, "buy")
 
                     if not ok:
-                        self._log(f"[Execute] Bracket order failed for {sym}, trying simple market order")
-                        ok = self._submit_with_retry(sym, qty, "buy")
+                        # Only fall back if no position actually filled
+                        # (avoids double-buy when a bracket partially filled).
+                        already_filled = abs(self.positions.get(sym, 0)) > 0
+                        if not already_filled:
+                            try:
+                                live_pos = self.broker.get_positions().get(sym, 0)
+                                already_filled = abs(live_pos) > 0
+                            except Exception:
+                                already_filled = False
+                        if already_filled:
+                            ok = True
+                            self._log(f"[Execute] Fill confirmed for {sym}, not re-buying")
+                        else:
+                            self._log(f"[Execute] Bracket order failed for {sym}, trying simple market order")
+                            ok = self._submit_with_retry(sym, qty, "buy")
 
                     if ok:
                         self.positions[sym] = qty
@@ -2691,8 +2728,19 @@ class TradingEngine(threading.Thread):
                         ok = self._submit_with_retry(sym, qty, "sell")
 
                     if not ok:
-                        self._log(f"[Execute] Bracket order failed for {sym}, trying simple market order")
-                        ok = self._submit_with_retry(sym, qty, "sell")
+                        already_filled = abs(self.positions.get(sym, 0)) > 0
+                        if not already_filled:
+                            try:
+                                live_pos = self.broker.get_positions().get(sym, 0)
+                                already_filled = abs(live_pos) > 0
+                            except Exception:
+                                already_filled = False
+                        if already_filled:
+                            ok = True
+                            self._log(f"[Execute] Fill confirmed for {sym}, not re-selling")
+                        else:
+                            self._log(f"[Execute] Bracket order failed for {sym}, trying simple market order")
+                            ok = self._submit_with_retry(sym, qty, "sell")
 
                     if ok:
                         self.positions[sym] = -qty
