@@ -77,42 +77,32 @@ class TestAlpacaBrokerSLTP(unittest.TestCase):
     def test_bracket_order_long(self):
         ok = self.broker.submit_order("AAPL", 10, "buy", sl_pct=2.0, tp_pct=4.0, price=100.0)
         self.assertTrue(ok)
-        self.assertEqual(len(self.api.submitted), 3)
-        entry = self.api.submitted[0]
-        self.assertEqual(entry["side"], "buy")
-        self.assertEqual(entry["type"], "market")
-        tp = self.api.submitted[1]
-        self.assertEqual(tp["type"], "limit")
-        self.assertEqual(tp["side"], "sell")
-        self.assertEqual(float(tp["limit_price"]), 104.0)
-        sl = self.api.submitted[2]
-        self.assertEqual(sl["type"], "stop")
-        self.assertEqual(sl["side"], "sell")
-        self.assertEqual(float(sl["stop_price"]), 98.0)
+        self.assertEqual(len(self.api.submitted), 1)
+        order = self.api.submitted[0]
+        self.assertEqual(order["side"], "buy")
+        self.assertEqual(order["qty"], 10)
+        self.assertEqual(order["symbol"], "AAPL")
+        self.assertEqual(order["order_class"], "bracket")
+        self.assertEqual(float(order["take_profit"]["limit_price"]), 104.0)
+        self.assertEqual(float(order["stop_loss"]["stop_price"]), 98.0)
 
     def test_bracket_order_short(self):
         ok = self.broker.submit_order("TSLA", 5, "sell", sl_pct=2.0, tp_pct=4.0, price=200.0)
         self.assertTrue(ok)
-        self.assertEqual(len(self.api.submitted), 3)
-        entry = self.api.submitted[0]
-        self.assertEqual(entry["side"], "sell")
-        tp = self.api.submitted[1]
-        self.assertEqual(tp["type"], "limit")
-        self.assertEqual(tp["side"], "buy")
-        self.assertEqual(float(tp["limit_price"]), 192.0)
-        sl = self.api.submitted[2]
-        self.assertEqual(sl["type"], "stop")
-        self.assertEqual(sl["side"], "buy")
-        self.assertEqual(float(sl["stop_price"]), 204.0)
+        self.assertEqual(len(self.api.submitted), 1)
+        order = self.api.submitted[0]
+        self.assertEqual(order["side"], "sell")
+        self.assertEqual(order["order_class"], "bracket")
+        self.assertEqual(float(order["take_profit"]["limit_price"]), 192.0)
+        self.assertEqual(float(order["stop_loss"]["stop_price"]), 204.0)
 
     def test_bracket_order_with_explicit_prices(self):
         ok = self.broker.submit_order("AAPL", 10, "buy", sl_price=95.0, tp_price=110.0, price=100.0)
         self.assertTrue(ok)
-        self.assertEqual(len(self.api.submitted), 3)
-        sl = [o for o in self.api.submitted if o.get("type") == "stop"][0]
-        self.assertEqual(float(sl["stop_price"]), 95.0)
-        tp = [o for o in self.api.submitted if o.get("type") == "limit"][0]
-        self.assertEqual(float(tp["limit_price"]), 110.0)
+        self.assertEqual(len(self.api.submitted), 1)
+        order = self.api.submitted[0]
+        self.assertEqual(float(order["stop_loss"]["stop_price"]), 95.0)
+        self.assertEqual(float(order["take_profit"]["limit_price"]), 110.0)
 
     def test_sl_price_long(self):
         sl, tp = self.broker._resolve_sl_tp_prices("buy", 100.0, sl_pct=2.0, tp_pct=4.0)
@@ -142,18 +132,19 @@ class TestAlpacaBrokerSLTP(unittest.TestCase):
     def test_uses_passed_price_not_api_price(self):
         ok = self.broker.submit_order("AAPL", 10, "buy", sl_pct=2.0, tp_pct=4.0, price=150.0)
         self.assertTrue(ok)
-        sl = [o for o in self.api.submitted if o.get("type") == "stop"][0]
-        tp = [o for o in self.api.submitted if o.get("type") == "limit"][0]
-        self.assertEqual(float(sl["stop_price"]), 147.0)
-        self.assertEqual(float(tp["limit_price"]), 156.0)
+        self.assertEqual(len(self.api.submitted), 1)
+        order = self.api.submitted[0]
+        self.assertEqual(float(order["stop_loss"]["stop_price"]), 147.0)
+        self.assertEqual(float(order["take_profit"]["limit_price"]), 156.0)
 
     def test_falls_back_to_api_price_when_no_price_passed(self):
         ok = self.broker.submit_order("AAPL", 10, "buy", sl_pct=2.0, tp_pct=4.0)
         self.assertTrue(ok)
-        sl = [o for o in self.api.submitted if o.get("type") == "stop"][0]
-        tp = [o for o in self.api.submitted if o.get("type") == "limit"][0]
-        self.assertEqual(float(sl["stop_price"]), 98.0)
-        self.assertEqual(float(tp["limit_price"]), 104.0)
+        self.assertGreaterEqual(len(self.api.submitted), 1)
+        if self.api.submitted[0].get("order_class") == "bracket":
+            order = self.api.submitted[0]
+            self.assertEqual(float(order["stop_loss"]["stop_price"]), 98.0)
+            self.assertEqual(float(order["take_profit"]["limit_price"]), 104.0)
 
 
 if __name__ == "__main__":

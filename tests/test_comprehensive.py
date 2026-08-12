@@ -432,23 +432,20 @@ class TestAlpacaBrokerComprehensive(unittest.TestCase):
         self.assertEqual(float(o["take_profit"]["limit_price"]), 104.0)
 
     def test_no_double_buy_when_conditional_fails(self):
-        # If SL/TP placement raises, the entry must NOT be re-submitted.
-        def boom(**kwargs):
-            raise RuntimeError("conditional order rejected")
-        self.api._orig_submit = self.api.submit_order
-        count = [0]
+        # The bracket path issues exactly ONE submit_order call (atomic
+        # entry+SL+TP). A second entry is never re-submitted on failure.
         original = self.api.submit_order
+        calls = []
         def flaky(**kwargs):
             if "order_class" in kwargs:
-                # bracket accepted normally
                 return original(**kwargs)
-            count[0] += 1
-            if count[0] > 1:
-                raise RuntimeError("second entry attempt!")
-            return original(**kwargs)
+            raise RuntimeError("unexpected second entry attempt")
         self.api.submit_order = flaky
-        ok = self.broker.submit_order("AAPL", 10, "buy", sl_pct=2.0, tp_pct=4.0, price=100.0)
-        self.assertTrue(ok)
+        try:
+            ok = self.broker.submit_order("AAPL", 10, "buy", sl_pct=2.0, tp_pct=4.0, price=100.0)
+            self.assertTrue(ok)
+        finally:
+            self.api.submit_order = original
         self.assertEqual(len(self.api.submitted), 1)
 
     def test_single_leg_stop_only_no_rebuy(self):
